@@ -50,7 +50,7 @@
   var MSG = {
     zh: {
       badTz: function (s) { return "mongotab: 无法识别的时区 '" + s + "'，可用 'UTC'、'local'、'+08:00'、'Asia/Shanghai'"; },
-      more: function (n, next) { return '(只显示前 ' + n + ' 行，还有更多；用 t(x, {limit: ' + next + '}) 看更多)'; },
+      more: function (n, next, fn) { return '(只显示前 ' + n + ' 行，还有更多；用 ' + fn + '(x, {limit: ' + next + '}) 看更多)'; },
       partial: function (n, total) { return '(共 ' + total + ' 行，只显示前 ' + n + ' 行)'; },
       loaded: function (v, tz) { return 'MongoTab ' + v + ' 已加载：t(x) 表格 / g(x) 竖排 / mt.help()   时区 ' + tz; },
       skipped: function (names) {
@@ -74,7 +74,7 @@
     },
     en: {
       badTz: function (s) { return "mongotab: unknown time zone '" + s + "'; try 'UTC', 'local', '+08:00' or 'Asia/Shanghai'"; },
-      more: function (n, next) { return '(showing the first ' + n + ' rows, more available; use t(x, {limit: ' + next + '}) to see more)'; },
+      more: function (n, next, fn) { return '(showing the first ' + n + ' rows, more available; use ' + fn + '(x, {limit: ' + next + '}) to see more)'; },
       partial: function (n, total) { return '(showing the first ' + n + ' of ' + total + ' rows)'; },
       loaded: function (v, tz) { return 'MongoTab ' + v + ' loaded: t(x) table / g(x) vertical / mt.help()   time zone ' + tz; },
       skipped: function (names) {
@@ -394,9 +394,15 @@
       out.push(paint(o, BOLD, padL(k, kw)) + ': ' + s);
     });
   }
+  // 提示里写用户能直接再敲一遍的函数名：g() 调的就提示 g(...)；短名被占用时提示 mongotab.xxx
+  function callName(o) {
+    var fn = o._fn === 'vertical' ? 'vertical' : 'table';
+    var short = fn === 'vertical' ? 'g' : 't';
+    return skipped.indexOf(short) < 0 ? short : 'mongotab.' + fn;
+  }
   function footer(n, total, more, o, out) {
     var msg = n === 0 ? 'Empty set' : n + (n === 1 ? ' row' : ' rows') + ' in set';
-    if (more) msg += paint(o, DIM, '  ' + L(o.lang).more(n, Math.max(n * 4, 200)));
+    if (more) msg += paint(o, DIM, '  ' + L(o.lang).more(n, Math.max(n * 4, 200), callName(o)));
     else if (total > n) msg += paint(o, DIM, '  ' + L(o.lang).partial(n, total));
     out.push(msg);
   }
@@ -508,11 +514,11 @@
 
   function t(x, opts) {
     if (arguments.length === 0) return help();
-    render(x, makeOpts(opts));
+    render(x, makeOpts(opts, { _fn: 'table' }));
   }
   function g(x, opts) {
     if (arguments.length === 0) return help();
-    render(x, makeOpts(opts, { vertical: true }));
+    render(x, makeOpts(opts, { vertical: true, _fn: 'vertical' }));
   }
   function csv(x, opts) {
     var o = makeOpts(opts, { _color: false });
