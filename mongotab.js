@@ -20,6 +20,7 @@
     maxCol: 40,         // 表格单列最大显示宽度
     tz: 'UTC',          // 'UTC' | 'local' | '+08:00' | 'Asia/Shanghai'
     nullText: 'NULL',
+    missingText: null,  // 字段不存在时的显示；null = 跟随语言：(无字段) / (missing)
     color: null,        // null = 终端里自动开启
     width: null,        // 终端宽度，null = 自动检测
     depth: null,        // 嵌套展开层数，null = 全部展开
@@ -52,11 +53,12 @@
       badTz: function (s) { return "mongotab: 无法识别的时区 '" + s + "'，可用 'UTC'、'local'、'+08:00'、'Asia/Shanghai'"; },
       more: function (n, next, fn) { return '(只显示前 ' + n + ' 行，还有更多；用 ' + fn + '(x, {limit: ' + next + '}) 看更多)'; },
       partial: function (n, total) { return '(共 ' + total + ' 行，只显示前 ' + n + ' 行)'; },
+      missing: '(无字段)',
       loaded: function (v, tz) { return 'MongoTab ' + v + ' 已加载：t(x) 表格 / g(x) 竖排 / mt.help()   时区 ' + tz; },
       skipped: function (names) {
         return '  注意：' + names.join('、') + ' 已被占用，未覆盖；请用 mongotab.table / mongotab.vertical / mongotab.help()';
       },
-      help: function (limit) {
+      help: function (limit, nul, miss) {
         return [
           helpRow('t(x)', '表格；太宽自动改竖排。x 可以是游标、数组、文档'),
           helpRow('g(x)', '竖排（MySQL \\G）'),
@@ -69,18 +71,20 @@
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'en'})", '改本会话默认值'),
           '',
           '  示例：'
-        ].concat(HELP_EXAMPLES, ['', '  显示约定：NULL = 值为 null；空白 = 该文档没有这个字段']);
+        ].concat(HELP_EXAMPLES, ['', '  显示约定：' + (nul || '空白') + ' = 值为 null；空白 = 空字符串 ""；' +
+          (miss || '空白') + ' = 该文档没有这个字段（竖排里直接不显示）。CSV 相同']);
       }
     },
     en: {
       badTz: function (s) { return "mongotab: unknown time zone '" + s + "'; try 'UTC', 'local', '+08:00' or 'Asia/Shanghai'"; },
       more: function (n, next, fn) { return '(showing the first ' + n + ' rows, more available; use ' + fn + '(x, {limit: ' + next + '}) to see more)'; },
       partial: function (n, total) { return '(showing the first ' + n + ' of ' + total + ' rows)'; },
+      missing: '(missing)',
       loaded: function (v, tz) { return 'MongoTab ' + v + ' loaded: t(x) table / g(x) vertical / mt.help()   time zone ' + tz; },
       skipped: function (names) {
         return '  Note: ' + names.join(', ') + ' already defined, left untouched; use mongotab.table / mongotab.vertical / mongotab.help()';
       },
-      help: function (limit) {
+      help: function (limit, nul, miss) {
         return [
           helpRow('t(x)', 'Table; switches to vertical when too wide. x: cursor, array or document'),
           helpRow('g(x)', 'Vertical (like MySQL \\G)'),
@@ -93,11 +97,13 @@
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'zh'})", 'Change defaults for this session'),
           '',
           '  Examples:'
-        ].concat(HELP_EXAMPLES, ['', '  Conventions: NULL = value is null; blank = the document has no such field']);
+        ].concat(HELP_EXAMPLES, ['', '  Conventions: ' + (nul || 'blank') + ' = value is null; blank = empty string ""; ' +
+          (miss || 'blank') + ' = the document has no such field (omitted in vertical output). Same in CSV']);
       }
     }
   };
   function L(lang) { return MSG[normLang(lang)]; }
+  function missingText(o) { return o.missingText != null ? String(o.missingText) : L(o.lang).missing; }
 
   var envTz = safe(function () { return process.env.MONGOTAB_TZ; });
   var envTzError = null;
@@ -363,12 +369,16 @@
     var hasNum = cols.map(function () { return false; });
     var body = flats.map(function (f) {
       return cols.map(function (c, j) {
-        if (!f.has(c)) return null;          // 字段不存在：留空
+        if (!f.has(c)) {                     // 字段不存在：显示 (无字段)，变暗
+          var m = clip(missingText(o), o.maxCol);
+          if (dw(m) > widths[j]) widths[j] = dw(m);
+          return { s: m, dim: true };
+        }
         var v = f.get(c);
         if (v !== null && v !== undefined) { if (isNumeric(v)) hasNum[j] = true; else numeric[j] = false; }
         var s = clip(cellText(v, o), o.maxCol);
         if (dw(s) > widths[j]) widths[j] = dw(s);
-        return { s: s, isNull: v === null || v === undefined };
+        return { s: s, dim: v === null || v === undefined };
       });
     });
     numeric = numeric.map(function (n, j) { return n && hasNum[j]; });
@@ -376,9 +386,8 @@
     var lines = [sep, '| ' + head.map(function (h, j) { return paint(o, BOLD, padR(h, widths[j])); }).join(' | ') + ' |', sep];
     body.forEach(function (row) {
       lines.push('| ' + row.map(function (cell, j) {
-        if (!cell) return ' '.repeat(widths[j]);
         var p = numeric[j] ? padL(cell.s, widths[j]) : padR(cell.s, widths[j]);
-        return cell.isNull ? paint(o, DIM, p) : p;
+        return cell.dim ? paint(o, DIM, p) : p;
       }).join(' | ') + ' |');
     });
     lines.push(sep);
@@ -466,9 +475,9 @@
     out.push(cols.map(q).join(','));
     flats.forEach(function (f) {
       out.push(cols.map(function (c) {
-        if (!f.has(c)) return '';
+        if (!f.has(c)) return q(missingText(o));
         var v = f.get(c);
-        return v === null || v === undefined ? '' : q(valText(v, false, o));
+        return q(v === null || v === undefined ? String(o.nullText) : valText(v, false, o));
       }).join(','));
     });
   }
@@ -546,7 +555,7 @@
     emit([JSON.stringify(shown)]);
   }
   function help() {
-    emit(['MongoTab ' + VERSION + ' — Make mongosh readable', ''].concat(L(cfg.lang).help(cfg.limit)));
+    emit(['MongoTab ' + VERSION + ' — Make mongosh readable', ''].concat(L(cfg.lang).help(cfg.limit, String(cfg.nullText), missingText(cfg))));
   }
 
   var api = { table: t, vertical: g, csv: csv, config: config, help: help, version: VERSION };

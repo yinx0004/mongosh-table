@@ -74,14 +74,29 @@ mt.help()
 | UUID / Binary subtype 3、4 | UUID 字符串 |
 | 其他 Binary | `Binary(子类型, base64 前缀..., N bytes)` |
 | 值为 null | `NULL` |
-| **文档里没有这个字段** | **空白** |
+| 空字符串 `""` | 空白（和 MySQL 一样） |
+| **文档里没有这个字段** | **`(无字段)`**，终端里变暗；英文为 `(missing)` |
 | 字符串里的换行 / tab | `\n` / `\t` |
+
+```
++-----+---------+--------+----------+----------+
+| _id | orderNo | remark | coupon   | qty      |
++-----+---------+--------+----------+----------+
+|   1 | SO1     | NULL   |          |        2 |
+|   2 | SO2     |        | VIP10    | (无字段) |
++-----+---------+--------+----------+----------+
+```
+
+竖排（`g()`）里不存在的字段直接不显示。`mt.csv()` 的约定和表格相同：`NULL`、空、`(无字段)`。
+贴进 Excel 后 `NULL` 和 `(无字段)` 是普通文字，不是空单元格。
 
 中文按 2 列宽对齐。超过 `maxCol`（默认 40）的单元格截断为 `...`，竖排不截断。
 
 ## 配置项
 
-`limit` 50 · `maxCol` 40 · `tz` `'UTC'` · `nullText` `'NULL'` · `color` 自动 · `width` 自动 · `depth` 全部展开 · `lang` 自动
+`limit` 50 · `maxCol` 40 · `tz` `'UTC'` · `nullText` `'NULL'` · `missingText` 跟随语言 · `color` 自动 · `width` 自动 · `depth` 全部展开 · `lang` 自动
+
+`missingText` 不设时跟随语言显示 `(无字段)` / `(missing)`；自己设了就固定用设的值，例如 `mt.config({missingText: '-'})`，设成 `''` 则留空。
 
 环境变量（加载时读取）：
 
