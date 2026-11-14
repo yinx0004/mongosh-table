@@ -74,14 +74,29 @@ Column selection can reach into sub-tables too: `t(rs.status(), 'set,myState,mem
 | UUID / Binary subtype 3, 4 | UUID string |
 | Other Binary | `Binary(subtype, base64 prefix..., N bytes)` |
 | Value is null | `NULL` |
-| **Field missing from the document** | **blank** |
+| Empty string `""` | blank (same as MySQL) |
+| **Field missing from the document** | **`(missing)`**, dimmed in a terminal; `(无字段)` in Chinese |
 | Newline / tab inside a string | `\n` / `\t` |
+
+```
++-----+---------+--------+-----------+-----------+
+| _id | orderNo | remark | coupon    | qty       |
++-----+---------+--------+-----------+-----------+
+|   1 | SO1     | NULL   |           |         2 |
+|   2 | SO2     |        | VIP10     | (missing) |
++-----+---------+--------+-----------+-----------+
+```
+
+Vertical output (`g()`) simply leaves missing fields out. `mt.csv()` follows the same rules as the table: `NULL`, empty, `(missing)`.
+Once pasted into Excel, `NULL` and `(missing)` are plain text, not empty cells.
 
 CJK characters count as 2 columns, so tables stay aligned. Cells longer than `maxCol` (default 40) are cut with `...`; vertical output is never cut.
 
 ## Options
 
-`limit` 50 · `maxCol` 40 · `tz` `'UTC'` · `nullText` `'NULL'` · `color` auto · `width` auto · `depth` fully expanded · `lang` auto
+`limit` 50 · `maxCol` 40 · `tz` `'UTC'` · `nullText` `'NULL'` · `missingText` follows `lang` · `color` auto · `width` auto · `depth` fully expanded · `lang` auto
+
+When `missingText` is unset it shows `(missing)` / `(无字段)` depending on the language; once you set it, that value is used in every language, e.g. `mt.config({missingText: '-'})`, and `''` leaves the cell blank.
 
 Environment variables, read when the script loads:
 
