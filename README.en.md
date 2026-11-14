@@ -9,8 +9,6 @@ MongoTab renders query results in mongosh as MySQL-style tables or `\G`-style ve
 **Non-intrusive**: it only adds three globals, `t`, `g` and `mt` (any name already taken is skipped; use `mongotab.xxx` instead).
 It does not touch mongosh objects, prototypes, `.mongoshrc` or any config, and it is gone when the session ends.
 
-> Help text and messages inside the shell are currently in Chinese.
-
 ## Loading
 
 ```js
@@ -83,9 +81,12 @@ CJK characters count as 2 columns, so tables stay aligned. Cells longer than `ma
 
 ## Options
 
-`limit` 50 · `maxCol` 40 · `tz` `'UTC'` · `nullText` `'NULL'` · `color` auto · `width` auto · `depth` fully expanded
+`limit` 50 · `maxCol` 40 · `tz` `'UTC'` · `nullText` `'NULL'` · `color` auto · `width` auto · `depth` fully expanded · `lang` auto
 
-You can also set the environment variable `MONGOTAB_TZ=+08:00` to use as the default time zone when the script loads.
+Environment variables, read when the script loads:
+
+- `MONGOTAB_TZ=+08:00`: default time zone. An invalid value falls back to UTC with a warning.
+- `MONGOTAB_LANG=en` or `zh`: language of help text and messages. If unset, it follows `LC_ALL` / `LC_MESSAGES` / `LANG` (`zh*` means Chinese, anything else English). You can also switch in the session with `mt.config({lang: 'en'})`.
 
 Tested with mongosh 2.14.2 and MongoDB 7.0 (replica set).
 

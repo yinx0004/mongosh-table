@@ -22,13 +22,91 @@
     nullText: 'NULL',
     color: null,        // null = 终端里自动开启
     width: null,        // 终端宽度，null = 自动检测
-    depth: null         // 嵌套展开层数，null = 全部展开
+    depth: null,        // 嵌套展开层数，null = 全部展开
+    lang: detectLang()  // 'zh' | 'en'：MONGOTAB_LANG > LC_ALL / LC_MESSAGES / LANG > 系统区域
   };
-  var envTz = safe(function () { return process.env.MONGOTAB_TZ; });
-  if (envTz) cfg.tz = envTz;
-  cfg._tz = parseTz(cfg.tz);
 
   function safe(fn, dflt) { try { return fn(); } catch (e) { return dflt; } }
+
+  // ───────────────────────── 提示信息（中 / 英） ─────────────────────────
+  function normLang(l) { return /^zh/i.test(String(l || '')) ? 'zh' : 'en'; }
+  function detectLang() {
+    var v = safe(function () {
+      var e = process.env;
+      return e.MONGOTAB_LANG || e.LC_ALL || e.LC_MESSAGES || e.LANG;
+    }, '');
+    if (!v) v = safe(function () { return Intl.DateTimeFormat().resolvedOptions().locale; }, '');
+    return normLang(v);
+  }
+  function helpRow(label, desc) { return '  ' + (label.length < 29 ? label + ' '.repeat(29 - label.length) : label + '   ') + desc; }
+  var HELP_EXAMPLES = [
+    "    t(db.orders.find({status: 'PAID'}).sort({_id: -1}))",
+    "    t(rs.status().members, 'name,stateStr,health,optimeDate,syncSourceHost')",
+    "    t(db.currentOp({active: true}).inprog, 'opid,secs_running,op,ns,client,desc')",
+    "    t(db.serverStatus(), 'connections,opcounters,mem')",
+    '    t(db.adminCommand({listDatabases: 1}).databases)',
+    '    t(db.orders.getIndexes())'
+  ];
+  var MSG = {
+    zh: {
+      badTz: function (s) { return "mongotab: 无法识别的时区 '" + s + "'，可用 'UTC'、'local'、'+08:00'、'Asia/Shanghai'"; },
+      more: function (n, next) { return '(只显示前 ' + n + ' 行，还有更多；用 t(x, {limit: ' + next + '}) 看更多)'; },
+      partial: function (n, total) { return '(共 ' + total + ' 行，只显示前 ' + n + ' 行)'; },
+      loaded: function (v, tz) { return 'MongoTab ' + v + ' 已加载：t(x) 表格 / g(x) 竖排 / mt.help()   时区 ' + tz; },
+      skipped: function (names) {
+        return '  注意：' + names.join('、') + ' 已被占用，未覆盖；请用 mongotab.table / mongotab.vertical / mongotab.help()';
+      },
+      help: function (limit) {
+        return [
+          helpRow('t(x)', '表格；太宽自动改竖排。x 可以是游标、数组、文档'),
+          helpRow('g(x)', '竖排（MySQL \\G）'),
+          helpRow("t(x, 'a,b,c.*')", '只看这些列；支持 * 通配，写 a 等于 a.* 全部'),
+          helpRow("t(x, {exclude: 'big,raw.*'})", '排除列'),
+          helpRow('t(x, {limit: 200})', '游标/数组最多显示行数（默认 ' + limit + '，0 = 不限）'),
+          helpRow('t(x, {table: true})', '强制表格，不自动改竖排'),
+          helpRow("t(x, {tz: '+08:00'})", '本次用指定时区显示时间'),
+          helpRow('mt.csv(x, ...)', '输出 CSV（贴进 Excel）'),
+          helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'en'})", '改本会话默认值'),
+          '',
+          '  示例：'
+        ].concat(HELP_EXAMPLES, ['', '  显示约定：NULL = 值为 null；空白 = 该文档没有这个字段']);
+      }
+    },
+    en: {
+      badTz: function (s) { return "mongotab: unknown time zone '" + s + "'; try 'UTC', 'local', '+08:00' or 'Asia/Shanghai'"; },
+      more: function (n, next) { return '(showing the first ' + n + ' rows, more available; use t(x, {limit: ' + next + '}) to see more)'; },
+      partial: function (n, total) { return '(showing the first ' + n + ' of ' + total + ' rows)'; },
+      loaded: function (v, tz) { return 'MongoTab ' + v + ' loaded: t(x) table / g(x) vertical / mt.help()   time zone ' + tz; },
+      skipped: function (names) {
+        return '  Note: ' + names.join(', ') + ' already defined, left untouched; use mongotab.table / mongotab.vertical / mongotab.help()';
+      },
+      help: function (limit) {
+        return [
+          helpRow('t(x)', 'Table; switches to vertical when too wide. x: cursor, array or document'),
+          helpRow('g(x)', 'Vertical (like MySQL \\G)'),
+          helpRow("t(x, 'a,b,c.*')", 'Only these columns; * wildcards allowed, a means all of a.*'),
+          helpRow("t(x, {exclude: 'big,raw.*'})", 'Exclude columns'),
+          helpRow('t(x, {limit: 200})', 'Max rows for cursors/arrays (default ' + limit + ', 0 = no limit)'),
+          helpRow('t(x, {table: true})', 'Always a table, never switch to vertical'),
+          helpRow("t(x, {tz: '+08:00'})", 'Show times in this time zone for this call'),
+          helpRow('mt.csv(x, ...)', 'Print CSV (paste into Excel)'),
+          helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'zh'})", 'Change defaults for this session'),
+          '',
+          '  Examples:'
+        ].concat(HELP_EXAMPLES, ['', '  Conventions: NULL = value is null; blank = the document has no such field']);
+      }
+    }
+  };
+  function L(lang) { return MSG[normLang(lang)]; }
+
+  var envTz = safe(function () { return process.env.MONGOTAB_TZ; });
+  var envTzError = null;
+  if (envTz) cfg.tz = envTz;
+  try { cfg._tz = parseTz(cfg.tz, cfg.lang); } catch (e) {
+    envTzError = e.message;          // MONGOTAB_TZ 写错不影响加载，回退 UTC
+    cfg.tz = 'UTC';
+    cfg._tz = parseTz('UTC', cfg.lang);
+  }
 
   // ───────────────────────── 类型判断 ─────────────────────────
   var toStr = Object.prototype.toString;
@@ -56,7 +134,7 @@
   }
 
   // ───────────────────────── 时区与日期 ─────────────────────────
-  function parseTz(s) {
+  function parseTz(s, lang) {
     s = String(s == null ? 'UTC' : s).trim();
     if (/^(utc|gmt|z)$/i.test(s)) return { kind: 'offset', min: 0 };
     if (/^local$/i.test(s)) return { kind: 'local' };
@@ -71,7 +149,7 @@
         })
       };
     } catch (e) {
-      throw new Error("mongotab: 无法识别的时区 '" + s + "'，可用 'UTC'、'local'、'+08:00'、'Asia/Shanghai'");
+      throw new Error(L(lang).badTz(s));
     }
   }
   function p2(n) { return (n < 10 ? '0' : '') + n; }
@@ -318,8 +396,8 @@
   }
   function footer(n, total, more, o, out) {
     var msg = n === 0 ? 'Empty set' : n + (n === 1 ? ' row' : ' rows') + ' in set';
-    if (more) msg += paint(o, DIM, '  (只显示前 ' + n + ' 行，还有更多；用 t(x, {limit: ' + Math.max(n * 4, 200) + '}) 看更多)');
-    else if (total > n) msg += paint(o, DIM, '  (共 ' + total + ' 行，只显示前 ' + n + ' 行)');
+    if (more) msg += paint(o, DIM, '  ' + L(o.lang).more(n, Math.max(n * 4, 200)));
+    else if (total > n) msg += paint(o, DIM, '  ' + L(o.lang).partial(n, total));
     out.push(msg);
   }
   function renderRows(rows, o, out, more, total) {
@@ -397,7 +475,7 @@
     Object.assign(o, extra || {});
     o.cols = splitList(o.cols);
     o.exclude = splitList(o.exclude);
-    o._tz = (arg && typeof arg === 'object' && !Array.isArray(arg) && arg.tz) ? parseTz(arg.tz) : cfg._tz;
+    o._tz = (arg && typeof arg === 'object' && !Array.isArray(arg) && arg.tz) ? parseTz(arg.tz, o.lang) : cfg._tz;
     o._color = colorOn(o);
     return o;
   }
@@ -452,7 +530,8 @@
   function config(c) {
     if (c && typeof c === 'object') {
       var next = Object.assign({}, cfg, c);
-      next._tz = parseTz(next.tz);
+      next.lang = normLang(next.lang);
+      next._tz = parseTz(next.tz, next.lang);
       cfg = next;
       return;
     }
@@ -461,29 +540,7 @@
     emit([JSON.stringify(shown)]);
   }
   function help() {
-    emit([
-      'MongoTab ' + VERSION + ' — Make mongosh readable',
-      '',
-      '  t(x)                         表格；太宽自动改竖排。x 可以是游标、数组、文档',
-      '  g(x)                         竖排（MySQL \\G）',
-      "  t(x, 'a,b,c.*')              只看这些列；支持 * 通配，写 a 等于 a.* 全部",
-      "  t(x, {exclude: 'big,raw.*'}) 排除列",
-      '  t(x, {limit: 200})           游标/数组最多显示行数（默认 ' + cfg.limit + '，0 = 不限）',
-      '  t(x, {table: true})          强制表格，不自动改竖排',
-      "  t(x, {tz: '+08:00'})         本次用指定时区显示时间",
-      '  mt.csv(x, ...)              输出 CSV（贴进 Excel）',
-      "  mt.config({tz: 'local', maxCol: 60, limit: 100})   改本会话默认值",
-      '',
-      '  示例：',
-      "    t(db.orders.find({status: 'PAID'}).sort({_id: -1}))",
-      "    t(rs.status().members, 'name,stateStr,health,optimeDate,syncSourceHost')",
-      "    t(db.currentOp({active: true}).inprog, 'opid,secs_running,op,ns,client,desc')",
-      "    t(db.serverStatus(), 'connections,opcounters,mem')",
-      '    t(db.adminCommand({listDatabases: 1}).databases)',
-      '    t(db.orders.getIndexes())',
-      '',
-      '  显示约定：NULL = 值为 null；空白 = 该文档没有这个字段'
-    ]);
+    emit(['MongoTab ' + VERSION + ' — Make mongosh readable', ''].concat(L(cfg.lang).help(cfg.limit)));
   }
 
   var api = { table: t, vertical: g, csv: csv, config: config, help: help, version: VERSION };
@@ -501,9 +558,8 @@
   define('g', g);
   define('mt', api);
 
-  var msg = 'MongoTab ' + VERSION + ' 已加载：t(x) 表格 / g(x) 竖排 / mt.help()   时区 ' + cfg.tz;
-  if (skipped.length) {
-    msg += '\n  注意：' + skipped.join('、') + ' 已被占用，未覆盖；请用 mongotab.table / mongotab.vertical / mongotab.help()';
-  }
+  var msg = L(cfg.lang).loaded(VERSION, cfg.tz);
+  if (skipped.length) msg += '\n' + L(cfg.lang).skipped(skipped);
+  if (envTzError) msg += '\n  MONGOTAB_TZ: ' + envTzError + ' → UTC';
   emit([msg]);
 })();

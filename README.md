@@ -81,9 +81,12 @@ mt.help()
 
 ## 配置项
 
-`limit` 50 · `maxCol` 40 · `tz` `'UTC'` · `nullText` `'NULL'` · `color` 自动 · `width` 自动 · `depth` 全部展开
+`limit` 50 · `maxCol` 40 · `tz` `'UTC'` · `nullText` `'NULL'` · `color` 自动 · `width` 自动 · `depth` 全部展开 · `lang` 自动
 
-也可以设环境变量 `MONGOTAB_TZ=+08:00`，加载时作为默认时区。
+环境变量（加载时读取）：
+
+- `MONGOTAB_TZ=+08:00`：默认时区。写错了会回退到 UTC 并给出提示。
+- `MONGOTAB_LANG=zh` 或 `en`：帮助和提示信息的语言。不设时跟随 `LC_ALL` / `LC_MESSAGES` / `LANG`（以 `zh` 开头为中文，其余为英文）。会话里也可以用 `mt.config({lang: 'zh'})` 切换。
 
 已在 mongosh 2.14.2 + MongoDB 7.0（副本集）上测试。
 
