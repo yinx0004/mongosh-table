@@ -1,5 +1,7 @@
 # MongoTab
 
+**中文** | [English](README.en.md)
+
 **Make mongosh readable.**
 
 MongoTab 在 mongosh 里把查询结果排成 MySQL 风格的表格 / `\G` 竖排，不改变你写 MongoDB 命令的方式。单个 JS 文件，无依赖。
