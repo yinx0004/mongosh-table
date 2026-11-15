@@ -16,12 +16,40 @@ MongoTab renders query results in mongosh as MySQL-style tables or `\G`-style ve
 **Non-intrusive**: it only adds three globals, `t`, `g` and `mt` (any name already taken is skipped; use `mongotab.xxx` instead).
 It does not touch mongosh objects, prototypes, `.mongoshrc` or any config, and it is gone when the session ends.
 
+## Download
+
+It is a single file, `mongotab.js`. Put it anywhere on the machine where you run mongosh.
+
+```bash
+curl -fLO https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js
+```
+
+```bash
+# without curl
+wget https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js
+```
+
+```bash
+# or clone the whole repository
+git clone https://github.com/yinx0004/mongosh-table.git
+```
+
+If the jump host or database server has no internet access, download it on your own machine first and copy it over:
+
+```bash
+scp mongotab.js user@dbhost:~/
+```
+
+All of these fetch the latest version on the `main` branch.
+
 ## Loading
 
 ```js
 // after connecting
 load('/path/to/mongotab.js')
 ```
+
+`load()` does not expand `~`, so use a full path such as `load('/home/dba/mongotab.js')`; a relative path is resolved from the directory you started mongosh in.
 
 ```bash
 # load it when connecting
