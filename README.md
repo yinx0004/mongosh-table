@@ -2,8 +2,9 @@
 
 [![version](https://img.shields.io/badge/version-0.1.0-blue)](mongotab.js)
 [![license](https://img.shields.io/github/license/yinx0004/mongosh-table)](LICENSE)
+[![compat](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml/badge.svg)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
 [![mongosh](https://img.shields.io/badge/mongosh-1.x%20%7C%202.x-47A248?logo=mongodb&logoColor=white)](https://www.mongodb.com/docs/mongodb-shell/)
-[![MongoDB](https://img.shields.io/badge/tested%20on-MongoDB%204.4%20%E2%80%93%208.0-47A248?logo=mongodb&logoColor=white)](#)
+[![MongoDB](https://img.shields.io/badge/MongoDB-4.4%20%7C%205.0%20%7C%206.0%20%7C%207.0%20%7C%208.0-47A248?logo=mongodb&logoColor=white)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
 [![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](mongotab.js)
 
 **中文** | [English](README.en.md)
@@ -109,7 +110,23 @@ mt.help()
 - `MONGOTAB_TZ=+08:00`：默认时区。写错了会回退到 UTC 并给出提示。
 - `MONGOTAB_LANG=zh` 或 `en`：帮助和提示信息的语言。不设时跟随 `LC_ALL` / `LC_MESSAGES` / `LANG`（以 `zh` 开头为中文，其余为英文）。会话里也可以用 `mt.config({lang: 'zh'})` 切换。
 
-已在 MongoDB 4.4、5.0、6.0、7.0、8.0（单节点副本集）上测试，客户端 mongosh 1.8.0、2.8.3、2.14.2。
+## 兼容性
+
+每个 PR 和每次推送到 main 都会在 GitHub Actions 里跑 [test/compat.js](test/compat.js)，下面每个 MongoDB 版本和每个 mongosh 版本两两组合各跑一遍（共 10 组）：
+
+- MongoDB：4.4、5.0、6.0、7.0、8.0（单节点副本集）
+- mongosh：1.8.0、2.x 最新版
+
+本地跑（需要 Docker）：
+
+```bash
+test/run.sh mongo:7.0
+```
+
+```bash
+# mongo:4.4 镜像里没有 mongosh，第二个参数指定客户端镜像（mongo:6.0.4 带 mongosh 1.8.0）
+test/run.sh mongo:4.4 mongo:6.0.4
+```
 
 ## License
 
