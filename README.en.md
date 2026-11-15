@@ -2,8 +2,8 @@
 
 [![version](https://img.shields.io/badge/version-0.1.0-blue)](mongotab.js)
 [![license](https://img.shields.io/github/license/yinx0004/mongosh-table)](LICENSE)
-[![mongosh](https://img.shields.io/badge/mongosh-2.x-47A248?logo=mongodb&logoColor=white)](https://www.mongodb.com/docs/mongodb-shell/)
-[![MongoDB](https://img.shields.io/badge/tested%20on-MongoDB%207.0-47A248?logo=mongodb&logoColor=white)](#)
+[![mongosh](https://img.shields.io/badge/mongosh-1.x%20%7C%202.x-47A248?logo=mongodb&logoColor=white)](https://www.mongodb.com/docs/mongodb-shell/)
+[![MongoDB](https://img.shields.io/badge/tested%20on-MongoDB%204.4%20%E2%80%93%208.0-47A248?logo=mongodb&logoColor=white)](#)
 [![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](mongotab.js)
 
 [中文](README.md) | **English**
@@ -109,7 +109,7 @@ Environment variables, read when the script loads:
 - `MONGOTAB_TZ=+08:00`: default time zone. An invalid value falls back to UTC with a warning.
 - `MONGOTAB_LANG=en` or `zh`: language of help text and messages. If unset, it follows `LC_ALL` / `LC_MESSAGES` / `LANG` (`zh*` means Chinese, anything else English). You can also switch in the session with `mt.config({lang: 'en'})`.
 
-Tested with mongosh 2.14.2 and MongoDB 7.0 (replica set).
+Tested on MongoDB 4.4, 5.0, 6.0, 7.0 and 8.0 (single-node replica sets) with mongosh 1.8.0, 2.8.3 and 2.14.2.
 
 ## License
 
