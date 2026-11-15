@@ -16,12 +16,40 @@ MongoTab 在 mongosh 里把查询结果排成 MySQL 风格的表格 / `\G` 竖�
 **零侵入**：只新增 `t`、`g`、`mt` 三个全局函数（名字被占用就跳过，改用 `mongotab.xxx`）。
 不改 mongosh 的对象、prototype、`.mongoshrc` 或任何配置，退出会话即失效。
 
+## 下载
+
+只有一个文件 `mongotab.js`，下载到运行 mongosh 的机器上即可，放哪个目录都行。
+
+```bash
+curl -fLO https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js
+```
+
+```bash
+# 没有 curl 时
+wget https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js
+```
+
+```bash
+# 或者克隆整个仓库
+git clone https://github.com/yinx0004/mongosh-table.git
+```
+
+跳板机或数据库服务器连不了外网时，先在自己电脑上下载，再拷过去：
+
+```bash
+scp mongotab.js user@dbhost:~/
+```
+
+以上下载的都是 `main` 分支上的最新版。
+
 ## 加载
 
 ```js
 // 已连上后
 load('/path/to/mongotab.js')
 ```
+
+`load()` 不认 `~`，要写完整路径，例如 `load('/home/dba/mongotab.js')`；写相对路径时按启动 mongosh 时所在的目录算。
 
 ```bash
 # 连接时一起加载
