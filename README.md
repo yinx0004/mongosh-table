@@ -136,7 +136,7 @@ mt.help()
 单个大文档（`rs.status()`、`serverStatus()`）先竖排列出普通字段，里面的文档数组（如 `members`）会单独成子表。
 选列也能指到子表：`t(rs.status(), 'set,myState,members.name,members.stateStr')`。
 
-想查更多 MySQL 命令在 MongoDB 里怎么写，可以用 [DBA Command Finder](https://www.solidstack.io/dba-command-finder)：输入 MySQL 命令或要做的事（比如 `SHOW SLAVE STATUS\G`、“锁等待”），就能看到对应的 mongosh 命令，以及各版本能不能用、字段怎么对应。每条命令都在真实数据库上逐个版本实测过，也覆盖 Redis、PostgreSQL、TiDB。查到的命令套上 `t()` / `g()`，结果就是表格。
+想查更多 MySQL 命令在 MongoDB 里怎么写，可以用在线工具 [DBA Command Finder](https://www.solidstack.io/dba-command-finder)（打开网页就能用，不用安装）：输入 MySQL 命令或要做的事（比如 `SHOW SLAVE STATUS\G`、“锁等待”），就能看到对应的 mongosh 命令，以及各版本能不能用、字段怎么对应。每条命令都在真实数据库上逐个版本实测过，也覆盖 Redis、PostgreSQL、TiDB。查到的命令套上 `t()` / `g()`，结果就是表格。
 
 源码、测试和数据在 [yinx0004/dba-command-finder](https://github.com/yinx0004/dba-command-finder)，发现缺的命令或者结果不对，欢迎[提 issue](https://github.com/yinx0004/dba-command-finder/issues/new)。
 
