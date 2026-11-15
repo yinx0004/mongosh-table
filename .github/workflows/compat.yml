@@ -1,0 +1,27 @@
+name: compat
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: MongoDB ${{ matrix.mongodb }} / mongosh ${{ matrix.mongosh }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mongodb: ['4.4', '5.0', '6.0', '7.0', '8.0']
+        mongosh: ['1.x', '2.x']
+        include:
+          # The client comes from a mongo image that bundles that mongosh version.
+          - mongosh: '1.x'
+            client: mongo:6.0.4   # mongosh 1.8.0
+          - mongosh: '2.x'
+            client: mongo:8.0     # newest mongosh 2.x
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run test/compat.js
+        run: test/run.sh mongo:${{ matrix.mongodb }} ${{ matrix.client }}

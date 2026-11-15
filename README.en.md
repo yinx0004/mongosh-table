@@ -2,8 +2,9 @@
 
 [![version](https://img.shields.io/badge/version-0.1.0-blue)](mongotab.js)
 [![license](https://img.shields.io/github/license/yinx0004/mongosh-table)](LICENSE)
+[![compat](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml/badge.svg)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
 [![mongosh](https://img.shields.io/badge/mongosh-1.x%20%7C%202.x-47A248?logo=mongodb&logoColor=white)](https://www.mongodb.com/docs/mongodb-shell/)
-[![MongoDB](https://img.shields.io/badge/tested%20on-MongoDB%204.4%20%E2%80%93%208.0-47A248?logo=mongodb&logoColor=white)](#)
+[![MongoDB](https://img.shields.io/badge/MongoDB-4.4%20%7C%205.0%20%7C%206.0%20%7C%207.0%20%7C%208.0-47A248?logo=mongodb&logoColor=white)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
 [![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](mongotab.js)
 
 [中文](README.md) | **English**
@@ -109,7 +110,23 @@ Environment variables, read when the script loads:
 - `MONGOTAB_TZ=+08:00`: default time zone. An invalid value falls back to UTC with a warning.
 - `MONGOTAB_LANG=en` or `zh`: language of help text and messages. If unset, it follows `LC_ALL` / `LC_MESSAGES` / `LANG` (`zh*` means Chinese, anything else English). You can also switch in the session with `mt.config({lang: 'en'})`.
 
-Tested on MongoDB 4.4, 5.0, 6.0, 7.0 and 8.0 (single-node replica sets) with mongosh 1.8.0, 2.8.3 and 2.14.2.
+## Compatibility
+
+Every PR and every push to main runs [test/compat.js](test/compat.js) in GitHub Actions, once for each pairing of these MongoDB and mongosh versions (10 jobs):
+
+- MongoDB: 4.4, 5.0, 6.0, 7.0, 8.0 (single-node replica sets)
+- mongosh: 1.8.0 and the newest 2.x
+
+To run it locally (needs Docker):
+
+```bash
+test/run.sh mongo:7.0
+```
+
+```bash
+# the mongo:4.4 image has no mongosh; the second argument picks the client image (mongo:6.0.4 ships mongosh 1.8.0)
+test/run.sh mongo:4.4 mongo:6.0.4
+```
 
 ## License
 
