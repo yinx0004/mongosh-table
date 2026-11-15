@@ -1,5 +1,11 @@
 # MongoTab
 
+[![version](https://img.shields.io/badge/version-0.1.0-blue)](mongotab.js)
+[![license](https://img.shields.io/github/license/yinx0004/mongosh-table)](LICENSE)
+[![mongosh](https://img.shields.io/badge/mongosh-2.x-47A248?logo=mongodb&logoColor=white)](https://www.mongodb.com/docs/mongodb-shell/)
+[![MongoDB](https://img.shields.io/badge/tested%20on-MongoDB%207.0-47A248?logo=mongodb&logoColor=white)](#)
+[![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](mongotab.js)
+
 [中文](README.md) | **English**
 
 **Make mongosh readable.**
