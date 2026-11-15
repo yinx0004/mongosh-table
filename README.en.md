@@ -136,6 +136,10 @@ mt.help()
 A single large document (`rs.status()`, `serverStatus()`) is shown as vertical key/value pairs, and any array of documents inside it (such as `members`) becomes its own sub-table.
 Column selection can reach into sub-tables too: `t(rs.status(), 'set,myState,members.name,members.stateStr')`.
 
+To look up more MySQL commands and their MongoDB equivalents, try [DBA Command Finder](https://www.solidstack.io/dba-command-finder) (in Chinese): type a MySQL command or what you want to do (e.g. `SHOW SLAVE STATUS\G`) and it shows the matching mongosh command, which versions support it and how the fields map. Every command is tested on real databases version by version, and it also covers Redis, PostgreSQL and TiDB. Wrap what you find in `t()` / `g()` to get a table.
+
+The source, tests and data are in [yinx0004/dba-command-finder](https://github.com/yinx0004/dba-command-finder); if a command is missing or wrong, please [open an issue](https://github.com/yinx0004/dba-command-finder/issues/new).
+
 ## Display conventions
 
 | BSON | Shown as |
