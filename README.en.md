@@ -18,7 +18,7 @@ It does not touch mongosh objects, prototypes, `.mongoshrc` or any config, and i
 
 ## Download
 
-It is a single file, `mongotab.js`. Put it anywhere on the machine where you run mongosh.
+It is a single file, `mongotab.js`. Put it anywhere on **the machine where you run mongosh** (your computer or a jump host). When you connect to a remote MongoDB, nothing goes on the server; see [Connecting to a remote MongoDB](#connecting-to-a-remote-mongodb).
 
 ```bash
 curl -fLO https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js
@@ -34,10 +34,10 @@ wget https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js
 git clone https://github.com/yinx0004/mongosh-table.git
 ```
 
-If the jump host or database server has no internet access, download it on your own machine first and copy it over:
+If you run mongosh on a jump host that has no internet access, download it on your own machine first and copy it to the jump host:
 
 ```bash
-scp mongotab.js user@dbhost:~/
+scp mongotab.js user@jumphost:~/
 ```
 
 All of these fetch the latest version on the `main` branch.
@@ -60,6 +60,23 @@ mongosh "mongodb://user@host:27017/admin" /path/to/mongotab.js --shell
 # optional: an alias in your own ~/.bashrc (this changes bash, not mongosh)
 alias msh='mongosh --shell /path/to/mongotab.js'
 ```
+
+### Connecting to a remote MongoDB
+
+`load()` reads the file on the machine where mongosh runs, and `t` / `g` / `mt` live only in that mongosh session: queries go to the remote server as usual, and the results are laid out as tables locally. So nothing goes on the MongoDB server, and it needs no extra privileges or configuration.
+
+| Where mongosh runs | Where mongotab.js goes |
+|---|---|
+| Your computer, connecting directly or through an SSH tunnel | Your computer |
+| A jump host you SSH into first | The jump host |
+| The database server itself | The database server |
+
+```bash
+# from your computer to a remote server
+mongosh "mongodb://user@db.example.com:27017/admin" ~/mongotab.js --shell
+```
+
+A `~` in command-line arguments is expanded by your shell, so this works; a `~` inside `load()` is not.
 
 ## Usage
 

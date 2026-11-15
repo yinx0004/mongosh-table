@@ -18,7 +18,7 @@ MongoTab 在 mongosh 里把查询结果排成 MySQL 风格的表格 / `\G` 竖�
 
 ## 下载
 
-只有一个文件 `mongotab.js`，下载到运行 mongosh 的机器上即可，放哪个目录都行。
+只有一个文件 `mongotab.js`，放到**运行 mongosh 的机器**上（你的电脑或跳板机），哪个目录都行。连接远程 MongoDB 时，服务器上不用放任何东西，见[连接远程 MongoDB](#连接远程-mongodb)。
 
 ```bash
 curl -fLO https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js
@@ -34,10 +34,10 @@ wget https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js
 git clone https://github.com/yinx0004/mongosh-table.git
 ```
 
-跳板机或数据库服务器连不了外网时，先在自己电脑上下载，再拷过去：
+mongosh 在跳板机上运行、而跳板机连不了外网时，先在自己电脑上下载，再拷到跳板机：
 
 ```bash
-scp mongotab.js user@dbhost:~/
+scp mongotab.js user@jumphost:~/
 ```
 
 以上下载的都是 `main` 分支上的最新版。
@@ -60,6 +60,23 @@ mongosh "mongodb://user@host:27017/admin" /path/to/mongotab.js --shell
 # 想省事可以在自己的 ~/.bashrc 里加 alias（改的是 bash，不是 mongosh）
 alias msh='mongosh --shell /path/to/mongotab.js'
 ```
+
+### 连接远程 MongoDB
+
+`load()` 读的是运行 mongosh 那台机器上的文件，`t` / `g` / `mt` 也只在这个 mongosh 会话里生效：查询照常发给远程服务器，结果回来后在本地排成表格。所以 MongoDB 服务器上不用放任何文件，也不需要额外权限或配置。
+
+| mongosh 在哪运行 | mongotab.js 放在哪 |
+|---|---|
+| 自己电脑，直连远程或走 SSH 隧道 | 自己电脑 |
+| 先 SSH 登录跳板机，在跳板机上运行 | 跳板机 |
+| 直接在数据库服务器上运行 | 数据库服务器 |
+
+```bash
+# 自己电脑直连远程
+mongosh "mongodb://user@db.example.com:27017/admin" ~/mongotab.js --shell
+```
+
+命令行参数里的 `~` 由 shell 展开，可以这样写；`load()` 里的 `~` 不会展开。
 
 ## 用法
 
