@@ -2,26 +2,8 @@
 // single-node replica set from the repo root:
 //   mongosh "mongodb://localhost:27017/test?directConnection=true" test/compat.js
 // Exits non-zero if any case throws or misses an expected piece of output.
+load('test/lib.js');
 load('mongotab.js');
-
-var FAILS = 0;
-
-// Run fn with print() captured, echo the output, then check that every
-// expected string appears in it.
-function run(label, fn, expects) {
-  var lines = [];
-  var realPrint = globalThis.print;
-  print('\n### ' + label);
-  globalThis.print = function () { lines.push(Array.prototype.join.call(arguments, ' ')); };
-  var err = null;
-  try { fn(); } catch (e) { err = e; } finally { globalThis.print = realPrint; }
-  var out = lines.join('\n');
-  print(out);
-  if (err) { FAILS++; print('!!FAIL ' + label + ': ' + (err && err.stack || err)); return; }
-  (expects || []).forEach(function (s) {
-    if (out.indexOf(s) < 0) { FAILS++; print('!!FAIL ' + label + ': missing ' + JSON.stringify(s)); }
-  });
-}
 
 print('### env server=' + db.version() + ' mongosh=' + version());
 mt.config({ lang: 'zh', tz: 'UTC' });
@@ -94,5 +76,4 @@ run('config', function () { mt.config(); }, ['"limit":50']);
 run('help', function () { mt.help(); }, ['mt.csv(x, ...)']);
 run('reload', function () { load('mongotab.js'); t([{ ok: 1 }]); }, ['MongoTab ' + mt.version, '| ok |']);
 
-print('\n### RESULT ' + (FAILS ? FAILS + ' FAILED' : 'ALL OK'));
-if (FAILS) quit(1);
+finish();
