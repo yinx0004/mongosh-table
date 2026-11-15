@@ -1,10 +1,11 @@
 # MongoTab
 
-[![version](https://img.shields.io/badge/version-0.1.0-blue)](mongotab.js)
+[![release](https://img.shields.io/github/v/release/yinx0004/mongosh-table)](https://github.com/yinx0004/mongosh-table/releases/latest)
 [![license](https://img.shields.io/github/license/yinx0004/mongosh-table)](LICENSE)
 [![compat](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml/badge.svg)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
 [![mongosh](https://img.shields.io/badge/mongosh-1.x%20%7C%202.x-47A248?logo=mongodb&logoColor=white)](https://www.mongodb.com/docs/mongodb-shell/)
 [![MongoDB](https://img.shields.io/badge/MongoDB-4.4%20%7C%205.0%20%7C%206.0%20%7C%207.0%20%7C%208.0-47A248?logo=mongodb&logoColor=white)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
+[![platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](#compatibility)
 [![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](mongotab.js)
 
 [中文](README.md) | **English**
@@ -20,17 +21,27 @@ It does not touch mongosh objects, prototypes, `.mongoshrc` or any config, and i
 
 It is a single file, `mongotab.js`. Put it anywhere on **the machine where you run mongosh** (your computer or a jump host). When you connect to a remote MongoDB, nothing goes on the server; see [Connecting to a remote MongoDB](#connecting-to-a-remote-mongodb).
 
+Linux / macOS:
+
 ```bash
-curl -fLO https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js
+curl -fLO https://github.com/yinx0004/mongosh-table/releases/latest/download/mongotab.js
 ```
 
 ```bash
 # without curl
-wget https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js
+wget https://github.com/yinx0004/mongosh-table/releases/latest/download/mongotab.js
 ```
 
+Windows (PowerShell):
+
+```powershell
+Invoke-WebRequest -Uri https://github.com/yinx0004/mongosh-table/releases/latest/download/mongotab.js -OutFile mongotab.js
+```
+
+In PowerShell, `curl` is an alias for `Invoke-WebRequest` and does not accept `-fLO`; to use curl, type `curl.exe -fLO ...`.
+
 ```bash
-# or clone the whole repository
+# or clone the whole repository (development version on main)
 git clone https://github.com/yinx0004/mongosh-table.git
 ```
 
@@ -40,7 +51,7 @@ If you run mongosh on a jump host that has no internet access, download it on yo
 scp mongotab.js user@jumphost:~/
 ```
 
-All of these fetch the latest version on the `main` branch.
+These links fetch the latest release; older versions are on the [Releases](https://github.com/yinx0004/mongosh-table/releases) page. For the development version on `main`, use `https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js` instead.
 
 ## Loading
 
@@ -50,6 +61,7 @@ load('/path/to/mongotab.js')
 ```
 
 `load()` does not expand `~`, so use a full path such as `load('/home/dba/mongotab.js')`; a relative path is resolved from the directory you started mongosh in.
+On Windows, forward slashes are easiest: `load('C:/Users/dba/mongotab.js')`; backslashes must be doubled: `load('C:\\Users\\dba\\mongotab.js')`.
 
 ```bash
 # load it when connecting
@@ -57,9 +69,18 @@ mongosh "mongodb://user@host:27017/admin" /path/to/mongotab.js --shell
 ```
 
 ```bash
-# optional: an alias in your own ~/.bashrc (this changes bash, not mongosh)
-alias msh='mongosh --shell /path/to/mongotab.js'
+# optional: a function in your own ~/.bashrc (this changes bash, not mongosh); then msh "mongodb://..." loads it for you
+msh() { mongosh "$@" /path/to/mongotab.js --shell; }
 ```
+
+```powershell
+# Windows: add this to your PowerShell $PROFILE
+function msh { mongosh @args C:/tools/mongotab.js --shell }
+```
+
+The connection string must come before the `.js` file; after it, mongosh does not treat it as a connection string and connects to localhost instead.
+
+On Windows, Windows Terminal is recommended; if CJK columns do not line up, try it first.
 
 ### Connecting to a remote MongoDB
 
@@ -171,6 +192,12 @@ test/run.sh mongo:7.0
 ```bash
 # the mongo:4.4 image has no mongosh; the second argument picks the client image (mongo:6.0.4 ships mongosh 1.8.0)
 test/run.sh mongo:4.4 mongo:6.0.4
+```
+
+It also runs [test/format.js](test/format.js) on Linux, macOS and Windows with mongosh 1.8.0 and 2.14.2 (6 jobs). That test needs no database; it covers formatting, `load()` paths (including Windows forward- and backslash forms) and the `MONGOTAB_LANG` / `MONGOTAB_TZ` environment variables. To run it locally:
+
+```bash
+mongosh --nodb test/format.js
 ```
 
 ## License

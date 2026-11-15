@@ -26,13 +26,50 @@ jobs:
       - name: Run test/compat.js
         run: test/run.sh mongo:${{ matrix.mongodb }} ${{ matrix.client }}
 
-  # One stable check name for branch protection, so the matrix can change
+  # Formatting only (mongosh --nodb), on each OS a DBA might run mongosh from.
+  format:
+    name: ${{ matrix.os }} / mongosh ${{ matrix.mongosh }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        mongosh: ['1.8.0', '2.14.2']
+    env:
+      MONGOTAB_LANG: zh_CN.UTF-8
+      MONGOTAB_TZ: '+08:00'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mongosh ${{ matrix.mongosh }}
+        run: |
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Linux-X64)   pkg=linux-x64.tgz ;;
+            macOS-ARM64) pkg=darwin-arm64.zip ;;
+            macOS-X64)   pkg=darwin-x64.zip ;;
+            Windows-X64) pkg=win32-x64.zip ;;
+            *) echo "no mongosh package for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/mongosh" && cd "$RUNNER_TEMP/mongosh"
+          curl -fsSL -o "pkg-$pkg" "https://downloads.mongodb.com/compass/mongosh-${{ matrix.mongosh }}-$pkg"
+          case "$pkg" in *.tgz) tar xzf "pkg-$pkg" ;; *) unzip -q "pkg-$pkg" ;; esac
+          bin=$(dirname "$(find "$PWD" -type f \( -name mongosh -o -name mongosh.exe \) | head -n 1)")
+          if [ "$RUNNER_OS" = Windows ]; then bin=$(cygpath -w "$bin"); fi
+          echo "$bin" >> "$GITHUB_PATH"
+      - name: Run test/format.js
+        run: mongosh --nodb --quiet test/format.js
+
+  # One stable check name for branch protection, so the jobs above can change
   # without editing the required checks.
   compat:
     name: compat
     if: always()
-    needs: test
+    needs: [test, format]
     runs-on: ubuntu-latest
     steps:
-      - name: All matrix jobs passed
-        run: test "${{ needs.test.result }}" = success
+      - name: All jobs passed
+        run: |
+          test "${{ needs.test.result }}" = success
+          test "${{ needs.format.result }}" = success
