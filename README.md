@@ -334,20 +334,22 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 
 ```
 > mt.cmds()
-+------------------------------+-----------------------------+---------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                       | description                                                                                                                     |
-+------------------------------+-----------------------------+---------------------------------------------------------------------------------------------------------------------------------+
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST            | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                 |
-| mt.slow({ms, ns, sort})      | mysql.slow_log              | 慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前 |
-| mt.top({interval, ns})       | sys.schema_table_statistics | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                      |
-| mt.repl()                    | SHOW SLAVE STATUS           | 副本集成员状态、复制延迟（秒）、同步源                                                                                          |
-| mt.dbs()                     | SHOW DATABASES              | 各库占用的磁盘空间                                                                                                              |
-| mt.colls('db')               | SHOW TABLE STATUS           | 各集合文档数、数据和索引大小，大的在前；默认当前库                                                                              |
-| mt.idx('coll')               | SHOW INDEX FROM t           | 索引的键、大小、使用次数和选项                                                                                                  |
-| mt.conns()                   | PROCESSLIST GROUP BY host   | 按客户端 IP 统计连接数                                                                                                          |
-| mt.oplog()                   | SHOW BINARY LOGS            | oplog 大小和能覆盖多长时间                                                                                                      |
-| mt.status({interval})        | SHOW GLOBAL STATUS          | 版本、角色、ops/s、连接、缓存等关键指标                                                                                         |
-+------------------------------+-----------------------------+---------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+-------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                         | description                                                                                                                     |
++------------------------------+-------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST              | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                 |
+| mt.slow({ms, ns, sort})      | mysql.slow_log                | 慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前 |
+| mt.top({interval, ns})       | sys.schema_table_statistics   | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                      |
+| mt.locks({all})              | sys.innodb_lock_waits         | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                    |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                           |
+| mt.repl()                    | SHOW SLAVE STATUS             | 副本集成员状态、复制延迟（秒）、同步源                                                                                          |
+| mt.dbs()                     | SHOW DATABASES                | 各库占用的磁盘空间                                                                                                              |
+| mt.colls('db')               | SHOW TABLE STATUS             | 各集合文档数、数据和索引大小，大的在前；默认当前库                                                                              |
+| mt.idx('coll')               | SHOW INDEX FROM t             | 索引的键、大小、使用次数和选项                                                                                                  |
+| mt.conns()                   | PROCESSLIST GROUP BY host     | 按客户端 IP 统计连接数                                                                                                          |
+| mt.oplog()                   | SHOW BINARY LOGS              | oplog 大小和能覆盖多长时间                                                                                                      |
+| mt.status({interval})        | SHOW GLOBAL STATUS            | 版本、角色、ops/s、连接、缓存等关键指标                                                                                         |
++------------------------------+-------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
 都可以加 t() 的选项，如 {cols: ...}、{vertical: true}；mt.config({showCmd: false}) 不打印原生命令
 ```
 
@@ -576,6 +578,83 @@ mt.top({ns: 'shop'})        // 只看 shop 库；'shop.orders' 只看这一个�
 - 这段时间里没有操作的集合不显示，按 `totalMs` 从大到小排。
 - `top` 是在操作**结束时**才记时间的：还在跑的长查询要等它结束才算进来，结束时一次记下全部耗时。所以上面 1 秒的采样里会出现 `shop.orders` 1 万多毫秒，那是一个刚跑完一批的长查询；还在跑的操作看 `mt.ps()`。
 - 有些操作不算读锁也不算写锁，所以 `readMs + writeMs` 可能小于 `totalMs`。
+
+### mt.locks()：谁在等锁
+
+相当于 MySQL 的 `sys.innodb_lock_waits`：哪些操作在排队等锁，锁又被谁占着。
+
+```js
+mt.locks()              // 只看有人排队的锁，以及挡住它们的持有者
+mt.locks({all: true})   // 所有被占用的锁，包括没人排队的
+```
+
+用 `db.adminCommand({lockInfo: 1})` 拿到每个锁资源的持有者（granted）和排队者（pending），再按 opid 关联 `currentOp`，补上运行时间、客户端和命令。
+
+| 列 | 说明 |
+|---|---|
+| `resource` | 锁资源，如 `Database shop`、`Collection shop.orders`；全局一级的锁显示成 `Global 3` 这样的编号，编号随版本不同 |
+| `mode` | 锁模式：`IS` / `IX` 意向共享 / 意向排他，`S` 共享，`X` 排他（`currentOp` 里写作 `r` / `w` / `R` / `W`） |
+| `state` | `HOLD` 占着，`WAIT` 在排队 |
+| `opid` / `secs` | 操作 ID、已经运行的秒数；`db.killOp(opid)` 可以杀掉 |
+| `client` / `desc` | 客户端；`desc` 是连接名（如 `conn31`）或内部线程名（如 `fsyncLockWorker`） |
+| `op` / `ns` / `command` | 操作类型、库.集合、命令内容 |
+
+下面是 `db.fsyncLock()` 之后的样子：`fsyncLockWorker` 以 `S` 模式占着全局锁，写入（`IX`）全都在排队，直到 `db.fsyncUnlock()`。备份时锁了忘记解，就是这个现象。
+
+```
+> mt.locks()
+-- db.adminCommand({lockInfo: 1}); db.adminCommand({currentOp: 1, $all: true})
++----------+------+-------+------+------+---------------------+------------------+--------+----------+------------------------------------------+
+| resource | mode | state | opid | secs | client              | desc             | op     | ns       | command                                  |
++----------+------+-------+------+------+---------------------+------------------+--------+----------+------------------------------------------+
+| Global 3 | S    | HOLD  | 1827 |      |                     | fsyncLockWorker  | none   |          |                                          |
+| Global 3 | IX   | WAIT  | 1821 |      |                     | JournalFlusher   | none   |          |                                          |
+| Global 3 | IX   | WAIT  | 1828 |      |                     | TimestampMonitor | none   |          |                                          |
+| Global 3 | IX   | WAIT  | 1830 |    0 | 192.168.117.4:42734 | conn31           | insert | mtlock.c | {insert: c, documents: [{i: 21, _id: ... |
++----------+------+-------+------+------+---------------------+------------------+--------+----------+------------------------------------------+
+4 rows in set
+```
+
+- 默认只列和排队者冲突的持有者：`IS` 和 `S` 不冲突，所以正在跑的读操作不会出现在上面。想看全部用 `{all: true}`。
+- WiredTiger 是文档级并发，普通读写之间的冲突是重试（WriteConflict），不是等锁，不会出现在这里。会等锁的多是 `fsyncLock`、建索引的开始和结束、`collMod`、`renameCollection`、`drop` 这类要排他锁的操作。
+- 4.2 的全局锁不在 `lockInfo` 里，这时从 `currentOp` 的 `waitingForLock` 补上：排队者等的是它 `locks` 里的最后一项，持有者是同一把锁上模式冲突的操作。
+
+### mt.txns()：未提交的事务
+
+相当于 MySQL 的 `INFORMATION_SCHEMA.INNODB_TRX`。事务从 MongoDB 4.0 起才有。
+
+```js
+mt.txns()                 // 开得最久的在前
+mt.txns({secs: 10})       // 只看开了 10 秒以上的
+mt.txns({sort: 'asc'})    // 最短的在前；也可以给排序文档如 {client: 1}
+```
+
+执行的是 `db.adminCommand({currentOp: 1, $all: true})`，只取带 `transaction` 字段的；两条语句之间空闲的事务也在里面（`type: idleSession`）。
+
+| 列 | 说明 |
+|---|---|
+| `lsid` / `txnNumber` | 会话 ID 和会话里的事务编号 |
+| `state` | `active` 正在执行语句，`idle` 两条语句之间空闲 |
+| `openSecs` | 事务已经开了多久 |
+| `activeSecs` / `idleSecs` | 其中执行语句、空闲的时间 |
+| `start` | 事务开始的时间 |
+| `expiresIn` | 再过多少秒会被自动中止（`transactionLifetimeLimitSeconds`，默认 60 秒） |
+| `opid` / `ns` | 正在执行时的操作 ID、库.集合 |
+| `client` / `app` | 客户端、appName |
+
+```
+> mt.txns()
+-- db.adminCommand({currentOp: 1, $all: true}) → transaction
++--------------------------------------+-----------+-------+----------+------------+----------+-------------------------+-----------+------+---------------------+----------------+----+
+| lsid                                 | txnNumber | state | openSecs | activeSecs | idleSecs | start                   | expiresIn | opid | client              | app            | ns |
++--------------------------------------+-----------+-------+----------+------------+----------+-------------------------+-----------+------+---------------------+----------------+----+
+| 02581e23-79b1-42d1-80e5-e71a10e947a7 |         3 | idle  |        0 |          0 |        0 | 2026-11-22 08:26:06.151 |        60 |      | 192.168.117.5:45476 | mongosh 2.14.2 |    |
++--------------------------------------+-----------+-------+----------+------------+----------+-------------------------+-----------+------+---------------------+----------------+----+
+1 row in set
+```
+
+- 长时间不提交的事务会一直占着 WiredTiger 缓存里的旧版本数据，`idleSecs` 很大的通常是应用忘了 commit / abort。
+- 想立刻结束一个事务：`db.adminCommand({killSessions: [{id: UUID('<lsid>')}]})`。
 
 ### mt.repl()：副本集状态
 

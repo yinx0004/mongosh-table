@@ -122,6 +122,30 @@ pdb.dropDatabase();
 run('mt.slow profiler off', function () { mt.slow('mtnoprof'); }, ['level: 0', 'Empty set', '没有开 profiler']);
 run('mt.top totals', function () { mt.top({ interval: 0, ns: 'mtest' }); }, ['-- db.adminCommand({top: 1})，启动以来累计', '| mtest.orders ', '| totalMs |']);
 run('mt.top', function () { mt.top(); }, ['-- db.adminCommand({top: 1})，间隔 1 秒采样两次']);
+// mt.locks：fsyncLock 期间，run.sh 起的写入循环会排队等全局锁
+run('mt.locks none', function () { mt.locks(); }, ['-- db.adminCommand({lockInfo: 1})', '没有在等锁的操作']);
+run('mt.locks', function () {
+  db.fsyncLock();
+  try {
+    for (var i = 0; i < 40 && !db.currentOp({ waitingForLock: true, ns: 'mtlock.c' }).inprog.length; i++) sleep(250);
+    mt.locks({ table: true });
+  } finally { db.fsyncUnlock(); }
+}, ['| HOLD ', 'fsyncLockWorker', '| WAIT ', '| mtlock.c ']);
+run('mt.locks all', function () { mt.locks({ all: true }); }, ['-- db.adminCommand({lockInfo: 1})']);
+// mt.txns：4.0 起才有事务；开一个不提交的事务
+var TXN = (function () { var v = db.version().split('.'); return Number(v[0]) >= 4; })();
+if (TXN) {
+  var xdb = db.getSiblingDB('mtx'); xdb.c.drop(); xdb.createCollection('c');
+  var sess = db.getMongo().startSession();
+  sess.startTransaction();
+  sess.getDatabase('mtx').c.insertOne({ a: 1 });
+  run('mt.txns', function () { mt.txns({ table: true }); }, ['-- db.adminCommand({currentOp: 1, $all: true})', '| lsid ', '| idle ', '| openSecs ']);
+  run('mt.txns secs filter', function () { mt.txns({ secs: 100000 }); }, ['Empty set']);
+  run('mt.txns sort asc', function () { mt.txns({ sort: 'asc', cols: 'state,openSecs' }); }, ['| idle  ']);
+  sess.abortTransaction();
+}
+run('mt.txns bad sort', function () { mt.txns({ sort: 'x' }); }, ["mongotab: mt.txns() 的 sort 可以是 'desc'"]);
+run('mt.txns none', function () { mt.txns(); }, ['没有未提交的事务']);
 run('mt.repl', function () { mt.repl(); }, ['-- rs.status()', 'set: rs0', '| name ', '| PRIMARY ', '| lagSecs |', '1 row in set']);
 run('mt.dbs', function () { mt.dbs(); }, ['| mtest ', '合计 ']);
 run('mt.colls', function () { mt.colls('mtest'); }, ['| orders | ', '| name   | count | size ']);

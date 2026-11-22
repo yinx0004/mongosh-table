@@ -334,20 +334,22 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 
 ```
 > mt.cmds()
-+------------------------------+-----------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                       | description                                                                                                                                                                        |
-+------------------------------+-----------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST            | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                               |
-| mt.slow({ms, ns, sort})      | mysql.slow_log              | Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first |
-| mt.top({interval, ns})       | sys.schema_table_statistics | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                       |
-| mt.repl()                    | SHOW SLAVE STATUS           | Replica set members, replication lag (seconds), sync source                                                                                                                        |
-| mt.dbs()                     | SHOW DATABASES              | Disk space used by each database                                                                                                                                                   |
-| mt.colls('db')               | SHOW TABLE STATUS           | Documents, data and index size per collection, largest first; current db by default                                                                                                |
-| mt.idx('coll')               | SHOW INDEX FROM t           | Index keys, size, usage count and options                                                                                                                                          |
-| mt.conns()                   | PROCESSLIST GROUP BY host   | Connections per client IP                                                                                                                                                          |
-| mt.oplog()                   | SHOW BINARY LOGS            | Oplog size and how much time it covers                                                                                                                                             |
-| mt.status({interval})        | SHOW GLOBAL STATUS          | Version, role, ops/s, connections, cache and other key metrics                                                                                                                     |
-+------------------------------+-----------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                         | description                                                                                                                                                                        |
++------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST              | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                               |
+| mt.slow({ms, ns, sort})      | mysql.slow_log                | Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first |
+| mt.top({interval, ns})       | sys.schema_table_statistics   | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                       |
+| mt.locks({all})              | sys.innodb_lock_waits         | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                          |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                               |
+| mt.repl()                    | SHOW SLAVE STATUS             | Replica set members, replication lag (seconds), sync source                                                                                                                        |
+| mt.dbs()                     | SHOW DATABASES                | Disk space used by each database                                                                                                                                                   |
+| mt.colls('db')               | SHOW TABLE STATUS             | Documents, data and index size per collection, largest first; current db by default                                                                                                |
+| mt.idx('coll')               | SHOW INDEX FROM t             | Index keys, size, usage count and options                                                                                                                                          |
+| mt.conns()                   | PROCESSLIST GROUP BY host     | Connections per client IP                                                                                                                                                          |
+| mt.oplog()                   | SHOW BINARY LOGS              | Oplog size and how much time it covers                                                                                                                                             |
+| mt.status({interval})        | SHOW GLOBAL STATUS            | Version, role, ops/s, connections, cache and other key metrics                                                                                                                     |
++------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 All accept t() options such as {cols: ...} or {vertical: true}; mt.config({showCmd: false}) hides the native command
 ```
 
@@ -576,6 +578,83 @@ How it works:
 - Collections with no activity in the interval are left out; rows are sorted by `totalMs`, highest first.
 - `top` records time when an operation **finishes**, all at once. That is why the 1-second sample above shows over 10,000 ms for `shop.orders`: a long query had just finished a batch. Use `mt.ps()` for operations still running.
 - Some operations take neither a read nor a write lock, so `readMs + writeMs` can be less than `totalMs`.
+
+### mt.locks(): lock waits
+
+Like MySQL's `sys.innodb_lock_waits`: which operations are queued for a lock, and who holds it.
+
+```js
+mt.locks()              // only locks with waiters, and the holders blocking them
+mt.locks({all: true})   // every lock that is held, waiters or not
+```
+
+It runs `db.adminCommand({lockInfo: 1})` for each lock resource's holders (granted) and waiters (pending), then joins `currentOp` by opid for run time, client and command.
+
+| Column | Meaning |
+|---|---|
+| `resource` | The lock resource, e.g. `Database shop`, `Collection shop.orders`; global-level locks show as a number such as `Global 3`, which varies by version |
+| `mode` | `IS` / `IX` intent shared / intent exclusive, `S` shared, `X` exclusive (`r` / `w` / `R` / `W` in `currentOp`) |
+| `state` | `HOLD` holds it, `WAIT` is queued |
+| `opid` / `secs` | Operation ID and seconds running; `db.killOp(opid)` kills it |
+| `client` / `desc` | Client; `desc` is the connection name (e.g. `conn31`) or an internal thread (e.g. `fsyncLockWorker`) |
+| `op` / `ns` / `command` | Operation type, database.collection, the command |
+
+This is what it looks like after `db.fsyncLock()`: `fsyncLockWorker` holds the global lock in `S` mode and every write (`IX`) queues until `db.fsyncUnlock()`. A backup that locked the server and never unlocked it looks exactly like this.
+
+```
+> mt.locks()
+-- db.adminCommand({lockInfo: 1}); db.adminCommand({currentOp: 1, $all: true})
++----------+------+-------+------+------+---------------------+------------------+--------+----------+------------------------------------------+
+| resource | mode | state | opid | secs | client              | desc             | op     | ns       | command                                  |
++----------+------+-------+------+------+---------------------+------------------+--------+----------+------------------------------------------+
+| Global 3 | S    | HOLD  | 1827 |      |                     | fsyncLockWorker  | none   |          |                                          |
+| Global 3 | IX   | WAIT  | 1821 |      |                     | JournalFlusher   | none   |          |                                          |
+| Global 3 | IX   | WAIT  | 1828 |      |                     | TimestampMonitor | none   |          |                                          |
+| Global 3 | IX   | WAIT  | 1830 |    0 | 192.168.117.4:42734 | conn31           | insert | mtlock.c | {insert: c, documents: [{i: 21, _id: ... |
++----------+------+-------+------+------+---------------------+------------------+--------+----------+------------------------------------------+
+4 rows in set
+```
+
+- By default only holders that conflict with a waiter are listed: `IS` and `S` do not conflict, so running reads do not show up above. Use `{all: true}` to see everything.
+- WiredTiger has document-level concurrency: conflicts between ordinary reads and writes are retried (WriteConflict), not lock waits, so they do not appear here. Lock waits usually come from operations that need an exclusive lock, such as `fsyncLock`, the start and end of an index build, `collMod`, `renameCollection` and `drop`.
+- On 4.2 the global lock is not in `lockInfo`; then the waits come from `waitingForLock` in `currentOp`: a waiter is queued for the last entry in its `locks`, and the holders are operations with a conflicting mode on that lock.
+
+### mt.txns(): open transactions
+
+Like MySQL's `INFORMATION_SCHEMA.INNODB_TRX`. Transactions exist since MongoDB 4.0.
+
+```js
+mt.txns()                 // open longest first
+mt.txns({secs: 10})       // only those open for 10 seconds or more
+mt.txns({sort: 'asc'})    // shortest first; or a sort document such as {client: 1}
+```
+
+It runs `db.adminCommand({currentOp: 1, $all: true})` and keeps entries with a `transaction` field; transactions idle between statements are included (`type: idleSession`).
+
+| Column | Meaning |
+|---|---|
+| `lsid` / `txnNumber` | Session ID and transaction number within the session |
+| `state` | `active` running a statement, `idle` between statements |
+| `openSecs` | How long the transaction has been open |
+| `activeSecs` / `idleSecs` | Of which running statements / idle |
+| `start` | When the transaction started |
+| `expiresIn` | Seconds until it is aborted automatically (`transactionLifetimeLimitSeconds`, 60 by default) |
+| `opid` / `ns` | Operation ID and database.collection while running |
+| `client` / `app` | Client and appName |
+
+```
+> mt.txns()
+-- db.adminCommand({currentOp: 1, $all: true}) → transaction
++--------------------------------------+-----------+-------+----------+------------+----------+-------------------------+-----------+------+---------------------+----------------+----+
+| lsid                                 | txnNumber | state | openSecs | activeSecs | idleSecs | start                   | expiresIn | opid | client              | app            | ns |
++--------------------------------------+-----------+-------+----------+------------+----------+-------------------------+-----------+------+---------------------+----------------+----+
+| 02581e23-79b1-42d1-80e5-e71a10e947a7 |         3 | idle  |        0 |          0 |        0 | 2026-11-22 08:26:06.151 |        60 |      | 192.168.117.5:45476 | mongosh 2.14.2 |    |
++--------------------------------------+-----------+-------+----------+------------+----------+-------------------------+-----------+------+---------------------+----------------+----+
+1 row in set
+```
+
+- A transaction left open keeps old versions of data in the WiredTiger cache; a large `idleSecs` usually means the application forgot to commit or abort.
+- To end one right away: `db.adminCommand({killSessions: [{id: UUID('<lsid>')}]})`.
 
 ### mt.repl(): replica set status
 
