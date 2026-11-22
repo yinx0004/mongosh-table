@@ -85,7 +85,7 @@ run('help', function () { mt.help(); }, ['mt.csv(x, ...)', '  选项（每次调
 run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '── 慢查询和执行计划 ──', '── 存储和索引 ──', '── 复制 ──',
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
-var ALL_CMDS = ['check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
+var ALL_CMDS = ['desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
   'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log'];
 run('mt.help each command', function () {
   var bad = [];
@@ -99,10 +99,10 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 23 ok']);
+}, ['all 25 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
-run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'check'、'ps'"]);
+run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'desc'、'planCache'、'check'"]);
 run('mt.ps', function () { mt.ps(); }, ['-- db.adminCommand({currentOp: 1, active: true})']);
 run('mt.ps slow query', function () {
   for (var i = 0; i < 20 && !db.currentOp({ ns: 'mtslow.slow' }).inprog.length; i++) sleep(500);
@@ -419,6 +419,28 @@ run('mt.check issues only', function () {
   print(/\| OK\s/.test(o) ? 'has ok' : 'no ok rows');
 }, ['no ok rows']);
 ckd.dropDatabase();
+// mt.desc：字段结构；mt.planCache：计划缓存（有两个候选索引的查询才会被缓存）
+var dsc = db.getSiblingDB('mtdesc'); dsc.dropDatabase();
+dsc.o.insertMany([{ a: 1, s: 'x', n: null, sub: { k: 1 }, arr: [{ q: 1 }], tags: ['t'] }, { a: NumberLong(2), s: 'y', n: 5, sub: { k: 2, j: true }, arr: [{ q: 2 }] },
+  { a: 3, s: 'z', when: new Date(0) }]);
+dsc.o.createIndex({ s: 1 }); dsc.o.createIndex({ s: 1, a: 1 });
+for (var pi = 0; pi < 3; pi++) dsc.o.find({ s: 'x', a: 1 }).toArray();
+run('mt.desc', function () { mt.desc(dsc.o, { table: true }); }, [
+  "aggregate([{$sample: {size: 1000}}])", 'ns: mtdesc.o', 'type: collection', 'count: 3', 'sampled: 3', 'indexes: _id_, s_1, s_1_a_1',
+  '| field ', '| a     | number 67%, long 33% ', '| s     | string ', '| n     | null 50%, number 50% |   66.7% |', '| sub.k | number ', '| sub.j | bool ',
+  '| arr   | array<object> ', '| arr.q | number ', '| tags  | array<string> ', '[t]', '| when  | date '
+]);
+run('mt.desc order', function () {
+  // 抽样顺序随机，字段顺序要稳定：按在父文档里的平均位置排（when 在第 3 条里排第 4，和 n 一样，按名字排在 n 后面）
+  var o = capOut(function () { mt.desc(dsc.o, { cols: 'field', showCmd: false, table: true }); });
+  var f = o.split('\n').map(function (l) { var mm = /^\| (\S+)\s+\|$/.exec(l); return mm ? mm[1] : null; }).filter(function (x) { return x && x !== 'field'; });
+  print(f.join(','));
+}, ['_id,a,s,n,when,sub,sub.k,sub.j,arr,arr.q,tags']);
+run('mt.desc depth', function () { mt.desc('mtdesc.o', { depth: 1, cols: 'field', showCmd: false }); }, ['| sub   |']);
+run('mt.planCache', function () { mt.planCache('mtdesc.o', { table: true }); }, ['| shape ', '| plan ', '{s: x, a: 1}', 'IXSCAN']);
+run('mt.planCache hash none', function () { mt.planCache(dsc.o, { hash: 'NOPE' }); }, ['Empty set']);
+run('mt.desc missing', function () { mt.desc('nope_no_such'); }, ['mongotab: 集合 test.nope_no_such 不存在']);
+dsc.dropDatabase();
 run('reload', function () { load('mongotab.js'); t([{ ok: 1 }]); }, ['MongoTab ' + mt.version, '| ok |']);
 
 finish();

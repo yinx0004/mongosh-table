@@ -360,21 +360,23 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 | mt.explain(cursor)      | EXPLAIN [ANALYZE]            | 执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；默认只看计划、不执行，analyze: true 执行一遍看扫描数和耗时             |
 | mt.explainLog(n | line) | EXPLAIN on a slow log query  | 对慢日志里的查询做 explain：先列出日志里记下的实际执行情况，再看现在的计划，计划变了会提示；n 是 mt.slow() / mt.log() 的行号，也可以传整行日志、命令 |
 | mt.logQuery(n | line)   | slow log → SQL               | 把慢日志里的查询转成可以直接运行的 mongosh 语句（不执行），类型照原样保留                                                                            |
+| mt.planCache('coll')    | performance_schema digests   | 集合的计划缓存：每种查询形状缓存了哪个计划、是否生效、works；hash 按 queryHash / planCacheKey 过滤                                                   |
 +-------------------------+------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── 存储和索引 ──
-+--------------------+----------------------------------+---------------------------------------------------------------------------------+
-| command            | mysql                            | description                                                                     |
-+--------------------+----------------------------------+---------------------------------------------------------------------------------+
-| mt.dbs()           | SHOW DATABASES                   | 各库占用的磁盘空间                                                              |
-| mt.colls('db')     | SHOW TABLE STATUS                | 各集合文档数、数据和索引大小，大的在前；默认当前库                              |
-| mt.frag('db')      | TABLES.DATA_FREE                 | 各集合删数据后可回收的磁盘空间，多的在前；默认当前库                            |
-| mt.cache('db')     | sys.innodb_buffer_stats_by_table | 各集合占用的 WiredTiger 缓存，多的在前；默认所有库                              |
-| mt.idx('coll')     | SHOW INDEX FROM t                | 索引的键、大小、使用次数和选项                                                  |
-| mt.unusedIdx('db') | sys.schema_unused_indexes        | 没被用过的索引（ops = 0），大的在前；默认所有用户库                             |
-| mt.dupIdx('db')    | sys.schema_redundant_indexes     | 冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库  |
-| mt.ttl('db')       | information_schema.EVENTS        | TTL 索引：过期时间、最早一条的时间、超期了多久，以及 TTL 线程的状态；默认所有库 |
-+--------------------+----------------------------------+---------------------------------------------------------------------------------+
++--------------------+----------------------------------+-------------------------------------------------------------------------------------------------------------+
+| command            | mysql                            | description                                                                                                 |
++--------------------+----------------------------------+-------------------------------------------------------------------------------------------------------------+
+| mt.dbs()           | SHOW DATABASES                   | 各库占用的磁盘空间                                                                                          |
+| mt.colls('db')     | SHOW TABLE STATUS                | 各集合文档数、数据和索引大小，大的在前；默认当前库                                                          |
+| mt.desc('coll')    | DESC t                           | 集合的字段结构：抽样文档，列出每个字段的类型、出现比例和示例，加上集合选项、校验规则和索引；sample 抽样条数 |
+| mt.frag('db')      | TABLES.DATA_FREE                 | 各集合删数据后可回收的磁盘空间，多的在前；默认当前库                                                        |
+| mt.cache('db')     | sys.innodb_buffer_stats_by_table | 各集合占用的 WiredTiger 缓存，多的在前；默认所有库                                                          |
+| mt.idx('coll')     | SHOW INDEX FROM t                | 索引的键、大小、使用次数和选项                                                                              |
+| mt.unusedIdx('db') | sys.schema_unused_indexes        | 没被用过的索引（ops = 0），大的在前；默认所有用户库                                                         |
+| mt.dupIdx('db')    | sys.schema_redundant_indexes     | 冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库                              |
+| mt.ttl('db')       | information_schema.EVENTS        | TTL 索引：过期时间、最早一条的时间、超期了多久，以及 TTL 线程的状态；默认所有库                             |
++--------------------+----------------------------------+-------------------------------------------------------------------------------------------------------------+
 
 ── 复制 ──
 +------------+-------------------+----------------------------------------+
@@ -846,7 +848,7 @@ docsExaminedPerReturned: 1
 | `numYields` / `writeConflicts` | 让出锁的次数、写冲突次数 |
 | `nMatched` / `nModified` / `ndeleted` / `ninserted` | 写操作匹配、修改、删除、插入了多少 |
 | `reslen` / `bytesRead` / `readMs` | 返回的字节数；从磁盘读了多少、花了多久（4.4 起） |
-| `queryHash` / `planCacheKey` | 查询形状和计划缓存的键，可以对着 `getPlanCache` 查 |
+| `queryHash` / `planCacheKey` | 查询形状和计划缓存的键，可以用 `mt.planCache(集合, {hash: ...})` 查缓存的计划 |
 | `appName` / `client` | 应用名、客户端；经 mongos 转发的，取命令里 `$client.mongos.client` 的真正客户端 |
 
 如果当时的计划和现在的不一样（比如当时 `COLLSCAN`、现在已经能走索引了），最后会提示出来。只给命令（`{ find: ... }` 或 JS 对象）时没有这一段。
@@ -1045,6 +1047,43 @@ db.getSiblingDB('shop').orders.updateMany({status: 'new', createdAt: {$lt: ISODa
 - 和 explain 一样去掉 mongos、驱动加的字段（`shardVersion`、`lsid`、`$clusterTime`、`$sortKey`...）。
 - find 写成 `.find(filter, projection).sort().skip().limit().hint()...`；aggregate、count、distinct 写成对应的方法；update / delete 按 `multi` / `limit` 写成 `updateOne` / `updateMany` / `replaceOne` / `deleteOne` / `deleteMany`，findAndModify 写成 `findOneAndUpdate` 等。**写操作前面会加一行注释提醒，执行会真的修改数据。**
 - 集合名和数据库的方法重名（如 `stats`）或者不是合法的标识符时，写成 `getCollection('...')`。
+
+### mt.planCache()：计划缓存
+
+线上为什么选了“错误”的索引？MongoDB 会把同一种查询形状选出来的计划缓存起来，后面直接用。这个命令列出集合里缓存的计划。
+
+```js
+mt.planCache('orders')                          // 每种查询形状缓存的计划
+mt.planCache('orders', {hash: 'AF0F05C1'})      // 按 queryHash 或 planCacheKey 找
+```
+
+`mt.explainLog()` 列出的「慢日志里记录的执行情况」里有 `queryHash` / `planCacheKey`，拿来这里一查，就知道这种查询缓存的是哪个计划。
+
+| 列 | 说明 |
+|---|---|
+| `hash` / `planCacheKey` | 查询形状的哈希（8.0 叫 `planCacheShapeHash`）、计划缓存的键 |
+| `active` | 是否生效；不生效的还在试用期 |
+| `works` | 评估这个计划时的工作量，越小越好 |
+| `shape` | 查询形状：条件、`sort`、`proj` |
+| `plan` | 缓存的计划用了什么扫描，如 `IXSCAN { status: 1 }`；SBE 计划只显示 `(SBE 计划)` |
+| `created` | 缓存的时间 |
+
+```
+> mt.planCache('orders')
+-- db.getSiblingDB('shop').getCollection('orders').aggregate([{$planCacheStats: {}}])
++----------+--------------+--------+-------+--------------------------------------------------------+-----------------------------+-------------------------+
+| hash     | planCacheKey | active | works | shape                                                  | plan                        | created                 |
++----------+--------------+--------+-------+--------------------------------------------------------+-----------------------------+-------------------------+
+| 9375056E | 59E1C32C     | true   |    82 | {status: PAID, customer.name: c1} sort {createdAt: -1} | IXSCAN { customer.name: 1 } | 2026-11-22 16:45:46.509 |
++----------+--------------+--------+-------+--------------------------------------------------------+-----------------------------+-------------------------+
+1 row in set
+```
+
+上面这种 `{status, customer.name}` 加按 `createdAt` 排序的查询，缓存的是 `customer.name_1`，而不是 `status_1_createdAt_-1`。
+
+- 4.2 起用 `$planCacheStats`；3.6 / 4.0 没有这个阶段，改用 `planCacheListQueryShapes` / `planCacheListPlans`，没有 `hash`、`active`、`created` 这几列。
+- 计划缓存在内存里，每个节点各自一份，重启、建删索引后清空；只有存在多个候选计划的查询才会被缓存。
+- 清掉某个集合的缓存：`db.orders.getPlanCache().clear()`（会影响正在跑的同类查询，慎用；MongoTab 不会替你执行）。
 
 ### mt.top()：各集合读写耗时
 
@@ -1270,6 +1309,57 @@ mt.colls('shop')    // 指定库，也可以传 db 对象
 +----------------+-------+---------+----------+---------+-----------+
 3 rows in set
 ```
+
+### mt.desc()：集合的字段结构
+
+相当于 MySQL 的 `DESC t`。MongoDB 没有固定的表结构，就抽样一批文档，看每个字段实际是什么类型、有多少文档有它。
+
+```js
+mt.desc('orders')                          // 当前库的 orders，抽样 1000 条
+mt.desc('shop.orders', {sample: 10000})    // 多抽一些，少见的字段也能看到
+mt.desc(db.orders, {depth: 1})             // 只看第一层字段
+```
+
+上面几行是集合信息：类型（collection / view / timeseries / capped / clustered）、文档总数、抽样数、校验规则、collation、索引。
+
+| 列 | 说明 |
+|---|---|
+| `field` | 字段路径；嵌套文档写成 `customer.name`，文档数组里的字段写成 `items.sku` |
+| `types` | 类型，有多种时带占比；数组写成 `array<元素类型>` |
+| `present` | 多少比例的抽样文档有这个字段 |
+| `example` | 示例值 |
+
+```
+> mt.desc('orders')
+-- db.getSiblingDB('shop').getCollection('orders').aggregate([{$sample: {size: 1000}}]); getCollectionInfos; getIndexes
+     ns: shop.orders
+   type: collection
+  count: 3000
+sampled: 1000
+indexes: _id_, status_1_createdAt_-1, customer.name_1
++---------------+-----------------------+---------+--------------------------+
+| field         | types                 | present | example                  |
++---------------+-----------------------+---------+--------------------------+
+| _id           | objectId              |  100.0% | 6b031c3a3a00992f040cb256 |
+| orderNo       | string                |  100.0% | SO2602                   |
+| status        | string                |  100.0% | PAID                     |
+| amount        | decimal 87%, null 13% |  100.0% | 102.5                    |
+| customer      | object                |  100.0% |                          |
+| customer.name | string                |  100.0% | c2                       |
+| customer.vip  | bool                  |  100.0% | false                    |
+| items         | array<object>         |  100.0% |                          |
+| items.sku     | string                |  100.0% | A2                       |
+| items.n       | number                |  100.0% | 2                        |
+| createdAt     | date                  |  100.0% | 2024-01-02 19:22:00      |
+| coupon        | string                |   25.2% | VIP0                     |
+| tags          | array<string>         |    9.4% | [x, y]                   |
++---------------+-----------------------+---------+--------------------------+
+13 rows in set
+```
+
+- 用 `$sample` 随机抽样，很少出现的字段可能抽不到，可以调大 `sample`。抽样条数超过集合的 5% 时，`$sample` 会扫描整个集合再排序，大集合上别设太大。
+- 字段按它在文档里的平均位置排，子字段紧跟在父字段后面。
+- `number` 是 int 和 double（shell 里分不出来），`long`、`decimal` 单独列出；同一个字段有多种类型（如上面 `amount` 有 13% 是 null）往往是数据问题的线索。
 
 ### mt.frag()：可回收的磁盘空间
 
