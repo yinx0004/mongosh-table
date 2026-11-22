@@ -334,30 +334,32 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 
 ```
 > mt.cmds()
-+------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                            | description                                                                                                                                                                                                         |
-+------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                 | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                                                                                     |
-| mt.slow({ms, ns, sort})      | mysql.slow_log                   | 慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前                                                                                     |
-| mt.top({interval, ns})       | sys.schema_table_statistics      | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                                                                                          |
-| mt.locks({all})              | sys.innodb_lock_waits            | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                                                                                        |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX    | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                                                                               |
-| mt.repl()                    | SHOW SLAVE STATUS                | 副本集成员状态、复制延迟（秒）、同步源                                                                                                                                                                              |
-| mt.dbs()                     | SHOW DATABASES                   | 各库占用的磁盘空间                                                                                                                                                                                                  |
-| mt.colls('db')               | SHOW TABLE STATUS                | 各集合文档数、数据和索引大小，大的在前；默认当前库                                                                                                                                                                  |
-| mt.frag('db')                | TABLES.DATA_FREE                 | 各集合删数据后可回收的磁盘空间，多的在前；默认当前库                                                                                                                                                                |
-| mt.idx('coll')               | SHOW INDEX FROM t                | 索引的键、大小、使用次数和选项                                                                                                                                                                                      |
-| mt.explain(cursor | n)       | EXPLAIN [ANALYZE]                | 执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；也接受慢日志里的命令，mt.explain(n) 对上次 mt.slow() / mt.log() 的第 n 行；默认只看计划、不执行，analyze: true 执行一遍看扫描数和耗时 |
-| mt.builds()                  | ALTER TABLE progress             | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                                                                                                                    |
-| mt.unusedIdx('db')           | sys.schema_unused_indexes        | 没被用过的索引（ops = 0），大的在前；默认所有用户库                                                                                                                                                                 |
-| mt.dupIdx('db')              | sys.schema_redundant_indexes     | 冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库                                                                                                                                      |
-| mt.conns()                   | PROCESSLIST GROUP BY host        | 按客户端 IP 统计连接数                                                                                                                                                                                              |
-| mt.oplog()                   | SHOW BINARY LOGS                 | oplog 大小和能覆盖多长时间                                                                                                                                                                                          |
-| mt.status({interval})        | SHOW GLOBAL STATUS               | 版本、角色、ops/s、连接、缓存等关键指标                                                                                                                                                                             |
-| mt.cache('db')               | sys.innodb_buffer_stats_by_table | 各集合占用的 WiredTiger 缓存，多的在前；默认所有库                                                                                                                                                                  |
-| mt.ttl('db')                 | information_schema.EVENTS        | TTL 索引：过期时间、最早一条的时间、超期了多久，以及 TTL 线程的状态；默认所有库                                                                                                                                     |
-| mt.log({n, grep, sev})       | performance_schema.error_log     | 最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告                                                                                                                          |
-+------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                            | description                                                                                                                                          |
++------------------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                 | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                      |
+| mt.slow({ms, ns, sort})      | mysql.slow_log                   | 慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前                      |
+| mt.top({interval, ns})       | sys.schema_table_statistics      | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                           |
+| mt.locks({all})              | sys.innodb_lock_waits            | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                         |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX    | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                |
+| mt.repl()                    | SHOW SLAVE STATUS                | 副本集成员状态、复制延迟（秒）、同步源                                                                                                               |
+| mt.dbs()                     | SHOW DATABASES                   | 各库占用的磁盘空间                                                                                                                                   |
+| mt.colls('db')               | SHOW TABLE STATUS                | 各集合文档数、数据和索引大小，大的在前；默认当前库                                                                                                   |
+| mt.frag('db')                | TABLES.DATA_FREE                 | 各集合删数据后可回收的磁盘空间，多的在前；默认当前库                                                                                                 |
+| mt.idx('coll')               | SHOW INDEX FROM t                | 索引的键、大小、使用次数和选项                                                                                                                       |
+| mt.explain(cursor)           | EXPLAIN [ANALYZE]                | 执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；默认只看计划、不执行，analyze: true 执行一遍看扫描数和耗时             |
+| mt.explainLog(n | line)      | EXPLAIN on a slow log query      | 对慢日志里的查询做 explain：先列出日志里记下的实际执行情况，再看现在的计划，计划变了会提示；n 是 mt.slow() / mt.log() 的行号，也可以传整行日志、命令 |
+| mt.logQuery(n | line)        | slow log → SQL                   | 把慢日志里的查询转成可以直接运行的 mongosh 语句（不执行），类型照原样保留                                                                            |
+| mt.builds()                  | ALTER TABLE progress             | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                                                     |
+| mt.unusedIdx('db')           | sys.schema_unused_indexes        | 没被用过的索引（ops = 0），大的在前；默认所有用户库                                                                                                  |
+| mt.dupIdx('db')              | sys.schema_redundant_indexes     | 冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库                                                                       |
+| mt.conns()                   | PROCESSLIST GROUP BY host        | 按客户端 IP 统计连接数                                                                                                                               |
+| mt.oplog()                   | SHOW BINARY LOGS                 | oplog 大小和能覆盖多长时间                                                                                                                           |
+| mt.status({interval})        | SHOW GLOBAL STATUS               | 版本、角色、ops/s、连接、缓存等关键指标                                                                                                              |
+| mt.cache('db')               | sys.innodb_buffer_stats_by_table | 各集合占用的 WiredTiger 缓存，多的在前；默认所有库                                                                                                   |
+| mt.ttl('db')                 | information_schema.EVENTS        | TTL 索引：过期时间、最早一条的时间、超期了多久，以及 TTL 线程的状态；默认所有库                                                                      |
+| mt.log({n, grep, sev})       | performance_schema.error_log     | 最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告                                                           |
++------------------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
 都可以加 t() 的选项，如 {cols: ...}、{vertical: true}；mt.config({showCmd: false}) 不打印原生命令
 ```
 
@@ -447,7 +449,7 @@ mt.slow('shop', {sort: 'ms'})       // 最慢的在前
 
 | 列 | 说明 |
 |---|---|
-| `#` | 行号，`mt.explain(n)` 用它 |
+| `#` | 行号，`mt.explainLog(n)` / `mt.logQuery(n)` 用它 |
 | `ts` | 操作结束的时间 |
 | `ms` | 耗时（毫秒），即 `millis` |
 | `op` | `query`、`update`、`command`... |
@@ -565,7 +567,7 @@ Empty set
 
 - 先执行 `profile: -1` 拿到表头的设置（和 `db.getProfilingStatus()` 一样），再用 `count` 数出符合条件的总数，然后 `find(条件).sort(sort).limit(limit)`。所以默认拿到的是最近的 50 条，`{sort: 'ms'}` 拿到的是最慢的 50 条；总数比 `limit` 多时页脚会显示“共 N 行”。
 - 总会排除读 `system.profile` 本身的操作和 `profile` 命令，否则在 level 2 下会看到 `mt.slow()` 自己。
-- `docsExamined` 远大于 `nreturned`、`plan` 是 `COLLSCAN` 的，通常就是缺索引。用 `mt.explain(行号)` 看它的执行计划，见[对慢日志里的命令做 explain](#对慢日志里的命令做-explain)。
+- `docsExamined` 远大于 `nreturned`、`plan` 是 `COLLSCAN` 的，通常就是缺索引。用 `mt.explainLog(行号)` 看它的执行计划，见 [mt.explainLog()](#mtexplainlog对慢日志里的查询做-explain)；`mt.logQuery(行号)` 把它转成可以直接运行的查询语句。
 - `system.profile` 是个 1 MB 的 capped 集合，满了会覆盖最早的记录，所以只能看到最近一段时间的。
 
 ### mt.explain()：执行计划
@@ -579,8 +581,9 @@ mt.explain(db.orders.find({status: 'PAID'}).sort({createdAt: -1}))   // 游标�
 mt.explain(db.orders.find({status: 'PAID'}), {analyze: true})        // 真的执行一遍，看扫描数、返回数、耗时
 mt.explain(db.orders.explain('executionStats').aggregate([...]))     // 聚合：先 explain，再把结果交给 mt.explain
 mt.explain(db.orders.aggregate([...]))                               // mongosh 里聚合游标也可以直接传
-mt.explain(1)                                                        // 上一次 mt.slow() / mt.log() 的第 1 行，见下文
 ```
+
+慢日志里的查询（`mt.slow()` / `mt.log()` 的行号、日志里的整行、命令）用 [`mt.explainLog()`](#mtexplainlog对慢日志里的查询做-explain)；想转成可以直接运行的语句用 [`mt.logQuery()`](#mtlogquery把慢日志转成查询语句)。
 
 老的 mongo shell 的聚合游标没有 `explain()`，要用上面第三种写法，或者 `db.orders.aggregate([...], {explain: true})`（这种只有计划，没有执行统计）。也可以把自己跑好的任何 explain 结果直接传进来。
 
@@ -684,30 +687,49 @@ docsExaminedPerReturned: 1
 - `sbe` 引擎的计划只拿得到每一步的返回行数和耗时，扫描行数只有上面的合计。
 - 分片集群（mongos）的计划会按分片分开显示，但还没测过。
 
-#### 对慢日志里的命令做 explain
+### mt.explainLog()：对慢日志里的查询做 explain
 
-不用自己把慢查询改写成 `find().sort().limit()`，按手里有的东西选一种写法：
+不用自己把慢查询改写成 `find().sort().limit()`，按手里有的东西选一种写法（只想转成查询语句、不做 explain，用下一节的 `mt.logQuery()`，写法一样）：
 
 | 手里有的 | 写法 |
 |---|---|
-| `mt.slow()` / `mt.log()` 刚列出来的行 | `mt.explain(行号)` |
-| 日志文件里的一整行（4.4 起的 JSON，或之前的文本） | 整行用反引号包起来：``mt.explain(`整行`)`` |
-| 日志里命令那一段，从 `{` 开始 | 用反引号包起来：``mt.explain(`{ find: ... }`)`` |
-| `system.profile` 里的一条 | `mt.explain(db.system.profile.findOne(...))` |
-| 自己写的命令 | `mt.explain({find: 'orders', filter: {...}, ...}, {db: '库名'})` |
+| `mt.slow()` / `mt.log()` 刚列出来的行 | `mt.explainLog(行号)` |
+| 日志文件里的一整行（4.4 起的 JSON，或之前的文本） | 整行用反引号包起来：``mt.explainLog(`整行`)`` |
+| 日志里命令那一段，从 `{` 开始 | 用反引号包起来：``mt.explainLog(`{ find: ... }`)`` |
+| `system.profile` 里的一条 | `mt.explainLog(db.system.profile.findOne(...))` |
+| 自己写的命令 | `mt.explainLog({find: 'orders', filter: {...}, ...}, {db: '库名'})` |
+
+**慢日志里记录的执行情况**
+
+从慢日志来的（行号、整行日志、profile 文档），会先列出日志里记下的、**当时在线上实际执行的情况**，再显示现在的执行计划。默认只看计划、不执行，这部分就是唯一的实际数据：
+
+| 字段 | 说明 |
+|---|---|
+| `time` / `durationMillis` | 什么时候执行的、花了多少毫秒 |
+| `planSummary` | 当时用的计划，如 `COLLSCAN`、`IXSCAN { status: 1 }` |
+| `keysExamined` / `docsExamined` / `nreturned` | 扫了多少索引键、多少文档，返回多少条 |
+| `docsExaminedPerReturned` | 每返回 1 条扫了多少文档 |
+| `hasSortStage` / `usedDisk` | 在内存里排了序、用到了磁盘 |
+| `numYields` / `writeConflicts` | 让出锁的次数、写冲突次数 |
+| `nMatched` / `nModified` / `ndeleted` / `ninserted` | 写操作匹配、修改、删除、插入了多少 |
+| `reslen` / `bytesRead` / `readMs` | 返回的字节数；从磁盘读了多少、花了多久（4.4 起） |
+| `queryHash` / `planCacheKey` | 查询形状和计划缓存的键，可以对着 `getPlanCache` 查 |
+| `appName` / `client` | 应用名、客户端；经 mongos 转发的，取命令里 `$client.mongos.client` 的真正客户端 |
+
+如果当时的计划和现在的不一样（比如当时 `COLLSCAN`、现在已经能走索引了），最后会提示出来。只给命令（`{ find: ... }` 或 JS 对象）时没有这一段。
 
 **1. 按行号（最省事）**
 
 ```js
 mt.slow({sort: 'ms'})                       // profiler 里的慢查询，每行前面有行号 #
-mt.explain(1)                               // 第 1 行的执行计划
+mt.explainLog(1)                               // 第 1 行的执行计划
 
 mt.log('Slow query', {n: 10})               // 日志里的慢查询（4.4 起）
 mt.log('command: find', {n: 10})            // 4.4 之前的文本日志这样找
-mt.explain(3)                               // 第 3 行的执行计划
+mt.explainLog(3)                               // 第 3 行的执行计划
 ```
 
-`mt.explain(n)` 用的是**最近一次** `mt.slow()` 或 `mt.log()` 列出的行。
+`mt.explainLog(n)` 用的是**最近一次** `mt.slow()` 或 `mt.log()` 列出的行。
 
 **2. 从日志文件里复制一整行**
 
@@ -721,7 +743,7 @@ grep 'command: find' /var/log/mongodb/mongod.log | grep orders | tail -1      # 
 整行原样复制，在 mongosh 里用**反引号**包起来传进去（行里的单引号、双引号都不用改）：
 
 ```js
-mt.explain(`2026-11-21T15:46:55.624+0000 I COMMAND  [conn2166] command shop.orders appName: "order-service" command: find { find: "orders", filter: { userId: 24530, status: { $in: [ "paid", "shipped", "completed" ] } }, projection: { $sortKey: { $meta: "sortKey" } }, sort: { createdAt: -1 }, limit: 20, shardVersion: [ Timestamp(0, 0), ObjectId('000000000000000000000000') ], $clusterTime: { clusterTime: Timestamp(1795276015, 2), signature: { hash: BinData(0, D9414CF6101A9BBBE43BC15ACE884BFEDC177A72), keyId: 7710591826859655200 } }, $db: "shop" } planSummary: COLLSCAN keysExamined:0 docsExamined:1005163 hasSortStage:1 nreturned:1 465ms`)
+mt.explainLog(`2026-11-21T15:46:55.624+0000 I COMMAND  [conn2166] command shop.orders appName: "order-service" command: find { find: "orders", filter: { userId: 24530, status: { $in: [ "paid", "shipped", "completed" ] } }, projection: { $sortKey: { $meta: "sortKey" } }, sort: { createdAt: -1 }, limit: 20, shardVersion: [ Timestamp(0, 0), ObjectId('000000000000000000000000') ], $clusterTime: { clusterTime: Timestamp(1795276015, 2), signature: { hash: BinData(0, D9414CF6101A9BBBE43BC15ACE884BFEDC177A72), keyId: 7710591826859655200 } }, $db: "shop" } planSummary: COLLSCAN keysExamined:0 docsExamined:1005163 hasSortStage:1 nreturned:1 465ms`)
 ```
 
 实际执行的是：
@@ -730,14 +752,55 @@ mt.explain(`2026-11-21T15:46:55.624+0000 I COMMAND  [conn2166] command shop.orde
 db.getSiblingDB('shop').runCommand({explain: {find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}, sort: {createdAt: -1}, limit: 20}, verbosity: 'queryPlanner'})
 ```
 
-要看实际扫了多少、花了多久，在最后加上 `, {analyze: true}`，`verbosity` 就是 `'executionStats'`。库名、集合名都从这一行里取；`shardVersion`、`$clusterTime`、`$sortKey` 这些自动去掉。4.4 起的 JSON 日志行也一样整行传进来。老的 mongo shell 没有反引号，用单引号包起来，行里的单引号要写成 `\'`。
+库名、集合名都从这一行里取；`shardVersion`、`$clusterTime`、`$sortKey` 这些自动去掉。4.4 起的 JSON 日志行也一样整行传进来。老的 mongo shell 没有反引号，用单引号包起来，行里的单引号要写成 `\'`。
+
+下面是 4.0 上的真实例子：日志文件里记下了一条全表扫描的慢查询，之后建了 `{userId: 1, createdAt: -1}` 索引。把日志里这一行：
+
+```
+2026-11-22T14:27:34.496+0000 I COMMAND  [conn5] command shop.orders appName: "mongosh 1.10.6" command: find { find: "orders", filter: { userId: 24530, status: { $in: [ "paid", "shipped", "completed" ] } }, sort: { createdAt: -1 }, limit: 20, lsid: { id: UUID("e5f5814f-9742-4c65-a48b-b66c69dcb964") }, $clusterTime: { clusterTime: Timestamp(1795357654, 47170), signature: { hash: BinData(0, 0000000000000000000000000000000000000000), keyId: 0 } }, $db: "shop" } planSummary: COLLSCAN keysExamined:0 docsExamined:200000 hasSortStage:1 cursorExhausted:1 numYields:1562 nreturned:20 reslen:2035 locks:{ Global: { acquireCount: { r: 1563 } }, Database: { acquireCount: { r: 1563 } }, Collection: { acquireCount: { r: 1563 } } } storage:{} protocol:op_msg 43ms
+```
+
+整行传进去：
+
+```
+> mt.explainLog(`...上面那一整行...`)
+慢日志里记录的执行情况（当时实际跑的）：
+                   time: 2026-11-22 14:27:34.496
+         durationMillis: 43
+            planSummary: COLLSCAN
+           keysExamined: 0
+           docsExamined: 200000
+              nreturned: 20
+docsExaminedPerReturned: 10000
+           hasSortStage: true
+              numYields: 1562
+                 reslen: 2035
+                appName: mongosh 1.10.6
+
+-- db.getSiblingDB('shop').runCommand({explain: {find: orders, filter: {userId: 24530, status: {$in: [paid, shipped, completed]}}, sort: {createdAt: -1}, limit: 20}, verbosity: 'queryPlanner'})
+           ns: shop.orders
+       engine: classic
+rejectedPlans: 0
++------------+-----------------------+------------------------------------------+--------------+
+| stage      | index                 | detail                                   | note         |
++------------+-----------------------+------------------------------------------+--------------+
+| LIMIT      |                       | limit 20                                 |              |
+|   FETCH    |                       | filter {status: {$in: [completed, pai... | 取出后再过滤 |
+|     IXSCAN | userId_1_createdAt_-1 | userId [24530, 24530], createdAt [Max... |              |
++------------+-----------------------+------------------------------------------+--------------+
+3 rows in set
+注意：取出后再过滤
+注意：慢日志里用的是 COLLSCAN，现在的计划是 IXSCAN { userId: 1, createdAt: -1 }（索引、数据分布或计划缓存可能变了）
+```
+
+当时扫了 20 万条只返回 20 条、还在内存里排序；现在已经能走新建的索引了，最后一行提示两者不一样。要看现在实际扫多少、花多久，再加上 `{analyze: true}`。
 
 **3. 只复制命令那一段**
 
 从 `command: find ` 后面的 `{` 开始，到对应的 `}` 为止（后面多带了 `planSummary: ...` 也没关系），同样用反引号包起来：
 
 ```js
-mt.explain(`{ find: "orders", filter: { userId: 24530, status: { $in: [ "paid", "shipped", "completed" ] } }, sort: { createdAt: -1 }, limit: 20, $db: "shop" }`)
+mt.explainLog(`{ find: "orders", filter: { userId: 24530, status: { $in: [ "paid", "shipped", "completed" ] } }, sort: { createdAt: -1 }, limit: 20, $db: "shop" }`)
 ```
 
 库名取命令里的 `$db`；没有 `$db` 时先 `use 库名`，或者加选项 `{db: 'shop'}`。
@@ -747,7 +810,7 @@ mt.explain(`{ find: "orders", filter: { userId: 24530, status: { $in: [ "paid", 
 只挑关键的几项手写，直接写成 JS 对象（字符串加引号）：
 
 ```js
-mt.explain({find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}, sort: {createdAt: -1}, limit: 20}, {db: 'shop'})
+mt.explainLog({find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}, sort: {createdAt: -1}, limit: 20}, {db: 'shop'})
 ```
 
 **会报错的写法**
@@ -763,6 +826,8 @@ mt.explain({find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 'ship
 - 在哪个库上执行：命令里的 `$db`，或者 `ns` 的库名；都没有就用 `{db: 'shop'}` 选项，再没有就是当前库。
 - 支持 `find`、`aggregate`、`count`、`distinct`、`update`、`delete`、`findAndModify`。profile 和日志里单条的 update / remove 会自动包成 `update` / `delete` 命令；getMore 用它的原始命令（`originatingCommand`）。explain 写操作不会真的修改数据。
 - JSON 日志里的 `{"$date": ...}`、`{"$oid": ...}`、`{"$numberLong": ...}` 会换回真正的类型，否则条件就对不上了。
+- 先把整行解析完：命令用来做 explain，命令后面的 `planSummary`、`keysExamined`、`docsExamined`、`nreturned`、`hasSortStage`、`numYields`、`reslen`、耗时等就是上面「慢日志里记录的执行情况」；4.4 起的 JSON 行从 `attr` 里取，profile 文档从对应字段取。
+- 4.2 及之前，`getLog`（也就是 `mt.log()`）每行只保留前 512 个字符，命令长的话会被截断：截在命令里就没法 explain，截在后面就缺了耗时等字段。从日志**文件**里复制整行没有这个限制。
 - 4.4 之前的文本日志，命令部分是 shell 写法：字段名不带引号、`ObjectId('...')`、`Timestamp(1, 2)`、`new Date(...)`、十六进制的 `BinData(0, D941...)`。这些都会解析成对应的类型（不用 `eval`），超过 2^53 的整数按 `NumberLong` 处理。
 
 ```
@@ -775,17 +840,35 @@ sampleRate: 1
 +---+----+-------+----------------------+--------------+-----------+------------------------------------------+
 | # | ms | op    | plan                 | docsExamined | nreturned | command                                  |
 +---+----+-------+----------------------+--------------+-----------+------------------------------------------+
-| 1 | 46 | query | IXSCAN { status: 1 } |        66667 |        40 | {find: orders, filter: {status: shipp... |
+| 1 | 59 | query | IXSCAN { status: 1 } |        66667 |        40 | {find: orders, filter: {status: shipp... |
 +---+----+-------+----------------------+--------------+-----------+------------------------------------------+
 1 row in set
 ```
 
 ```
-> mt.explain(1, {analyze: true})
+> mt.explainLog(1, {analyze: true})
+慢日志里记录的执行情况（当时实际跑的）：
+                   time: 2026-11-22 14:28:31.181
+         durationMillis: 59
+            planSummary: IXSCAN { status: 1 }
+           keysExamined: 66667
+           docsExamined: 66667
+              nreturned: 40
+docsExaminedPerReturned: 1666.7
+           hasSortStage: true
+              numYields: 66
+                 reslen: 4175
+              bytesRead: 1.2 MB
+                 readMs: 0.9
+              queryHash: 99CCC831
+           planCacheKey: 0C7BC6BB
+                appName: mongosh 2.14.2
+                 client: 127.0.0.1
+
 -- db.getSiblingDB('shop').runCommand({explain: {find: orders, filter: {status: shipped, amount: {$gte: 3000}}, sort: {createdAt: -1}, limit: 40}, verbosity: 'executionStats'})
                      ns: shop.orders
                  engine: classic
-    executionTimeMillis: 167
+    executionTimeMillis: 70
               nReturned: 40
       totalKeysExamined: 66667
       totalDocsExamined: 66667
@@ -794,15 +877,41 @@ docsExaminedPerReturned: 1666.7
 +------------+----------+-----------+--------------+--------------+----+-------------------------------+--------------+
 | stage      | index    | nReturned | keysExamined | docsExamined | ms | detail                        | note         |
 +------------+----------+-----------+--------------+--------------+----+-------------------------------+--------------+
-| SORT       |          |        40 |              |              | 46 | sort {createdAt: -1}          | 内存排序     |
-|   FETCH    |          |     26667 |              |        66667 | 46 | filter {amount: {$gte: 3000}} | 取出后再过滤 |
-|     IXSCAN | status_1 |     66667 |        66667 |              |  9 | status ["shipped", "shipped"] |              |
+| SORT       |          |        40 |              |              |  4 | sort {createdAt: -1}          | 内存排序     |
+|   FETCH    |          |     26667 |              |        66667 |  3 | filter {amount: {$gte: 3000}} | 取出后再过滤 |
+|     IXSCAN | status_1 |     66667 |        66667 |              |  1 | status ["shipped", "shipped"] |              |
 +------------+----------+-----------+--------------+--------------+----+-------------------------------+--------------+
 3 rows in set
 注意：内存排序；取出后再过滤
 ```
 
 扫了 6 万多条只为返回 40 条（`docsExaminedPerReturned: 1666.7`）：`status_1` 只能按 `status` 找，`amount` 要取出文档再过滤，`createdAt` 还要在内存里排序。改成 `{status: 1, createdAt: -1, amount: 1}`（等值字段、排序字段、范围字段的顺序）就能顺着索引排好序，`amount` 也在索引里过滤掉。
+
+### mt.logQuery()：把慢日志转成查询语句
+
+和 `mt.explainLog()` 接受的东西一样（行号、整行日志、命令片段、profile 文档、命令对象），但不做 explain、什么都不执行，只打印出等价的、可以直接运行的 mongosh 语句。方便改条件、加 `.hint()`、拿到测试环境上重跑，或者再交给 `mt.explain()`。
+
+```js
+mt.slow({sort: 'ms'})
+mt.logQuery(1)                 // 第 1 行转成查询语句
+mt.logQuery(`整行日志`)          // 日志文件里复制的整行
+```
+
+```
+> mt.logQuery(`...整行...`)
+// 慢日志：2026-11-22 14:27:34.496，43ms，COLLSCAN，docsExamined 200000，nreturned 20，mongosh 1.10.6
+db.getSiblingDB('shop').orders.find({userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}).sort({createdAt: -1}).limit(20)
+
+> mt.logQuery({update: 'orders', updates: [{q: {status: 'new', createdAt: {$lt: ISODate('2024-01-01T00:00:00Z')}}, u: {$set: {status: 'expired'}}, multi: true}], $db: 'shop'})
+// 注意：这是写操作，执行会修改数据
+db.getSiblingDB('shop').orders.updateMany({status: 'new', createdAt: {$lt: ISODate('2024-01-01T00:00:00.000Z')}}, {$set: {status: 'expired'}})
+```
+
+- 来自慢日志的，第一行注释写着当时的时间、耗时、计划、扫描数和返回数，复制整段也不影响执行。
+- 类型照原样写出来：日期是 `ISODate('...')`，还有 `ObjectId('...')`、`NumberLong('...')`、`NumberDecimal('...')`、`UUID('...')`、正则等；字段名带点的会加引号。
+- 和 explain 一样去掉 mongos、驱动加的字段（`shardVersion`、`lsid`、`$clusterTime`、`$sortKey`...）。
+- find 写成 `.find(filter, projection).sort().skip().limit().hint()...`；aggregate、count、distinct 写成对应的方法；update / delete 按 `multi` / `limit` 写成 `updateOne` / `updateMany` / `replaceOne` / `deleteOne` / `deleteMany`，findAndModify 写成 `findOneAndUpdate` 等。**写操作前面会加一行注释提醒，执行会真的修改数据。**
+- 集合名和数据库的方法重名（如 `stats`）或者不是合法的标识符时，写成 `getCollection('...')`。
 
 ### mt.top()：各集合读写耗时
 
@@ -1421,7 +1530,7 @@ mt.log('Slow query', {n: 5, vertical: true})   // 选项和 t() 通用
 
 | 列 | 说明 |
 |---|---|
-| `#` | 行号，`mt.explain(n)` 用它（带命令的行，如慢查询） |
+| `#` | 行号，`mt.explainLog(n)` / `mt.logQuery(n)` 用它（带命令的行，如慢查询） |
 | `time` | 时间，按 `tz` 显示 |
 | `sev` | 级别：`F` 致命、`E` 错误、`W` 警告、`I` 信息、`D1`~`D5` 调试 |
 | `comp` | 组件：`NETWORK`、`COMMAND`、`REPL`、`STORAGE`... |
