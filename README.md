@@ -338,19 +338,20 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 ```
 > mt.cmds()
 ── 运行状态 ──
-+------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                         | description                                                                                                                                                |
-+------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.check({quick, issues})    | mysqltuner / pt-summary       | 一键体检：复制、oplog、缓存、连接、长操作、长事务、TTL、冗余 / 没用的索引等，每项给 OK / WARN / CRIT 和建议；quick 跳过逐个集合的检查，issues 只看有问题的 |
-| mt.status({interval})        | SHOW GLOBAL STATUS            | 版本、角色、ops/s、连接、缓存等关键指标                                                                                                                    |
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST              | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                            |
-| mt.conns()                   | PROCESSLIST GROUP BY host     | 按客户端 IP 统计连接数                                                                                                                                     |
-| mt.locks({all})              | sys.innodb_lock_waits         | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                               |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                      |
-| mt.top({interval, ns})       | sys.schema_table_statistics   | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                                 |
-| mt.latency('db', {interval}) | sys.statement_analysis        | 读 / 写 / 命令的平均延迟（毫秒），整台和各集合；interval 采样秒数，0 = 启动以来；默认所有用户库                                                            |
-| mt.builds()                  | ALTER TABLE progress          | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                                                           |
-+------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+--------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                          | description                                                                                                                                                |
++------------------------------+--------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.check({quick, issues})    | mysqltuner / pt-summary        | 一键体检：复制、oplog、缓存、连接、长操作、长事务、TTL、冗余 / 没用的索引等，每项给 OK / WARN / CRIT 和建议；quick 跳过逐个集合的检查，issues 只看有问题的 |
+| mt.status({interval})        | SHOW GLOBAL STATUS             | 版本、角色、ops/s、连接、缓存等关键指标                                                                                                                    |
+| mt.host({all})               | SHOW VARIABLES LIKE 'version%' | 机器和进程：CPU、内存、操作系统、文件句柄数、mongod 版本和编译信息、存储引擎、启动参数；all 列出全部启动参数                                               |
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST               | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                            |
+| mt.conns()                   | PROCESSLIST GROUP BY host      | 按客户端 IP 统计连接数                                                                                                                                     |
+| mt.locks({all})              | sys.innodb_lock_waits          | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                               |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX  | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                      |
+| mt.top({interval, ns})       | sys.schema_table_statistics    | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                                 |
+| mt.latency('db', {interval}) | sys.statement_analysis         | 读 / 写 / 命令的平均延迟（毫秒），整台和各集合；interval 采样秒数，0 = 启动以来；默认所有用户库                                                            |
+| mt.builds()                  | ALTER TABLE progress           | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                                                           |
++------------------------------+--------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── 慢查询和执行计划 ──
 +-------------------------+------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -1686,6 +1687,88 @@ activeClients.writers: 0
             cache.max: 7.3 GB
           cache.dirty: 11.0 MB
 ```
+
+### mt.host()：机器和进程信息
+
+接手一个实例时先看看它跑在什么机器上、用什么参数启动的，相当于 MySQL 的 `SHOW VARIABLES LIKE 'version%'` 加上服务器信息。
+
+```js
+mt.host()                       // 机器、操作系统、mongod、启动参数
+mt.host({all: true})            // 再加上全部启动参数（parsed.*）
+mt.host('mongod,startup')       // 只看某几组；也可以 {cols: 'host.memory,startup.*'}
+```
+
+| 分组 | 字段 |
+|---|---|
+| `host.*` | hostname、platform（部署方式，见下文）、cpuArch、cpuCores、cpuAvailable（容器限制了 CPU 时）、physicalCores、cpuSockets、memory、memLimit（容器限制和内存不同时才显示）、numa、numaNodes、time |
+| `os.*` | type、name、version、kernel、libc、maxOpenFiles（低于 64000 会提示） |
+| `mongod.*` | version、edition（community / enterprise）、gitVersion、allocator、jsEngine、openssl、fcv、storageEngine、process、pid、uptime、cacheMax（WiredTiger 缓存上限，超过可用内存 80% 时提示） |
+| `startup.*` | argv、config、dbPath、port、bindIp、replSet、oplogSizeMB、authorization、keyFile、logPath、cacheSizeGB（没设的不显示） |
+
+下面是跑在 2 GB 内存限制的容器里、指定了缓存和 oplog 大小的实例：
+
+```
+> mt.host()
+-- db.hostInfo(); db.serverBuildInfo(); db.adminCommand({getCmdLineOpts: 1}); db.serverStatus()
+       host.hostname: db1
+       host.platform: 容器（内存限制 2.0 GB，mongod 是 1 号进程），运行在虚拟机上（内核 7.0.11-orbstack-00360-gc9bc4d96ac70）
+        host.cpuArch: aarch64
+       host.cpuCores: 10
+  host.physicalCores: 1
+     host.cpuSockets: 1
+         host.memory: 15.7 GB
+       host.memLimit: 2.0 GB
+           host.numa: false
+      host.numaNodes: 1
+           host.time: 2026-11-22 17:32:38.234
+             os.type: Linux
+             os.name: Ubuntu
+          os.version: 22.04
+           os.kernel: 7.0.11-orbstack-00360-gc9bc4d96ac70
+             os.libc: 2.35
+     os.maxOpenFiles: 20480（建议至少 64000）
+      mongod.version: 7.0.48
+      mongod.edition: community
+   mongod.gitVersion: 6937736f0539
+    mongod.allocator: tcmalloc
+     mongod.jsEngine: mozjs
+      mongod.openssl: OpenSSL 3.0.2 15 Mar 2022
+          mongod.fcv: 7.0
+mongod.storageEngine: wiredTiger
+      mongod.process: mongod
+          mongod.pid: 1
+       mongod.uptime: 15s
+     mongod.cacheMax: 512.0 MB
+        startup.argv: mongod --replSet rs0 --bind_ip_all --oplogSize 2048 --wiredTigerCacheSizeGB 0.5 --dbpath /data/db
+      startup.dbPath: /data/db
+      startup.bindIp: *
+     startup.replSet: rs0
+ startup.oplogSizeMB: 2048
+ startup.cacheSizeGB: 0.5
+```
+
+- 来自 `hostInfo`、`buildInfo`、`getCmdLineOpts`、`serverStatus`，需要 `clusterMonitor` 之类的权限；某一部分拿不到时那一组就少几行。
+- 文件句柄数之外，其他问题（如 NUMA、透明大页）mongod 启动时会写成启动警告，用 `mt.check()` 或 `mt.log({startup: true})` 看。
+
+**部署方式（`host.platform`）**
+
+mongod 本身不知道自己跑在什么上面，`platform` 是根据下面这些迹象推断的，后面括号里写着依据：
+
+| 显示 | 依据 |
+|---|---|
+| 容器 | 内存限制（`memLimit` 小于机器内存）、CPU 限制（`cpuAvailable` 小于核数，7.0 起）、mongod 是 1 号进程 |
+| 虚拟机 | CPU 标志 `hypervisor`（x86 虚拟机都有）；内核名带 `-aws`、`-azure`、`-gcp`、`-oracle`、`orbstack`、`linuxkit`、`microsoft-standard` 等（ARM 云主机没有 hypervisor 标志，靠这个） |
+| 容器，运行在虚拟机上 | 两类迹象都有，比如云上的 Kubernetes |
+| 可能是物理机 | 没有容器和虚拟机迹象，且有多路 CPU 或多个 NUMA 节点 |
+| 物理机或无法判断 | 什么迹象都没有 |
+
+不同部署方式要注意的：
+
+- **物理机**：多路 CPU（多个 NUMA 节点）时要用 `numactl --interleave=all` 启动 mongod，并关闭 `vm.zone_reclaim_mode`，否则 mongod 会在启动警告里提示；`numaNodes` 大于 1 就要留意。
+- **虚拟机**：CPU 被别的虚拟机抢（steal）、内存气球（ballooning）、超卖，这些在 mongod 里看不到，要看虚拟化平台或云监控；数据盘别用共享的低性能存储。
+- **容器**：`memory`、`cpuCores` 通常是宿主机的，`memLimit`、`cpuAvailable` 才是容器自己的。WiredTiger 缓存默认按（内存 − 1 GB）的一半算：4.4 起认容器的内存限制，**4.4 之前看不到容器的内存限制，会按宿主机内存算，缓存可能比容器内存还大**，这时 `cacheMax` 后面会提示，要用 `--wiredTigerCacheSizeGB` 显式设小。
+
+- 文件句柄数（`ulimit -n`）MongoDB 建议至少 64000，太低时连接数和文件多了会出错。
 
 ### mt.cache()：谁占着缓存
 

@@ -338,19 +338,20 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 ```
 > mt.cmds()
 ── Server activity ──
-+------------------------------+-------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                         | description                                                                                                                                                                                                                            |
-+------------------------------+-------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.check({quick, issues})    | mysqltuner / pt-summary       | Health check: replication, oplog, cache, connections, long operations and transactions, TTL, redundant / unused indexes and more, each with OK / WARN / CRIT and advice; quick skips per-collection checks, issues shows only problems |
-| mt.status({interval})        | SHOW GLOBAL STATUS            | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                         |
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST              | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                   |
-| mt.conns()                   | PROCESSLIST GROUP BY host     | Connections per client IP                                                                                                                                                                                                              |
-| mt.locks({all})              | sys.innodb_lock_waits         | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                              |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                   |
-| mt.top({interval, ns})       | sys.schema_table_statistics   | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                           |
-| mt.latency('db', {interval}) | sys.statement_analysis        | Average latency (ms) of reads / writes / commands, server-wide and per collection; interval = seconds to sample, 0 = since startup; all user databases by default                                                                      |
-| mt.builds()                  | ALTER TABLE progress          | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                                                |
-+------------------------------+-------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+--------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                          | description                                                                                                                                                                                                                            |
++------------------------------+--------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.check({quick, issues})    | mysqltuner / pt-summary        | Health check: replication, oplog, cache, connections, long operations and transactions, TTL, redundant / unused indexes and more, each with OK / WARN / CRIT and advice; quick skips per-collection checks, issues shows only problems |
+| mt.status({interval})        | SHOW GLOBAL STATUS             | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                         |
+| mt.host({all})               | SHOW VARIABLES LIKE 'version%' | Machine and process: CPU, memory, OS, open files limit, mongod version and build, storage engine, startup options; all lists every startup option                                                                                      |
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST               | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                   |
+| mt.conns()                   | PROCESSLIST GROUP BY host      | Connections per client IP                                                                                                                                                                                                              |
+| mt.locks({all})              | sys.innodb_lock_waits          | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                              |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX  | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                   |
+| mt.top({interval, ns})       | sys.schema_table_statistics    | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                           |
+| mt.latency('db', {interval}) | sys.statement_analysis         | Average latency (ms) of reads / writes / commands, server-wide and per collection; interval = seconds to sample, 0 = since startup; all user databases by default                                                                      |
+| mt.builds()                  | ALTER TABLE progress           | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                                                |
++------------------------------+--------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Slow queries and plans ──
 +-------------------------+------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -1686,6 +1687,88 @@ activeClients.writers: 0
             cache.max: 7.3 GB
           cache.dirty: 11.0 MB
 ```
+
+### mt.host(): machine and process information
+
+What machine an instance runs on and how it was started, the first thing to look at when you take one over; like MySQL's `SHOW VARIABLES LIKE 'version%'` plus server details.
+
+```js
+mt.host()                       // machine, OS, mongod, startup options
+mt.host({all: true})            // plus every startup option (parsed.*)
+mt.host('mongod,startup')       // only some groups; or {cols: 'host.memory,startup.*'}
+```
+
+| Group | Fields |
+|---|---|
+| `host.*` | hostname, platform (deployment type, see below), cpuArch, cpuCores, cpuAvailable (when a container limits CPUs), physicalCores, cpuSockets, memory, memLimit (shown when a container limit differs), numa, numaNodes, time |
+| `os.*` | type, name, version, kernel, libc, maxOpenFiles (flagged below 64000) |
+| `mongod.*` | version, edition (community / enterprise), gitVersion, allocator, jsEngine, openssl, fcv, storageEngine, process, pid, uptime, cacheMax (WiredTiger cache limit, flagged above 80% of available memory) |
+| `startup.*` | argv, config, dbPath, port, bindIp, replSet, oplogSizeMB, authorization, keyFile, logPath, cacheSizeGB (unset ones are hidden) |
+
+An instance in a container limited to 2 GB of memory, with cache and oplog sizes set:
+
+```
+> mt.host()
+-- db.hostInfo(); db.serverBuildInfo(); db.adminCommand({getCmdLineOpts: 1}); db.serverStatus()
+       host.hostname: db1
+       host.platform: container (memory limit 2.0 GB, mongod is pid 1), on a virtual machine (kernel 7.0.11-orbstack-00360-gc9bc4d96ac70)
+        host.cpuArch: aarch64
+       host.cpuCores: 10
+  host.physicalCores: 1
+     host.cpuSockets: 1
+         host.memory: 15.7 GB
+       host.memLimit: 2.0 GB
+           host.numa: false
+      host.numaNodes: 1
+           host.time: 2026-11-22 17:32:54.662
+             os.type: Linux
+             os.name: Ubuntu
+          os.version: 22.04
+           os.kernel: 7.0.11-orbstack-00360-gc9bc4d96ac70
+             os.libc: 2.35
+     os.maxOpenFiles: 20480 (64000 or more recommended)
+      mongod.version: 7.0.48
+      mongod.edition: community
+   mongod.gitVersion: 6937736f0539
+    mongod.allocator: tcmalloc
+     mongod.jsEngine: mozjs
+      mongod.openssl: OpenSSL 3.0.2 15 Mar 2022
+          mongod.fcv: 7.0
+mongod.storageEngine: wiredTiger
+      mongod.process: mongod
+          mongod.pid: 1
+       mongod.uptime: 16s
+     mongod.cacheMax: 512.0 MB
+        startup.argv: mongod --replSet rs0 --bind_ip_all --oplogSize 2048 --wiredTigerCacheSizeGB 0.5 --dbpath /data/db
+      startup.dbPath: /data/db
+      startup.bindIp: *
+     startup.replSet: rs0
+ startup.oplogSizeMB: 2048
+ startup.cacheSizeGB: 0.5
+```
+
+- Comes from `hostInfo`, `buildInfo`, `getCmdLineOpts` and `serverStatus`, which need privileges such as `clusterMonitor`; if a part is unavailable, that group just has fewer lines.
+- Other problems (NUMA, transparent huge pages and so on) are written as startup warnings by mongod; see them with `mt.check()` or `mt.log({startup: true})`.
+
+**Deployment type (`host.platform`)**
+
+mongod does not know what it runs on, so `platform` is inferred from these clues, listed in parentheses:
+
+| Shown | Clues |
+|---|---|
+| container | a memory limit (`memLimit` below machine memory), a CPU limit (`cpuAvailable` below the core count, 7.0+), mongod being pid 1 |
+| virtual machine | the `hypervisor` CPU flag (every x86 VM has it); a kernel name with `-aws`, `-azure`, `-gcp`, `-oracle`, `orbstack`, `linuxkit`, `microsoft-standard` and so on (ARM cloud servers lack the hypervisor flag and rely on this) |
+| container, on a virtual machine | clues of both, e.g. Kubernetes in the cloud |
+| probably physical | no container or VM clues, and several CPU sockets or NUMA nodes |
+| physical or unknown | no clues at all |
+
+What to watch for in each:
+
+- **Physical**: with several sockets (several NUMA nodes), start mongod with `numactl --interleave=all` and turn off `vm.zone_reclaim_mode`, or mongod warns at startup; watch out when `numaNodes` is above 1.
+- **Virtual machine**: CPU steal from other VMs, memory ballooning and overcommit are not visible from mongod; check the hypervisor or cloud monitoring, and avoid shared low-performance storage for data.
+- **Container**: `memory` and `cpuCores` are usually the host's; `memLimit` and `cpuAvailable` are the container's own. The WiredTiger cache defaults to half of (memory − 1 GB): since 4.4 it honours the container's memory limit, but **before 4.4 the container limit is not visible and the cache is sized from host memory, possibly larger than the container itself**; `cacheMax` then carries a note, and you should set `--wiredTigerCacheSizeGB` explicitly.
+
+- MongoDB recommends at least 64000 open files (`ulimit -n`); too few causes errors once there are many connections and files.
 
 ### mt.cache(): what is in the cache
 

@@ -85,7 +85,7 @@ run('help', function () { mt.help(); }, ['mt.csv(x, ...)', '  选项（每次调
 run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '── 慢查询和执行计划 ──', '── 存储和索引 ──', '── 复制 ──',
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
-var ALL_CMDS = ['latency', 'desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
+var ALL_CMDS = ['host', 'latency', 'desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
   'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log'];
 run('mt.help each command', function () {
   var bad = [];
@@ -99,10 +99,10 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 26 ok']);
+}, ['all 27 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
-run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'latency'、'desc'、'planCache'"]);
+run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'latency'、'desc'"]);
 run('mt.ps', function () { mt.ps(); }, ['-- db.adminCommand({currentOp: 1, active: true})']);
 run('mt.ps slow query', function () {
   for (var i = 0; i < 20 && !db.currentOp({ ns: 'mtslow.slow' }).inprog.length; i++) sleep(500);
@@ -401,6 +401,10 @@ run('mt.idx coll object', function () { mt.idx(c, 'name,key,options'); }, ['| cu
 run('mt.idx missing', function () { mt.idx('nope_no_such'); }, ['mongotab: 集合 test.nope_no_such 不存在']);
 run('mt.conns', function () { mt.conns(); }, ['current: ', '| client ', '| conns |']);
 run('mt.oplog', function () { mt.oplog(); }, ['-- rs.printReplicationInfo()', 'maxLogical: ', 'usedLogical: ', 'disk: ', 'firstEvent: ', 'window: ']);
+run('mt.host', function () { mt.host(); }, ['-- db.hostInfo()', 'host.hostname: ', 'host.platform: 容器（', 'mongod 是 1 号进程', 'host.cpuCores: ', 'host.memory: ', 'os.type: Linux', 'os.maxOpenFiles: ',
+  'mongod.version: ' + db.version(), 'mongod.edition: ', 'mongod.storageEngine: wiredTiger', 'mongod.uptime: ', 'startup.argv: mongod', 'startup.replSet: rs0']);
+run('mt.host cols', function () { mt.host('mongod.version'); }, ['mongod.version: ' + db.version()]);
+run('mt.host all', function () { mt.host({ all: true, cols: 'parsed' }); }, ['parsed.replication.']);
 run('mt.status', function () { mt.status(); }, ['role: PRIMARY (rs0)', 'ops/s.insert: ', 'connections.current: ']);
 run('mt.status totals', function () { mt.status({ interval: 0, cols: 'opcounters' }); }, ['opcounters.insert: ']);
 run('mt.status en', function () { mt.config({ lang: 'en' }); mt.idx(); mt.config({ lang: 'zh' }); }, ["mongotab: mt.idx() needs a collection"]);
