@@ -101,6 +101,22 @@ run('mt.ps sort asc', function () { var v = psCol('secs', { sort: 'asc' }); prin
 run('mt.ps sort opid', function () { var v = psCol('opid', { sort: 'opid' }); print(orderOk(v, 1) ? 'order ok' : 'order bad ' + v); }, ['order ok']);
 run('mt.ps sort doc', function () { var v = psCol('opid', { sort: { opid: -1 } }); print(orderOk(v, -1) ? 'order ok' : 'order bad ' + v); }, ['order ok']);
 run('mt.ps bad sort', function () { mt.ps({ sort: 'x' }); }, ["mongotab: mt.ps() 的 sort 可以是 'desc'"]);
+// mt.builds：打开让建索引停在中途的 fail point（4.4 起和之前名字不同），写入 mtbuild.go，
+// run.sh 起的 builder 就会开始建 {a: 1, b: 1}；看完关掉 fail point，等它建完
+var BUILD_FPS = ['hangAfterIndexBuildDumpsInsertsFromBulk', 'hangAfterStartingIndexBuild'];
+// 不存在的 fail point：老 shell 返回 {ok: 0}，mongosh 抛异常
+var buildFp = BUILD_FPS.filter(function (f) { try { return db.adminCommand({ configureFailPoint: f, mode: 'alwaysOn' }).ok; } catch (e) { return false; } });
+var bdb = db.getSiblingDB('mtbuild');
+bdb.go.insertOne({ go: 1 });
+var building = function () {
+  return db.adminCommand({ currentOp: 1, $all: true }).inprog.some(function (op) { return /index build/i.test(op.msg || ''); });
+};
+for (var bi = 0; bi < 60 && !building(); bi++) sleep(250);
+run('mt.builds', function () { mt.builds({ table: true }); }, ['-- db.adminCommand({currentOp: 1, $all: true})', '| mtbuild.c ', '| a_1_b_1 ', '{a: 1, b: 1}', '| phase ']);
+buildFp.forEach(function (f) { db.adminCommand({ configureFailPoint: f, mode: 'off' }); });
+var built = function () { return bdb.c.getIndexes().some(function (ix) { return ix.name === 'a_1_b_1'; }) && !building(); };
+for (bi = 0; bi < 60 && !built(); bi++) sleep(250);
+run('mt.builds none', function () { mt.builds(); }, ['没有正在建的索引']);
 run('mt.ps ns filter', function () { mt.ps({ ns: 'nosuchdb' }); }, ['Empty set']);
 // mt.slow：在单独的库里开 profiler（slowms 0 记下所有操作），用完关掉
 var pdb = db.getSiblingDB('mtprof');

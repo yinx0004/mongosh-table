@@ -91,6 +91,8 @@
       cacheSum: function (sum, pct) { return '以上集合在缓存里合计 ' + sum + '，占已用缓存的 ' + pct; },
       noTtl: '没有 TTL 索引',
       noUnused: '没有没被用过的索引',
+      noBuild: '没有正在建的索引',
+      buildWaiting: '等待开始',
       noDup: '没有冗余索引',
       needExplain: "mt.explain() 需要游标或 explain 的结果，例如 mt.explain(db.orders.find({status: 'PAID'}))、mt.explain(db.orders.explain('executionStats').aggregate([...]))",
       exNote: { fullScan: '全表扫描', memSort: '内存排序', spilled: '用到了磁盘', postFilter: '取出后再过滤', multikey: '多键索引' },
@@ -106,6 +108,7 @@
         ttl: 'TTL 索引：过期时间、最早一条的时间、超期了多久，以及 TTL 线程的状态；默认所有库',
         unusedIdx: '没被用过的索引（ops = 0），大的在前；默认所有用户库',
         dupIdx: '冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库',
+        builds: '正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久',
         explain: '执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；analyze: false 只看计划不执行',
         log: "最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告",
         repl: '副本集成员状态、复制延迟（秒）、同步源',
@@ -132,7 +135,7 @@
           helpRow("t(x, {tz: '+08:00'})", '本次用指定时区显示时间'),
           helpRow('mt.csv(x, ...)', '输出 CSV（贴进 Excel）'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'en'})", '改本会话默认值'),
-          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.locks()、mt.txns()、mt.frag()、mt.cache()、mt.ttl()、mt.log()、mt.unusedIdx()、mt.dupIdx()、mt.explain()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
+          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.locks()、mt.txns()、mt.frag()、mt.cache()、mt.ttl()、mt.log()、mt.unusedIdx()、mt.dupIdx()、mt.explain()、mt.builds()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
           '',
           '  示例：'
         ].concat(HELP_EXAMPLES, ['', '  显示约定：' + (nul || '空白') + ' = 值为 null；空白 = 空字符串 ""；' +
@@ -172,6 +175,8 @@
       cacheSum: function (sum, pct) { return 'These collections hold ' + sum + ' in the cache, ' + pct + ' of the cache in use'; },
       noTtl: 'no TTL indexes',
       noUnused: 'no unused indexes',
+      noBuild: 'no index builds in progress',
+      buildWaiting: 'waiting to start',
       noDup: 'no redundant indexes',
       needExplain: "mt.explain() needs a cursor or an explain result, e.g. mt.explain(db.orders.find({status: 'PAID'})) or mt.explain(db.orders.explain('executionStats').aggregate([...]))",
       exNote: { fullScan: 'full scan', memSort: 'in-memory sort', spilled: 'spilled to disk', postFilter: 'filtered after fetch', multikey: 'multikey' },
@@ -187,6 +192,7 @@
         ttl: 'TTL indexes: expiry, oldest document, how far past expiry, and the TTL thread; all databases by default',
         unusedIdx: 'Indexes never used (ops = 0), largest first; all user databases by default',
         dupIdx: 'Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default',
+        builds: 'Index builds in progress: collection, index, phase, progress and how long they have run',
         explain: 'Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; analyze: false = plan only, no execution',
         log: "Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings",
         repl: 'Replica set members, replication lag (seconds), sync source',
@@ -213,7 +219,7 @@
           helpRow("t(x, {tz: '+08:00'})", 'Show times in this time zone for this call'),
           helpRow('mt.csv(x, ...)', 'Print CSV (paste into Excel)'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'zh'})", 'Change defaults for this session'),
-          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.locks(), mt.txns(), mt.frag(), mt.cache(), mt.ttl(), mt.log(), mt.unusedIdx(), mt.dupIdx(), mt.explain(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
+          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.locks(), mt.txns(), mt.frag(), mt.cache(), mt.ttl(), mt.log(), mt.unusedIdx(), mt.dupIdx(), mt.explain(), mt.builds(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
           '',
           '  Examples:'
         ].concat(HELP_EXAMPLES, ['', '  Conventions: ' + (nul || 'blank') + ' = value is null; blank = empty string ""; ' +
@@ -1685,6 +1691,68 @@
     emit(out);
   }
 
+  // ─── 正在建的索引。3.6 ~ 4.2：建索引就在客户端连接上，msg 是 "Index Build ...: 2000/5000 40%"，带 progress。
+  // 4.4 起：后台线程 IndexBuildsCoordinatorMongod-N 在建，msg 是当前阶段（扫描集合才有 progress），
+  // 客户端连接上的 createIndexes 在旁边等；按 ns + 索引名把两条合成一行
+  function buildNs(op) {
+    var c = op.command || {};
+    var ns = String(op.ns || '');
+    if (c.createIndexes && (!ns || /\.\$cmd$/.test(ns))) ns = ns.replace(/\.\$cmd$/, '') + '.' + c.createIndexes;
+    return ns;
+  }
+  function buildPhase(msg) {
+    var p = String(msg || '').replace(/:?\s*\d+\/\d+\s+\d+%\s*$/, '').trim();
+    var half = p.length / 2, a = p.slice(0, Math.floor(half)).trim(), b = p.slice(Math.ceil(half)).trim();
+    if (p.length > 1 && a === b) p = a;   // 3.6 ~ 4.2 的 msg 会把阶段名写两遍
+    return p.replace(/^Index Build:?\s*/i, '').replace(/^\((.*)\)$/, '$1') || p;
+  }
+  function builds(opts) {
+    var o = dbaOpts(opts, ['done', 'total', 'pct', 'secs', 'opid']), out = [];
+    cmdLine(o, "db.adminCommand({currentOp: 1, $all: true}) → msg /Index Build/ or command.createIndexes", out);
+    var ops = runCmd(admin(), { currentOp: 1, $all: true }).inprog || [];
+    var rows = [], byKey = {};
+    var keyOf = function (op) {
+      var ix = ((op.command || {}).indexes || []).map(function (i) { return i.name; }).sort().join(',');
+      return buildNs(op) + '|' + ix;
+    };
+    ops.forEach(function (op) {
+      if (!/index build/i.test(String(op.msg || ''))) return;
+      var c = op.command || {}, ixs = c.indexes || [], p = op.progress || {};
+      var done = p.done != null ? toNum(p.done) : '', total = p.total != null ? toNum(p.total) : '';
+      var row = {
+        ns: buildNs(op), index: ixs.map(function (i) { return i.name; }).join(', '),
+        key: ixs.map(function (i) { return valText(i.key, true, o); }).join('; '),
+        phase: buildPhase(op.msg), done: done, total: total, pct: total ? pctText(done, total) : '',
+        secs: op.secs_running != null ? toNum(op.secs_running) : '', opid: op.opid != null ? op.opid : '',
+        client: op.client || op.client_s || ''
+      };
+      byKey[keyOf(op)] = row;
+      rows.push(row);
+    });
+    // 客户端连接上的 createIndexes：补上客户端和时长；找不到对应的建索引线程的，说明还在等着开始
+    ops.forEach(function (op) {
+      var c = op.command || {};
+      if (!c.createIndexes || /index build/i.test(String(op.msg || ''))) return;
+      var row = byKey[keyOf(op)], secs = op.secs_running != null ? toNum(op.secs_running) : '';
+      if (row) {
+        if (!row.client) row.client = op.client || op.client_s || '';
+        if (secs !== '' && (row.secs === '' || secs > row.secs)) row.secs = secs;
+        return;
+      }
+      var ixs = c.indexes || [];
+      rows.push({
+        ns: buildNs(op), index: ixs.map(function (i) { return i.name; }).join(', '),
+        key: ixs.map(function (i) { return valText(i.key, true, o); }).join('; '),
+        phase: M().buildWaiting, done: '', total: '', pct: '', secs: secs, opid: op.opid != null ? op.opid : '',
+        client: op.client || op.client_s || ''
+      });
+    });
+    rows.sort(function (a, b) { return (toNum(b.secs) || 0) - (toNum(a.secs) || 0); });
+    rowsOut(rows, o, out);
+    if (!rows.length) out.push(M().noBuild);
+    emit(out);
+  }
+
   // 日志：getLog 只保留内存里最近的 1024 行。4.4 起每行是 JSON，之前是文本：
   // 2024-01-01T08:30:00.123+0000 I NETWORK  [listener] connection accepted ...
   var SEV_RANK = { F: 0, E: 1, W: 2, I: 3, D: 4 };
@@ -1748,6 +1816,7 @@
     ["mt.frag('db')", 'TABLES.DATA_FREE', 'frag'],
     ["mt.idx('coll')", 'SHOW INDEX FROM t', 'idx'],
     ['mt.explain(cursor)', 'EXPLAIN ANALYZE', 'explain'],
+    ['mt.builds()', 'ALTER TABLE progress', 'builds'],
     ["mt.unusedIdx('db')", 'sys.schema_unused_indexes', 'unusedIdx'],
     ["mt.dupIdx('db')", 'sys.schema_redundant_indexes', 'dupIdx'],
     ['mt.conns()', 'PROCESSLIST GROUP BY host', 'conns'],
@@ -1770,7 +1839,7 @@
     table: t, vertical: g, csv: csv, config: config, help: help, version: VERSION,
     cmds: cmds, ps: dba(ps), slow: dba(slow), top: dba(top), locks: dba(locks), txns: dba(txns), repl: dba(repl), dbs: dba(dbs), colls: dba(colls), idx: dba(idx),
     conns: dba(conns), oplog: dba(oplog), status: dba(status), frag: dba(frag), cache: dba(cache), ttl: dba(ttl), log: dba(log),
-    unusedIdx: dba(unusedIdx), dupIdx: dba(dupIdx), explain: dba(explain)
+    unusedIdx: dba(unusedIdx), dupIdx: dba(dupIdx), explain: dba(explain), builds: dba(builds)
   };
   t[MARK] = g[MARK] = api[MARK] = true;
 

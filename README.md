@@ -348,6 +348,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 | mt.frag('db')                | TABLES.DATA_FREE                 | 各集合删数据后可回收的磁盘空间，多的在前；默认当前库                                                                            |
 | mt.idx('coll')               | SHOW INDEX FROM t                | 索引的键、大小、使用次数和选项                                                                                                  |
 | mt.explain(cursor)           | EXPLAIN ANALYZE                  | 执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；analyze: false 只看计划不执行                     |
+| mt.builds()                  | ALTER TABLE progress             | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                                |
 | mt.unusedIdx('db')           | sys.schema_unused_indexes        | 没被用过的索引（ops = 0），大的在前；默认所有用户库                                                                             |
 | mt.dupIdx('db')              | sys.schema_redundant_indexes     | 冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库                                                  |
 | mt.conns()                   | PROCESSLIST GROUP BY host        | 按客户端 IP 统计连接数                                                                                                          |
@@ -1003,6 +1004,40 @@ mt.dupIdx('shop')    // 只看一个库，也可以传 db 对象
 - 方向不同的，如 `{d: -1}` 和 `{d: 1, e: 1}`。
 
 删冗余索引前同样建议先 `hideIndex` 观察。
+
+### mt.builds()：正在建的索引
+
+相当于看 MySQL online DDL（`ALTER TABLE ... ADD INDEX`）的进度：大集合上建索引要很久，看它在哪个阶段、做到多少了。
+
+```js
+mt.builds()
+```
+
+执行的是 `db.adminCommand({currentOp: 1, $all: true})`，取出正在建索引的操作。
+
+| 列 | 说明 |
+|---|---|
+| `ns` / `index` / `key` | 库.集合、索引名、索引键（一次建多个时用逗号分开） |
+| `phase` | 阶段：`scanning collection` 扫描集合，`inserting keys from external sorter into index` 把排好序的键写进索引，`draining writes received during build` 补上建索引期间新写入的数据；老版本是 `background` 等 |
+| `done` / `total` / `pct` | 当前阶段的进度；有的阶段没有进度，就是空的 |
+| `secs` | 已经跑了多少秒 |
+| `opid` / `client` | 操作 ID、发起建索引的客户端 |
+
+```
+> mt.builds()
+-- db.adminCommand({currentOp: 1, $all: true}) → msg /Index Build/ or command.createIndexes
++-------------+------------------------------+-----------------------------------+------------------------------------------+---------+---------+-------+------+------+---------------------+
+| ns          | index                        | key                               | phase                                    | done    | total   | pct   | secs | opid | client              |
++-------------+------------------------------+-----------------------------------+------------------------------------------+---------+---------+-------+------+------+---------------------+
+| shop.orders | customer.name_1_createdAt_-1 | {customer.name: 1, createdAt: -1} | inserting keys from external sorter i... | 1889840 | 3000000 | 63.0% |    4 | 1096 | 192.168.107.3:50336 |
++-------------+------------------------------+-----------------------------------+------------------------------------------+---------+---------+-------+------+------+---------------------+
+1 row in set
+```
+
+- 4.4 起索引在后台线程里建，客户端那条 `createIndexes` 在旁边等着；两条合成一行显示。
+- 还没开始（比如在等锁）的建索引显示成 `等待开始`。
+- 想中途停掉：4.4 起用 `db.orders.dropIndex('索引名')`，之前的版本用 `db.killOp(opid)`。
+- 副本集上主节点建完之后，从节点也要各自建一遍（4.4 起是同时建），要连到从节点上看它们的进度。
 
 ### mt.conns()：连接来源
 
