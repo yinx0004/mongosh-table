@@ -3,8 +3,8 @@
 [![release](https://img.shields.io/github/v/release/yinx0004/mongosh-table)](https://github.com/yinx0004/mongosh-table/releases/latest)
 [![license](https://img.shields.io/github/license/yinx0004/mongosh-table)](LICENSE)
 [![compat](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml/badge.svg)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
-[![mongosh](https://img.shields.io/badge/mongosh-1.x%20%7C%202.x-47A248?logo=mongodb&logoColor=white)](https://www.mongodb.com/docs/mongodb-shell/)
-[![MongoDB](https://img.shields.io/badge/MongoDB-4.0%20%7C%204.4%20%7C%205.0%20%7C%206.0%20%7C%207.0%20%7C%208.0-47A248?logo=mongodb&logoColor=white)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
+[![shell](https://img.shields.io/badge/shell-mongosh%201.x%20%7C%202.x%20%7C%20legacy%20mongo-47A248?logo=mongodb&logoColor=white)](#legacy-mongo-shell)
+[![MongoDB](https://img.shields.io/badge/MongoDB-3.6%20%7C%204.0%20%7C%204.2%20%7C%204.4%20%7C%205.0%20%7C%206.0%20%7C%207.0%20%7C%208.0-47A248?logo=mongodb&logoColor=white)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
 [![platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](#compatibility)
 [![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](mongotab.js)
 
@@ -13,13 +13,14 @@
 **Make mongosh readable.**
 
 MongoTab renders query results in mongosh as MySQL-style tables or `\G`-style vertical records, without changing how you write MongoDB commands. A single JS file with no dependencies.
+The legacy `mongo` shell that ships with MongoDB 5.0 and earlier works too; see [Legacy mongo shell](#legacy-mongo-shell).
 
 **Non-intrusive**: it only adds three globals, `t`, `g` and `mt` (any name already taken is skipped; use `mongotab.xxx` instead).
 It does not touch mongosh objects, prototypes, `.mongoshrc` or any config, and it is gone when the session ends.
 
 ## Download
 
-It is a single file, `mongotab.js`. Put it anywhere on **the machine where you run mongosh** (your computer or a jump host). When you connect to a remote MongoDB, nothing goes on the server; see [Connecting to a remote MongoDB](#connecting-to-a-remote-mongodb). For MongoDB 4.0 you need mongosh 1.x; see [MongoDB 4.0](#mongodb-40).
+It is a single file, `mongotab.js`. Put it anywhere on **the machine where you run mongosh** (your computer or a jump host). When you connect to a remote MongoDB, nothing goes on the server; see [Connecting to a remote MongoDB](#connecting-to-a-remote-mongodb). With the legacy `mongo` shell, likewise put it where `mongo` runs.
 
 Linux / macOS:
 
@@ -182,37 +183,68 @@ Environment variables, read when the script loads:
 
 ## Compatibility
 
-Every PR and every push to main runs [test/compat.js](test/compat.js) in GitHub Actions, once for each pairing of these MongoDB and mongosh versions (12 jobs):
+Every PR and every push to main runs [test/compat.js](test/compat.js) against a real database in GitHub Actions:
 
-- MongoDB: 4.4, 5.0, 6.0, 7.0, 8.0 (single-node replica sets)
-- mongosh: 1.8.0 and the newest 2.x
-- MongoDB 4.0 with mongosh 1.x only: 1.8.0 and 1.10.6 (mongosh 2.x cannot connect to 4.0)
+- mongosh: MongoDB 4.4, 5.0, 6.0, 7.0 and 8.0, each with mongosh 1.8.0 and the newest 2.x; MongoDB 4.0 with mongosh 1.8.0 and 1.10.6 (mongosh 2.x cannot connect to 4.0). 12 jobs.
+- Legacy mongo shell: MongoDB 3.6, 4.0, 4.2, 4.4 and 5.0, each with its own `mongo` against a server of the same version. 5 jobs.
 
-To run it locally (needs Docker):
+All on single-node replica sets. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
+
+To run them locally (needs Docker):
 
 ```bash
 test/run.sh mongo:7.0
 ```
 
 ```bash
-# the mongo:4.4 image has no mongosh; the second argument picks the client image (mongo:6.0.4 ships mongosh 1.8.0)
+# the second argument picks the client image: mongo:6.0.4 ships mongosh 1.8.0
 test/run.sh mongo:4.4 mongo:6.0.4
 ```
 
-It also runs [test/format.js](test/format.js) on Linux, macOS and Windows with mongosh 1.8.0 and 2.14.2 (6 jobs). That test needs no database; it covers formatting, `load()` paths (including Windows forward- and backslash forms) and the `MONGOTAB_LANG` / `MONGOTAB_TZ` environment variables. To run it locally:
+```bash
+# images without mongosh use the legacy mongo; where both exist, pick it with MONGO_SHELL=mongo
+test/run.sh mongo:4.0
+MONGO_SHELL=mongo test/run.sh mongo:5.0
+```
 
 ```bash
+# formatting only, no database
 mongosh --nodb test/format.js
+test/format.sh mongo:4.0
+```
+
+### Legacy mongo shell
+
+Since v0.2.0 the legacy `mongo` command that ships with MongoDB 5.0 and earlier (prompt like `rs0:PRIMARY>`) works too. Load it the same way as in mongosh, with `mongo` in place of `mongosh`:
+
+```js
+load('/path/to/mongotab.js')
+```
+
+```bash
+mongo "mongodb://user@host:27017/admin" /path/to/mongotab.js --shell
+```
+
+Tables, vertical output, CSV and all BSON types look the same as in mongosh. A few things differ because the legacy shell lacks what mongosh provides:
+
+| | mongosh | Legacy mongo shell |
+|---|---|---|
+| Time zone | `'UTC'`, `'local'`, `'+08:00'`, `'Asia/Shanghai'` | No names like `'Asia/Shanghai'`; use an offset such as `'+08:00'` |
+| `MONGOTAB_LANG` / `MONGOTAB_TZ` | Read | Read on 4.4 and 5.0; 3.6–4.2 cannot read them, so it starts in English and UTC; switch with `mt.config({lang: 'zh', tz: '+08:00'})` |
+| Terminal width | Detected | Unknown, assumed 160 columns; on a narrower terminal use `mt.config({width: 120})` |
+| Color | On in a terminal | Off; turn on with `mt.config({color: true})` |
+
+To apply settings on every connection, put them in the start command:
+
+```bash
+mongo "mongodb://user@host:27017/admin" --eval "load('/path/to/mongotab.js'); mt.config({lang: 'zh', tz: '+08:00'})" --shell
 ```
 
 ### MongoDB 4.0
 
-Connect to MongoDB 4.0 with **mongosh 1.x**:
+For MongoDB 4.0 use either the legacy `mongo` (see above) or **mongosh 1.x**. mongosh 2.x does not work: it needs MongoDB 4.2 or later and fails with `requires at least 8 (MongoDB 4.2)`.
 
-- mongosh 2.x needs MongoDB 4.2 or later; against 4.0 it fails with `requires at least 8 (MongoDB 4.2)`.
-- The legacy `mongo` command that ships with MongoDB 5.0 and earlier (prompt like `rs0:PRIMARY>`) is not mongosh, and MongoTab does not support it. Since v0.1.1, `load()` there prints a message pointing to mongosh instead of failing with `root is undefined`; CI checks this with the legacy `mongo` from 3.6, 4.0, 4.2, 4.4 and 5.0.
-
-mongosh 1.x runs straight from the archive, needs no root and leaves the existing `mongo` alone. On Linux x64 (1.10.6 is the last 1.x release):
+If you prefer mongosh, 1.x runs straight from the archive, needs no root and leaves the existing `mongo` alone. On Linux x64 (1.10.6 is the last 1.x release):
 
 ```bash
 curl -fLO https://downloads.mongodb.com/compass/mongosh-1.10.6-linux-x64.tgz && tar xzf mongosh-1.10.6-linux-x64.tgz

@@ -1,24 +1,28 @@
 // MongoTab formatting test that needs no database, used to check mongosh on
-// Linux, macOS and Windows. Run from the repo root:
+// Linux, macOS and Windows, and the legacy mongo shell. Run from the repo root:
 //   mongosh --nodb test/format.js
-// If MONGOTAB_LANG / MONGOTAB_TZ are set, the load message is checked against them.
+//   mongo --nodb test/format.js
+// If MONGOTAB_LANG / MONGOTAB_TZ are set (and the shell can read them), the
+// load message is checked against them.
 load('test/lib.js');
 
-var win = process.platform === 'win32';
-var env = process.env;
-print('### env platform=' + process.platform + ' mongosh=' + version() +
-  ' node=' + process.version + ' MONGOTAB_LANG=' + (env.MONGOTAB_LANG || '') + ' MONGOTAB_TZ=' + (env.MONGOTAB_TZ || ''));
+var platform = LEGACY ? (_isWindows() ? 'win32' : 'unix') : process.platform;
+var win = platform === 'win32';
+var cwd = LEGACY ? pwd() : process.cwd();
+print('### env platform=' + platform + ' shell=' + SHELL + (LEGACY ? '' : ' node=' + process.version) +
+  ' MONGOTAB_LANG=' + envVar('MONGOTAB_LANG') + ' MONGOTAB_TZ=' + envVar('MONGOTAB_TZ') +
+  (ENV_READABLE ? '' : ' (this shell cannot read environment variables)'));
 
 var loadExpect = ['MongoTab '];
-if (env.MONGOTAB_LANG) loadExpect.push(/^zh/i.test(env.MONGOTAB_LANG) ? '已加载' : 'loaded:');
-if (env.MONGOTAB_TZ) loadExpect.push(env.MONGOTAB_TZ);
+if (envVar('MONGOTAB_LANG')) loadExpect.push(/^zh/i.test(envVar('MONGOTAB_LANG')) ? '已加载' : 'loaded:');
+if (envVar('MONGOTAB_TZ')) loadExpect.push(envVar('MONGOTAB_TZ'));
 
 run('load relative path', function () { load('mongotab.js'); }, loadExpect);
 run('load absolute path, forward slashes', function () {
-  load(process.cwd().replace(/\\/g, '/') + '/mongotab.js');
+  load(cwd.replace(/\\/g, '/') + '/mongotab.js');
 }, loadExpect);
 if (win) {
-  run('load absolute path, backslashes', function () { load(process.cwd() + '\\mongotab.js'); }, loadExpect);
+  run('load absolute path, backslashes', function () { load(cwd + '\\mongotab.js'); }, loadExpect);
 }
 run('globals defined', function () { print(typeof t, typeof g, typeof mt, mt.version); }, ['function function object']);
 
@@ -30,7 +34,7 @@ var docs = [
     amount: NumberDecimal('1299.50'), qty: NumberInt(2), big: NumberLong('9007199254740993'),
     dbl: 3.14, createdAt: ISODate('2024-01-01T08:30:00.123Z'), remark: null, coupon: '',
     tags: ['a', 'b'], items: [{ sku: 'A', n: 1 }, { sku: 'B', n: 2 }],
-    ts: Timestamp({ t: 1700000000, i: 3 }), uid: UUID('3b241101-e2bb-4255-8caf-4136c566a962'),
+    ts: Timestamp(1700000000, 3), uid: UUID('3b241101-e2bb-4255-8caf-4136c566a962'),
     bin: BinData(0, 'AAECAwQFBgcICQ=='), re: /ab+c/i, mk: MinKey(), Mk: MaxKey(),
     oid: ObjectId('65a1b2c3d4e5f60718293a4b'), note: 'line1\nline2\tx'
   },
@@ -62,7 +66,7 @@ run('sub-table in a single document', function () {
     'set,members.name,members.stateStr');
 }, ['set: rs0', '── members (2) ──', '| db2:27017 | SECONDARY |']);
 run('tz +08:00', function () { t(docs, { cols: 'orderNo,createdAt', tz: '+08:00' }); }, ['2024-01-01 16:30:00.123']);
-run('tz IANA', function () { t(docs, { cols: 'orderNo,createdAt', tz: 'Asia/Shanghai' }); }, ['2024-01-01 17:00:00']);
+runIanaTz('tz IANA', function () { t(docs, { cols: 'orderNo,createdAt', tz: 'Asia/Shanghai' }); }, ['2024-01-01 17:00:00']);
 run('tz local', function () { t(docs, { cols: 'orderNo,createdAt', tz: 'local' }); }, ['| SO1     | 2024-01-0']);
 run('csv', function () { mt.csv(docs, 'orderNo,customer.name,remark,coupon,qty,amount'); }, [
   'orderNo,customer.name,remark,coupon,qty,amount', 'SO1,张三,NULL,,2,1299.50', 'SO2,Alice,,VIP10,(无字段),88'
