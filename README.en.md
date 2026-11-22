@@ -360,21 +360,23 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 | mt.explain(cursor)      | EXPLAIN [ANALYZE]            | Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; plan only by default, nothing runs; analyze: true runs it for rows scanned and time        |
 | mt.explainLog(n | line) | EXPLAIN on a slow log query  | Explain a query from a slow log: first what the log recorded about the real run, then the current plan, noting if the plan changed; n is a row of mt.slow() / mt.log(), or pass a whole log line or a command |
 | mt.logQuery(n | line)   | slow log → SQL               | Turn a query from a slow log into a mongosh statement you can run (nothing runs), keeping the types                                                                                                           |
+| mt.planCache('coll')    | performance_schema digests   | Plan cache of a collection: the cached plan per query shape, whether it is active, works; hash filters by queryHash / planCacheKey                                                                            |
 +-------------------------+------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Storage and indexes ──
-+--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------+
-| command            | mysql                            | description                                                                                                                  |
-+--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------+
-| mt.dbs()           | SHOW DATABASES                   | Disk space used by each database                                                                                             |
-| mt.colls('db')     | SHOW TABLE STATUS                | Documents, data and index size per collection, largest first; current db by default                                          |
-| mt.frag('db')      | TABLES.DATA_FREE                 | Disk space each collection can reuse after deletes, most first; current db by default                                        |
-| mt.cache('db')     | sys.innodb_buffer_stats_by_table | WiredTiger cache used by each collection, most first; all databases by default                                               |
-| mt.idx('coll')     | SHOW INDEX FROM t                | Index keys, size, usage count and options                                                                                    |
-| mt.unusedIdx('db') | sys.schema_unused_indexes        | Indexes never used (ops = 0), largest first; all user databases by default                                                   |
-| mt.dupIdx('db')    | sys.schema_redundant_indexes     | Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default |
-| mt.ttl('db')       | information_schema.EVENTS        | TTL indexes: expiry, oldest document, how far past expiry, and the TTL thread; all databases by default                      |
-+--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------+
++--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command            | mysql                            | description                                                                                                                                                                        |
++--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.dbs()           | SHOW DATABASES                   | Disk space used by each database                                                                                                                                                   |
+| mt.colls('db')     | SHOW TABLE STATUS                | Documents, data and index size per collection, largest first; current db by default                                                                                                |
+| mt.desc('coll')    | DESC t                           | Field structure of a collection: samples documents and lists each field with its types, presence and an example, plus options, validator and indexes; sample = documents to sample |
+| mt.frag('db')      | TABLES.DATA_FREE                 | Disk space each collection can reuse after deletes, most first; current db by default                                                                                              |
+| mt.cache('db')     | sys.innodb_buffer_stats_by_table | WiredTiger cache used by each collection, most first; all databases by default                                                                                                     |
+| mt.idx('coll')     | SHOW INDEX FROM t                | Index keys, size, usage count and options                                                                                                                                          |
+| mt.unusedIdx('db') | sys.schema_unused_indexes        | Indexes never used (ops = 0), largest first; all user databases by default                                                                                                         |
+| mt.dupIdx('db')    | sys.schema_redundant_indexes     | Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default                                                       |
+| mt.ttl('db')       | information_schema.EVENTS        | TTL indexes: expiry, oldest document, how far past expiry, and the TTL thread; all databases by default                                                                            |
++--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Replication ──
 +------------+-------------------+-------------------------------------------------------------+
@@ -846,7 +848,7 @@ When the input comes from a slow log (a row number, a whole log line, a profile 
 | `numYields` / `writeConflicts` | Times it yielded, write conflicts |
 | `nMatched` / `nModified` / `ndeleted` / `ninserted` | Documents matched, modified, deleted, inserted by a write |
 | `reslen` / `bytesRead` / `readMs` | Response size; bytes read from disk and time spent reading (4.4+) |
-| `queryHash` / `planCacheKey` | Query shape and plan cache key, to look up with `getPlanCache` |
+| `queryHash` / `planCacheKey` | Query shape and plan cache key; look up the cached plan with `mt.planCache(coll, {hash: ...})` |
 | `appName` / `client` | Application name and client; through mongos, the real client from the command's `$client.mongos.client` |
 
 If the plan back then differs from the current one (e.g. `COLLSCAN` then, an index now), a note at the end says so. A bare command (`{ find: ... }` or a JS object) has no such section.
@@ -1045,6 +1047,43 @@ db.getSiblingDB('shop').orders.updateMany({status: 'new', createdAt: {$lt: ISODa
 - As with explain, fields added by mongos and drivers are dropped (`shardVersion`, `lsid`, `$clusterTime`, `$sortKey`...).
 - find becomes `.find(filter, projection).sort().skip().limit().hint()...`; aggregate, count and distinct use the matching methods; update / delete become `updateOne` / `updateMany` / `replaceOne` / `deleteOne` / `deleteMany` according to `multi` / `limit`, and findAndModify becomes `findOneAndUpdate` and friends. **Writes get a comment line warning that running them changes data.**
 - When the collection name clashes with a database method (such as `stats`) or is not a valid identifier, it is written as `getCollection('...')`.
+
+### mt.planCache(): plan cache
+
+Why did production pick the "wrong" index? MongoDB caches the plan it chose for a query shape and reuses it. This lists the cached plans of a collection.
+
+```js
+mt.planCache('orders')                          // the cached plan per query shape
+mt.planCache('orders', {hash: 'AF0F05C1'})      // by queryHash or planCacheKey
+```
+
+What `mt.explainLog()` shows as recorded in the slow log includes `queryHash` / `planCacheKey`; look it up here to see which plan that query shape has cached.
+
+| Column | Meaning |
+|---|---|
+| `hash` / `planCacheKey` | Query shape hash (`planCacheShapeHash` in 8.0) and plan cache key |
+| `active` | Whether it is active; inactive entries are still on probation |
+| `works` | Work done evaluating the plan; lower is better |
+| `shape` | Query shape: filter, `sort`, `proj` |
+| `plan` | Scans the cached plan uses, e.g. `IXSCAN { status: 1 }`; SBE plans show `(SBE plan)` |
+| `created` | When it was cached |
+
+```
+> mt.planCache('orders')
+-- db.getSiblingDB('shop').getCollection('orders').aggregate([{$planCacheStats: {}}])
++----------+--------------+--------+-------+--------------------------------------------------------+-----------------------------+-------------------------+
+| hash     | planCacheKey | active | works | shape                                                  | plan                        | created                 |
++----------+--------------+--------+-------+--------------------------------------------------------+-----------------------------+-------------------------+
+| 9375056E | 59E1C32C     | true   |    82 | {status: PAID, customer.name: c1} sort {createdAt: -1} | IXSCAN { customer.name: 1 } | 2026-11-22 16:46:02.522 |
++----------+--------------+--------+-------+--------------------------------------------------------+-----------------------------+-------------------------+
+1 row in set
+```
+
+For a query on `{status, customer.name}` sorted by `createdAt` like the one above, the cache holds `customer.name_1`, not `status_1_createdAt_-1`.
+
+- `$planCacheStats` since 4.2; 3.6 / 4.0 lack that stage, so it uses `planCacheListQueryShapes` / `planCacheListPlans`, without the `hash`, `active` and `created` columns.
+- The plan cache lives in memory, per node, and is cleared on restart and index changes; only queries with several candidate plans are cached.
+- To clear a collection's cache: `db.orders.getPlanCache().clear()` (affects running queries of that shape; use with care; MongoTab never runs it for you).
 
 ### mt.top(): time per collection
 
@@ -1270,6 +1309,57 @@ It runs `$collStats` for each collection (views are skipped) and sorts by `disk 
 +----------------+-------+---------+----------+---------+-----------+
 3 rows in set
 ```
+
+### mt.desc(): field structure of a collection
+
+Like MySQL's `DESC t`. MongoDB has no fixed schema, so it samples documents and shows what type each field actually has and how many documents have it.
+
+```js
+mt.desc('orders')                          // orders in the current database, 1000 documents sampled
+mt.desc('shop.orders', {sample: 10000})    // sample more to catch rare fields
+mt.desc(db.orders, {depth: 1})             // top-level fields only
+```
+
+The lines on top describe the collection: type (collection / view / timeseries / capped / clustered), document count, documents sampled, validator, collation and indexes.
+
+| Column | Meaning |
+|---|---|
+| `field` | Field path; nested documents as `customer.name`, fields in arrays of documents as `items.sku` |
+| `types` | Types, with shares when there are several; arrays as `array<element types>` |
+| `present` | Share of sampled documents that have the field |
+| `example` | An example value |
+
+```
+> mt.desc('orders')
+-- db.getSiblingDB('shop').getCollection('orders').aggregate([{$sample: {size: 1000}}]); getCollectionInfos; getIndexes
+     ns: shop.orders
+   type: collection
+  count: 3000
+sampled: 1000
+indexes: _id_, status_1_createdAt_-1, customer.name_1
++---------------+-----------------------+---------+--------------------------+
+| field         | types                 | present | example                  |
++---------------+-----------------------+---------+--------------------------+
+| _id           | objectId              |  100.0% | 6b031c4a21ee270d468cdb85 |
+| orderNo       | string                |  100.0% | SO380                    |
+| status        | string                |  100.0% | SHIPPED                  |
+| amount        | decimal 87%, null 14% |  100.0% | 380.5                    |
+| customer      | object                |  100.0% |                          |
+| customer.name | string                |  100.0% | c30                      |
+| customer.vip  | bool                  |  100.0% | false                    |
+| items         | array<object>         |  100.0% |                          |
+| items.sku     | string                |  100.0% | A0                       |
+| items.n       | number                |  100.0% | 3                        |
+| createdAt     | date                  |  100.0% | 2024-01-01 06:20:00      |
+| coupon        | string                |   27.9% | VIP0                     |
+| tags          | array<string>         |   10.3% | [x, y]                   |
++---------------+-----------------------+---------+--------------------------+
+13 rows in set
+```
+
+- It samples with `$sample`, so rare fields may be missed; raise `sample`. When the sample exceeds 5% of the collection, `$sample` scans and sorts the whole collection, so keep it modest on big collections.
+- Fields are ordered by their average position in the documents, children right after their parent.
+- `number` covers int and double (the shell cannot tell them apart); `long` and `decimal` are listed separately. A field with several types (like `amount` above, null in 13% of documents) is often a hint of a data problem.
 
 ### mt.frag(): reusable disk space
 
