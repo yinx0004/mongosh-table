@@ -111,6 +111,7 @@ t(db.orders.find(), {limit: 200})                // shows at most 50 rows by def
 t(db.orders.find(), {tz: '+08:00'})              // show times in UTC+8 for this call
 mt.csv(db.orders.find(), 'orderNo,amount')       // print CSV, ready to paste into Excel
 mt.config({tz: 'Asia/Shanghai', maxCol: 60})     // change defaults for this session
+mt.ps() / mt.repl() / mt.colls() ...             // DBA commands, see below
 mt.help()
 ```
 
@@ -125,6 +126,57 @@ mt.help()
 ```
 
 ### For DBAs
+
+Since v0.3.0, `mt` comes with a set of read-only shortcuts for the usual MySQL `SHOW ...` commands:
+
+```js
+mt.cmds()                     // list all commands
+mt.ps()                       // SHOW PROCESSLIST: running operations, longest first
+mt.ps({secs: 5})              // only those running for more than 5 seconds
+mt.ps({ns: 'shop.orders'})    // only one database or collection
+mt.ps({all: true})            // include idle connections and internal threads
+mt.repl()                     // SHOW REPLICA STATUS: member state, replication lag (seconds), sync source
+mt.dbs()                      // SHOW DATABASES: disk space per database
+mt.colls('shop')              // SHOW TABLE STATUS: documents, data and index size per collection, largest first; current db if omitted
+mt.idx('orders')              // SHOW INDEX: index keys, size, usage count; 'shop.orders' or db.orders also work
+mt.conns()                    // connections per client IP
+mt.oplog()                    // SHOW BINARY LOGS: oplog size and how much time it covers
+mt.status()                   // SHOW GLOBAL STATUS: version, role, ops/s (sampled 1 second apart), connections, cache
+```
+
+```
+> mt.ps()
+-- db.adminCommand({currentOp: 1, active: true})
++------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
+| opid | secs | op      | ns             | client              | app            | lock | plan                                | command                                  |
++------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
+| 1625 |    9 | query   | shop.orders    | 192.168.147.5:47218 | mongosh 2.14.2 |      | IXSCAN { status: 1, createdAt: -1 } | {find: orders, filter: {$where: sleep... |
+| 1791 |    0 | getmore | local.oplog.rs | 192.168.147.3:41478 | OplogFetcher   |      | COLLSCAN                            | {getMore: 7311352941832819751, collec... |
+| 1790 |    0 | getmore | local.oplog.rs | 192.168.147.4:55718 | OplogFetcher   |      | COLLSCAN                            | {getMore: 8081156913663858071, collec... |
++------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
+3 rows in set
+
+> mt.repl()
+-- rs.status()
+ set: rs0
+date: 2026-11-22 05:02:46.493
++-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
+| name      | state     | health | lagSecs | optime              | syncSource | pingMs | lastHeartbeat           | self |
++-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
+| db1:27017 | PRIMARY   |      1 |       0 | 2026-11-22 05:02:36 |            |        |                         | *    |
+| db2:27017 | SECONDARY |      1 |       0 | 2026-11-22 05:02:36 | db1:27017  |      0 | 2026-11-22 05:02:45.284 |      |
+| db3:27017 | SECONDARY |      1 |       0 | 2026-11-22 05:02:36 | db1:27017  |      0 | 2026-11-22 05:02:45.284 |      |
++-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
+3 rows in set
+```
+
+- Each command first prints the native command it runs (the `-- ...` line, dimmed in a terminal) so you can copy or check it. Turn it off with `mt.config({showCmd: false})`.
+- They take the same options as `t()`, e.g. `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`, `mt.colls('shop', {limit: 200})`, `mt.idx('orders', {vertical: true})`.
+- By default `mt.ps()` hides idle connections, internal threads, drivers' awaitable `hello` polls and its own query.
+- They need monitoring privileges (such as the `clusterMonitor` role). Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, they print a one-line explanation instead of throwing.
+- They work in both the legacy mongo shell and mongosh and are tested in CI on a replica set for every version; sharded clusters (mongos) are not tested yet.
+
+#### Or wrap the native commands yourself
 
 | MySQL habit | mongosh + MongoTab |
 |---|---|
@@ -172,7 +224,7 @@ CJK characters count as 2 columns, so tables stay aligned. Cells longer than `ma
 
 ## Options
 
-`limit` 50 · `maxCol` 40 · `tz` `'UTC'` · `nullText` `'NULL'` · `missingText` follows `lang` · `color` auto · `width` auto · `depth` fully expanded · `lang` auto
+`limit` 50 · `maxCol` 40 · `tz` `'UTC'` · `nullText` `'NULL'` · `missingText` follows `lang` · `color` auto · `width` auto · `depth` fully expanded · `lang` auto · `showCmd` true (DBA commands print the native command first)
 
 When `missingText` is unset it shows `(missing)` / `(无字段)` depending on the language; once you set it, that value is used in every language, e.g. `mt.config({missingText: '-'})`, and `''` leaves the cell blank.
 

@@ -25,7 +25,7 @@ else
 fi
 
 cleanup() {
-  docker rm -f "$name" >/dev/null 2>&1 || true
+  docker rm -f "$name" "$name-slow" >/dev/null 2>&1 || true
   docker network rm "$net" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -48,5 +48,12 @@ wait_for() {
 wait_for 'db.adminCommand({ping: 1}).ok === 1'
 msh --eval "rs.initiate({_id: 'rs0', members: [{_id: 0, host: '$name:27017'}]}).ok" >/dev/null
 wait_for '(db.hello ? db.hello().isWritablePrimary : db.isMaster().ismaster)'
+
+# A long-running query for mt.ps() to find (~2 minutes). It lives in its own
+# database: on 4.0, dropping or indexing another collection in the same
+# database interrupts it.
+msh --eval "db.getSiblingDB('mtslow').slow.drop(); db.getSiblingDB('mtslow').slow.insert({_id: 1})" >/dev/null
+docker run -d --name "$name-slow" --network "$net" --entrypoint "$shell" "$client" --quiet "$uri" \
+  --eval "db.getSiblingDB('mtslow').slow.find({\$where: 'sleep(120000) || true'}).toArray()" >/dev/null
 
 msh test/compat.js

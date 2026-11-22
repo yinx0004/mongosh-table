@@ -74,6 +74,29 @@ run('lang en', function () { mt.config({ lang: 'en' }); t(c.find(), { cols: 'ord
 run('missingText', function () { t(c.find(), { cols: 'orderNo,qty', missingText: '-' }); }, ['| SO2     |   - |']);
 run('config', function () { mt.config(); }, ['"limit":50']);
 run('help', function () { mt.help(); }, ['mt.csv(x, ...)']);
+// ── DBA 命令 ──
+run('mt.cmds', function () { mt.cmds(); }, ['| mt.ps({secs, ns, all}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})']);
+run('mt.ps', function () { mt.ps(); }, ['-- db.adminCommand({currentOp: 1, active: true})']);
+run('mt.ps slow query', function () {
+  for (var i = 0; i < 20 && !db.currentOp({ ns: 'mtslow.slow' }).inprog.length; i++) sleep(500);
+  mt.ps({ ns: 'mtslow.slow' });
+}, ['| mtslow.slow |', '$where']);
+run('mt.ps secs filter', function () { mt.ps({ secs: 100000 }); }, ['Empty set']);
+run('mt.ps all', function () { mt.ps({ all: true, cols: 'opid,secs,op,client' }); }, ['| opid ']);
+run('mt.ps ns filter', function () { mt.ps({ ns: 'nosuchdb' }); }, ['Empty set']);
+run('mt.repl', function () { mt.repl(); }, ['-- rs.status()', 'set: rs0', '| name ', '| PRIMARY ', '| lagSecs |', '1 row in set']);
+run('mt.dbs', function () { mt.dbs(); }, ['| mtest ', '合计 ']);
+run('mt.colls', function () { mt.colls('mtest'); }, ['| orders | ', '| name   | count | size ']);
+run('mt.colls db handle', function () { mt.colls(tdb, { cols: 'name,count', showCmd: false }); }, ['| orders |     3 |']);
+run('mt.idx', function () { mt.idx('orders'.length ? 'mtest.orders' : ''); }, ['| _id_ ', '{_id: 1}', '| orderNo_1 ', 'unique']);
+run('mt.idx coll object', function () { mt.idx(c, 'name,key,options'); }, ['| customer.name_1_createdAt_-1 | {customer.name: 1, createdAt: -1} |']);
+run('mt.idx missing', function () { mt.idx('nope_no_such'); }, ['mongotab: 集合 test.nope_no_such 不存在']);
+run('mt.conns', function () { mt.conns(); }, ['current: ', '| client ', '| conns |']);
+run('mt.oplog', function () { mt.oplog(); }, ['-- rs.printReplicationInfo()', 'maxSize: ', 'firstEvent: ', 'window: ']);
+run('mt.status', function () { mt.status(); }, ['role: PRIMARY (rs0)', 'ops/s.insert: ', 'connections.current: ']);
+run('mt.status totals', function () { mt.status({ interval: 0, cols: 'opcounters' }); }, ['opcounters.insert: ']);
+run('mt.status en', function () { mt.config({ lang: 'en' }); mt.idx(); mt.config({ lang: 'zh' }); }, ["mongotab: mt.idx() needs a collection"]);
+
 run('reload', function () { load('mongotab.js'); t([{ ok: 1 }]); }, ['MongoTab ' + mt.version, '| ok |']);
 
 finish();
