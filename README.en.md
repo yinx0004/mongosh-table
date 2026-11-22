@@ -4,7 +4,7 @@
 [![license](https://img.shields.io/github/license/yinx0004/mongosh-table)](LICENSE)
 [![compat](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml/badge.svg)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
 [![mongosh](https://img.shields.io/badge/mongosh-1.x%20%7C%202.x-47A248?logo=mongodb&logoColor=white)](https://www.mongodb.com/docs/mongodb-shell/)
-[![MongoDB](https://img.shields.io/badge/MongoDB-4.4%20%7C%205.0%20%7C%206.0%20%7C%207.0%20%7C%208.0-47A248?logo=mongodb&logoColor=white)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
+[![MongoDB](https://img.shields.io/badge/MongoDB-4.0%20%7C%204.4%20%7C%205.0%20%7C%206.0%20%7C%207.0%20%7C%208.0-47A248?logo=mongodb&logoColor=white)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
 [![platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](#compatibility)
 [![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](mongotab.js)
 
@@ -19,7 +19,7 @@ It does not touch mongosh objects, prototypes, `.mongoshrc` or any config, and i
 
 ## Download
 
-It is a single file, `mongotab.js`. Put it anywhere on **the machine where you run mongosh** (your computer or a jump host). When you connect to a remote MongoDB, nothing goes on the server; see [Connecting to a remote MongoDB](#connecting-to-a-remote-mongodb).
+It is a single file, `mongotab.js`. Put it anywhere on **the machine where you run mongosh** (your computer or a jump host). When you connect to a remote MongoDB, nothing goes on the server; see [Connecting to a remote MongoDB](#connecting-to-a-remote-mongodb). For MongoDB 4.0 you need mongosh 1.x; see [MongoDB 4.0](#mongodb-40).
 
 Linux / macOS:
 
@@ -182,10 +182,11 @@ Environment variables, read when the script loads:
 
 ## Compatibility
 
-Every PR and every push to main runs [test/compat.js](test/compat.js) in GitHub Actions, once for each pairing of these MongoDB and mongosh versions (10 jobs):
+Every PR and every push to main runs [test/compat.js](test/compat.js) in GitHub Actions, once for each pairing of these MongoDB and mongosh versions (12 jobs):
 
 - MongoDB: 4.4, 5.0, 6.0, 7.0, 8.0 (single-node replica sets)
 - mongosh: 1.8.0 and the newest 2.x
+- MongoDB 4.0 with mongosh 1.x only: 1.8.0 and 1.10.6 (mongosh 2.x cannot connect to 4.0)
 
 To run it locally (needs Docker):
 
@@ -203,6 +204,25 @@ It also runs [test/format.js](test/format.js) on Linux, macOS and Windows with m
 ```bash
 mongosh --nodb test/format.js
 ```
+
+### MongoDB 4.0
+
+Connect to MongoDB 4.0 with **mongosh 1.x**:
+
+- mongosh 2.x needs MongoDB 4.2 or later; against 4.0 it fails with `requires at least 8 (MongoDB 4.2)`.
+- The legacy `mongo` command that ships with MongoDB 4.x (prompt like `rs0:PRIMARY>`) is not mongosh. MongoTab does not support it, and `load()` fails there.
+
+mongosh 1.x runs straight from the archive, needs no root and leaves the existing `mongo` alone. On Linux x64 (1.10.6 is the last 1.x release):
+
+```bash
+curl -fLO https://downloads.mongodb.com/compass/mongosh-1.10.6-linux-x64.tgz && tar xzf mongosh-1.10.6-linux-x64.tgz
+```
+
+```bash
+./mongosh-1.10.6-linux-x64/bin/mongosh "mongodb://user@host:27017/admin" /path/to/mongotab.js --shell
+```
+
+For other systems, replace `linux-x64.tgz` in the link with `darwin-arm64.zip` (Apple silicon Mac), `darwin-x64.zip` (Intel Mac) or `win32-x64.zip` (Windows).
 
 ## License
 
