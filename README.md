@@ -697,14 +697,16 @@ mt.explain({find: 's02orders', filter: {status: 'shipped', amount: {$gte: 3000}}
             projection: {$sortKey: {$meta: 'sortKey'}}, shardVersion: [...]})
 mt.explain(db.system.profile.find().sort({millis: -1}).limit(1).next())   // profile 文档
 mt.explain('{"t":{"$date":...},"msg":"Slow query","attr":{...}}')         // 4.4 起 JSON 日志的整行，作为字符串
+mt.explain(`2026-11-21T15:46:55.624+0000 I COMMAND  [conn2166] command shop.orders ... command: find { ... } planSummary: ...`)   // 4.4 之前的文本日志整行
 ```
 
 - 去掉 mongos、驱动加的字段（`shardVersion`、`databaseVersion`、`lsid`、`$clusterTime`、`readConcern`、投影里的 `$sortKey`...），再用 `db.runCommand({explain: 命令, verbosity: 'executionStats'})` 执行。
 - 在哪个库上执行：命令里的 `$db`，或者 `ns` 的库名；都没有就用 `{db: 'shop'}` 选项，再没有就是当前库。
 - 支持 `find`、`aggregate`、`count`、`distinct`、`update`、`delete`、`findAndModify`。profile 和日志里单条的 update / remove 会自动包成 `update` / `delete` 命令；getMore 用它的原始命令（`originatingCommand`）。explain 写操作不会真的修改数据。
 - JSON 日志里的 `{"$date": ...}`、`{"$oid": ...}`、`{"$numberLong": ...}` 会换回真正的类型，否则条件就对不上了。
+- 4.4 之前的文本日志，命令部分是 shell 写法：字段名不带引号、`ObjectId('...')`、`Timestamp(1, 2)`、`new Date(...)`、十六进制的 `BinData(0, D941...)`。这些都会解析成对应的类型（不用 `eval`），超过 2^53 的整数按 `NumberLong` 处理。
+- 整行传进来时：用单引号包起来的话，行里的单引号（如 `ObjectId('...')`）要写成 `\'`；在 mongosh 里用反引号 `` `...` `` 包起来最省事。日志行超过 10 KB 会被截断，这种行解析不了，改用 `mt.slow()`。
 - `mt.slow()` / `mt.log()` 表格里显示的命令去掉了引号和类型，不能直接粘贴回来；用行号，或者传原始的命令 / 日志行。
-- 4.4 之前的日志是纯文本，没有命令结构，`mt.log()` 的行不能 explain；`mt.slow()`（读 profiler）各个版本都可以。
 
 ```
 > mt.slow({sort: 'ms', cols: '#,ms,op,plan,docsExamined,nreturned,command'})
@@ -1362,7 +1364,7 @@ mt.log('Slow query', {n: 5, vertical: true})   // 选项和 t() 通用
 
 | 列 | 说明 |
 |---|---|
-| `#` | 行号，`mt.explain(n)` 用它（4.4 起的 Slow query 行） |
+| `#` | 行号，`mt.explain(n)` 用它（带命令的行，如慢查询） |
 | `time` | 时间，按 `tz` 显示 |
 | `sev` | 级别：`F` 致命、`E` 错误、`W` 警告、`I` 信息、`D1`~`D5` 调试 |
 | `comp` | 组件：`NETWORK`、`COMMAND`、`REPL`、`STORAGE`... |

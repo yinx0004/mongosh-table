@@ -140,9 +140,9 @@ run('mt.explain no row', function () { mt.explain(99); }, ['mongotab: 没有第 
 // mt.log 的 Slow query 行（4.4 起是 JSON，带命令；之前是纯文本）。slowms 现在是 0，所有操作都会记日志
 var V44 = (function () { var v = db.version().split('.').map(Number); return v[0] > 4 || (v[0] === 4 && v[1] >= 4); })();
 tdb.orders.find({ 'customer.name': 'Zed' }).toArray();
+// 4.4 起日志是 JSON，之前是文本，两种都能 explain
 run('mt.explain log row', function () { mt.log(/Zed/, { n: 1, cols: '#,msg' }); mt.explain(1); },
-  V44 ? ['| 1 | ', "-- db.getSiblingDB('mtest').runCommand({explain: {find: orders, filter: {customer.name: Zed}", 'IXSCAN']
-    : ['mongotab: 第 1 行没有可以 explain 的命令']);
+  ['| 1 | ', "-- db.getSiblingDB('mtest').runCommand({explain: {find: orders, filter: {customer.name: Zed}", 'IXSCAN']);
 run('mt.slow ms filter', function () { mt.slow('mtprof', { ms: 100000000 }); }, ['.find({millis: {$gte: 100000000}})', 'Empty set']);
 pdb.runCommand({ profile: 0, slowms: 100 });
 pdb.dropDatabase();
@@ -266,6 +266,24 @@ run('mt.explain json log line', function () {
   mt.explain('{"t":{"$date":"2026-01-01T00:00:00.000+00:00"},"s":"I","c":"COMMAND","id":51803,"ctx":"conn1","msg":"Slow query",' +
     '"attr":{"type":"command","ns":"mtest.orders","command":{"find":"orders","filter":{"createdAt":{"$gte":{"$date":"2024-01-01T00:00:00.000Z"}}},"$db":"mtest"}}}');
 }, ["db.getSiblingDB('mtest')", 'COLLSCAN', 'nReturned: 2']);
+// 4.4 之前的文本日志行：shell 写法，字段名不带引号（带点）、Timestamp / ObjectId / BinData(十六进制) / 超大整数
+run('mt.explain text log line', function () {
+  mt.explain('2026-11-21T15:46:55.624+0000 I COMMAND  [conn2166] command mtest.orders appName: "order-service" command: find { find: "orders", ' +
+    'filter: { customer.name: "Alice", amount: { $in: [ 88, 5 ] } }, projection: { $sortKey: { $meta: "sortKey" } }, sort: { createdAt: -1 }, limit: 20, ' +
+    "shardVersion: [ Timestamp(0, 0), ObjectId('000000000000000000000000') ], $clusterTime: { clusterTime: Timestamp(1795276015, 2), " +
+    'signature: { hash: BinData(0, D9414CF6101A9BBBE43BC15ACE884BFEDC177A72), keyId: 7710591826859655200 } }, ' +
+    '$client: { application: { name: "order-service" }, mongos: { host: "h:3067", client: "[fdbd::410]:59008" } }, $db: "mtest" } ' +
+    'planSummary: COLLSCAN keysExamined:0 docsExamined:1005163 hasSortStage:1 nreturned:1 465ms');
+}, ["-- db.getSiblingDB('mtest').runCommand({explain: {find: orders, filter: {customer.name: Alice, amount: {$in: [88, 5]}}, sort: {createdAt: -1}, limit: 20}, verbosity: 'executionStats'})",
+  'IXSCAN', 'nReturned: 1']);
+run('mt.explain text log date', function () {
+  mt.explain('2026 I COMMAND  [conn1] command mtest.orders command: find { find: "orders", filter: { createdAt: { $gte: new Date(1704067200000) } }, $db: "mtest" } planSummary: COLLSCAN 3ms');
+}, ['nReturned: 2']);
+run('mt.explain text log update', function () {
+  mt.explain('2026 I WRITE    [conn5] update mtest.orders command: { q: { orderNo: "SO2" }, u: { $set: { explained: true } }, multi: false, upsert: false } planSummary: IXSCAN 3ms');
+  print('written: ' + c.find({ explained: true }).count());
+}, ["runCommand({explain: {update: orders, updates: [{q: {orderNo: SO2}", 'UPDATE', 'written: 0']);
+run('mt.explain shell-style command', function () { mt.explain('{ find: "orders", filter: { qty: 2 } }', { db: 'mtest' }); }, ["db.getSiblingDB('mtest')", 'COLLSCAN', 'nReturned: 1']);
 run('mt.explain display text', function () { mt.explain('{find: s02orders, filter: {status: shipped}}'); }, ['mongotab: 解析不了这段文字']);
 run('mt.explain insert', function () { mt.explain({ insert: 'orders', documents: [{ a: 1 }] }); }, ['mongotab: insert 命令不能 explain']);
 run('mt.explain bad input', function () { mt.explain(); mt.explain({ a: 1 }); }, ['mongotab: mt.explain() 需要游标、explain 的结果、慢日志里的命令或行号', 'mongotab: a 命令不能 explain']);
