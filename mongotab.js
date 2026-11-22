@@ -908,10 +908,10 @@
   }
 
   function dbs(opts) {
-    var o = dbaOpts(opts, ['size']), out = [];
+    var o = dbaOpts(opts, ['disk']), out = [];
     cmdLine(o, 'db.adminCommand({listDatabases: 1})', out);
     var r = runCmd(admin(), { listDatabases: 1 });
-    var rows = (r.databases || []).map(function (d) { return { name: d.name, size: sizeText(d.sizeOnDisk), empty: !!d.empty }; });
+    var rows = (r.databases || []).map(function (d) { return { name: d.name, disk: sizeText(d.sizeOnDisk), empty: !!d.empty }; });
     rows.sort(function (x, y) { return x.name < y.name ? -1 : x.name > y.name ? 1 : 0; });
     rowsOut(rows, o, out);
     if (r.totalSize != null) out.push(M().total(sizeText(r.totalSize)));
@@ -930,7 +930,8 @@
   function isDbHandle(x) { return !!x && typeof x === 'object' && typeof x.getCollectionInfos === 'function' && typeof x.getSiblingDB === 'function'; }
   function colls(dbName, opts) {
     if (dbName && typeof dbName === 'object' && !isDbHandle(dbName)) { opts = dbName; dbName = null; }
-    var o = dbaOpts(opts, ['size', 'storage', 'indexSize']), out = [];
+    // logical = 未压缩的数据量（BSON），disk = 磁盘上占的（压缩后）
+    var o = dbaOpts(opts, ['logical', 'disk', 'indexDisk']), out = [];
     var d = isDbHandle(dbName) ? dbName : dbName ? curDb().getSiblingDB(String(dbName)) : curDb();
     var dn = d.getName();
     cmdLine(o, "db.getSiblingDB('" + dn + "').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}])", out);
@@ -940,8 +941,8 @@
       var s = collStats(d, info.name);
       rows.push({
         row: {
-          name: info.name, count: s ? s.count : '', size: s ? sizeText(s.size) : '', storage: s ? sizeText(s.storageSize) : '',
-          indexes: s ? s.nindexes : '', indexSize: s ? sizeText(s.totalIndexSize) : ''
+          name: info.name, count: s ? s.count : '', logical: s ? sizeText(s.size) : '', disk: s ? sizeText(s.storageSize) : '',
+          indexes: s ? s.nindexes : '', indexDisk: s ? sizeText(s.totalIndexSize) : ''
         },
         w: s ? s.storageSize + s.totalIndexSize : -1
       });
@@ -968,7 +969,7 @@
     fail(M().noColl(cur.getName() + '.' + x));
   }
   function idx(coll, opts) {
-    var o = dbaOpts(opts, ['size']), out = [];
+    var o = dbaOpts(opts, ['disk']), out = [];
     var c = resolveColl(coll), d = c.getDB(), cn = c.getName();
     cmdLine(o, "db.getSiblingDB('" + d.getName() + "').getCollection('" + cn + "').getIndexes(); aggregate([{$indexStats: {}}])", out);
     var ixs = c.getIndexes();
@@ -990,7 +991,7 @@
       if (ix.collation && ix.collation.locale) flags.push('collation=' + ix.collation.locale);
       var u = usage[ix.name];
       return {
-        name: ix.name, key: valText(ix.key, true, o), size: cs ? sizeText(cs.indexSizes[ix.name]) : '',
+        name: ix.name, key: valText(ix.key, true, o), disk: cs ? sizeText(cs.indexSizes[ix.name]) : '',
         ops: u ? u.ops : '', since: u && u.since ? u.since : '', options: flags.join(', ')
       };
     });
@@ -1047,7 +1048,7 @@
     var secs = (t2.getTime() - t1.getTime()) / 1000;
     var cs = collStats(local, 'oplog.rs') || {};
     var doc = prune({
-      maxSize: sizeText(cs.maxSize), usedSize: sizeText(cs.size),
+      maxLogical: sizeText(cs.maxSize), usedLogical: sizeText(cs.size), disk: sizeText(cs.storageSize),
       firstEvent: t1, lastEvent: t2, window: durText(secs) + ' (' + (secs / 3600).toFixed(2) + ' h)', now: new Date()
     });
     var f = flatten(doc, o, null), keys = [];
@@ -1338,7 +1339,7 @@
   // 删数据后 WiredTiger 文件里能复用、但还没还给操作系统的空间（compact 能回收）
   function frag(dbName, opts) {
     var x = dbArg(dbName, opts), d = x.d || curDb();
-    var o = dbaOpts(x.opts, ['storage', 'reusable', 'pct', 'indexSize', 'indexReusable']), out = [];
+    var o = dbaOpts(x.opts, ['disk', 'reusable', 'pct', 'indexDisk', 'indexReusable']), out = [];
     var dn = d.getName();
     cmdLine(o, "db.getSiblingDB('" + dn + "').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}]) → wiredTiger['block-manager']", out);
     var rows = [], tData = 0, tIdx = 0;
@@ -1348,8 +1349,8 @@
       tData += s.reuse; tIdx += s.idxReuse;
       rows.push({
         row: {
-          name: name, storage: sizeText(s.storage), reusable: sizeText(s.reuse), pct: pctText(s.reuse, s.storage),
-          indexSize: sizeText(s.idxSize), indexReusable: sizeText(s.idxReuse)
+          name: name, disk: sizeText(s.storage), reusable: sizeText(s.reuse), pct: pctText(s.reuse, s.storage),
+          indexDisk: sizeText(s.idxSize), indexReusable: sizeText(s.idxReuse)
         },
         w: s.reuse + s.idxReuse
       });
@@ -1363,7 +1364,7 @@
   // 各集合在 WiredTiger 缓存里占了多少；默认扫所有库
   function cache(dbName, opts) {
     var x = dbArg(dbName, opts);
-    var o = dbaOpts(x.opts, ['cached', 'data', 'indexes', 'share']), out = [];
+    var o = dbaOpts(x.opts, ['cached', 'dataCached', 'indexCached', 'share']), out = [];
     var a = admin();
     notMongos('mt.cache()');
     var dbsList = x.d ? [x.d] : (runCmd(a, { listDatabases: 1, nameOnly: true }).databases || [])
@@ -1382,7 +1383,7 @@
         if (!s || s.cache + s.idxCache <= 0) return;
         var c = s.cache + s.idxCache;
         sum += c;
-        rows.push({ row: { ns: d.getName() + '.' + name, cached: sizeText(c), data: sizeText(s.cache), indexes: sizeText(s.idxCache), share: pctText(c, used) }, w: c });
+        rows.push({ row: { ns: d.getName() + '.' + name, cached: sizeText(c), dataCached: sizeText(s.cache), indexCached: sizeText(s.idxCache), share: pctText(c, used) }, w: c });
       });
     });
     rows.sort(function (p, q) { return q.w - p.w || (p.row.ns < q.row.ns ? -1 : 1); });

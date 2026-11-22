@@ -362,6 +362,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 - **先打印原生命令**：第一行 `-- ...`（终端里是灰色）是它实际执行的 MongoDB 命令，方便复制、核对；`mt.config({showCmd: false})` 关掉。
 - **选项和 `t()` 通用**：`cols`、`exclude`、`limit`、`vertical`、`table`、`tz` 都能用，例如 `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`、`mt.idx('orders', {vertical: true})`。
 - **只读**：不会改任何设置，`mt.slow()` 也不会打开 profiler。
+- **大小分逻辑和磁盘**：列名里带 `logical` 的是未压缩的数据量（BSON 大小），带 `disk` 的是磁盘上实际占的（WiredTiger 压缩后），带 `cached` 的是在内存缓存里占的（解压后）。同一份数据三者可以差好几倍。
 - **权限**：需要监控类权限，如 `clusterMonitor` 角色。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()`、在 mongos 上执行 `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` 时，只打印一行说明，不抛异常。
 - **版本**：老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过；分片集群（mongos）还没测过。
 
@@ -693,13 +694,13 @@ date: 2026-11-22 08:05:48.819
 
 ### mt.dbs()：各库大小
 
-相当于 `SHOW DATABASES`，执行的是 `listDatabases`，按库名排序，最后一行是合计。`size` 是磁盘占用（`sizeOnDisk`）。
+相当于 `SHOW DATABASES`，执行的是 `listDatabases`，按库名排序，最后一行是合计。`disk` 是磁盘占用（`sizeOnDisk`）。
 
 ```
 > mt.dbs()
 -- db.adminCommand({listDatabases: 1})
 +--------+----------+-------+
-| name   | size     | empty |
+| name   | disk     | empty |
 +--------+----------+-------+
 | admin  |  80.0 KB | false |
 | config | 168.0 KB | false |
@@ -720,26 +721,26 @@ mt.colls()          // 当前库
 mt.colls('shop')    // 指定库，也可以传 db 对象
 ```
 
-对每个集合执行 `$collStats`（视图跳过），按 `storage + indexSize` 从大到小排。
+对每个集合执行 `$collStats`（视图跳过），按 `disk + indexDisk`（磁盘占用）从大到小排。
 
 | 列 | 说明 |
 |---|---|
 | `count` | 文档数 |
-| `size` | 数据大小（未压缩） |
-| `storage` | 数据占的磁盘空间（压缩后） |
+| `logical` | 数据的逻辑大小（未压缩的 BSON） |
+| `disk` | 数据占的磁盘空间（压缩后） |
 | `indexes` | 索引个数 |
-| `indexSize` | 索引占的磁盘空间 |
+| `indexDisk` | 索引占的磁盘空间 |
 
 ```
 > mt.colls()
 -- db.getSiblingDB('shop').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}])
-+----------------+-------+--------+----------+---------+-----------+
-| name           | count | size   | storage  | indexes | indexSize |
-+----------------+-------+--------+----------+---------+-----------+
-| orders         | 20000 | 3.6 MB | 956.0 KB |       4 |    1.2 MB |
-| users          |     2 |   68 B |  20.0 KB |       1 |   20.0 KB |
-| system.profile |     3 | 5.0 KB |   4.0 KB |       0 |       0 B |
-+----------------+-------+--------+----------+---------+-----------+
++----------------+-------+---------+----------+---------+-----------+
+| name           | count | logical | disk     | indexes | indexDisk |
++----------------+-------+---------+----------+---------+-----------+
+| orders         | 20000 |  3.6 MB | 960.0 KB |       4 |    1.2 MB |
+| users          |     2 |    68 B |  20.0 KB |       1 |   20.0 KB |
+| system.profile |     5 |  7.0 KB |   4.0 KB |       0 |       0 B |
++----------------+-------+---------+----------+---------+-----------+
 3 rows in set
 ```
 
@@ -756,23 +757,23 @@ WiredTiger 删掉的数据不会把文件变小，空出来的块留在文件里
 
 | 列 | 说明 |
 |---|---|
-| `storage` | 数据文件大小 |
+| `disk` | 数据文件在磁盘上的大小 |
 | `reusable` | 其中可复用的空间 |
 | `pct` | 可复用占数据文件的比例 |
-| `indexSize` / `indexReusable` | 索引文件大小、其中可复用的空间 |
+| `indexDisk` / `indexReusable` | 索引文件在磁盘上的大小、其中可复用的空间 |
 
 ```
 > mt.frag('shop')
 -- db.getSiblingDB('shop').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}]) → wiredTiger['block-manager']
 +----------------+---------+----------+-------+-----------+---------------+
-| name           | storage | reusable | pct   | indexSize | indexReusable |
+| name           | disk    | reusable | pct   | indexDisk | indexReusable |
 +----------------+---------+----------+-------+-----------+---------------+
-| orders         |  2.0 MB | 952.0 KB | 45.9% |    3.6 MB |        1.2 MB |
+| orders         |  2.0 MB | 960.0 KB | 46.1% |    3.6 MB |        1.2 MB |
 | system.profile | 20.0 KB |      0 B |  0.0% |       0 B |           0 B |
 | users          | 20.0 KB |      0 B |  0.0% |   20.0 KB |           0 B |
 +----------------+---------+----------+-------+-----------+---------------+
 3 rows in set
-合计可回收 2.1 MB（数据 952.0 KB，索引 1.2 MB）
+合计可回收 2.1 MB（数据 960.0 KB，索引 1.2 MB）
 ```
 
 - 可复用的空间新写入的数据会先用掉；想把它还给操作系统，要对集合执行 `compact`（4.4 起不再阻塞读写，但仍会占用 I/O），或者对从节点做一次全量同步。
@@ -794,7 +795,7 @@ mt.idx(db.orders)         // 集合对象
 |---|---|
 | `name` | 索引名 |
 | `key` | 索引键 |
-| `size` | 磁盘占用 |
+| `disk` | 磁盘占用 |
 | `ops` | 自 `since` 以来被查询用到的次数；一直是 0 的索引可以考虑删掉 |
 | `since` | 开始计数的时间（mongod 重启或索引重建后清零） |
 | `options` | `unique`、`sparse`、`ttl=秒`、`partial=条件`、`hidden`、`collation=语言` |
@@ -803,12 +804,12 @@ mt.idx(db.orders)         // 集合对象
 > mt.idx('orders')
 -- db.getSiblingDB('shop').getCollection('orders').getIndexes(); aggregate([{$indexStats: {}}])
 +-----------------------+----------------------------+----------+-----+-------------------------+----------------+
-| name                  | key                        | size     | ops | since                   | options        |
+| name                  | key                        | disk     | ops | since                   | options        |
 +-----------------------+----------------------------+----------+-----+-------------------------+----------------+
-| _id_                  | {_id: 1}                   | 508.0 KB |   6 | 2026-11-22 08:05:36.873 |                |
-| orderNo_1             | {orderNo: 1}               | 248.0 KB |   1 | 2026-11-22 08:05:37.074 | unique         |
-| status_1_createdAt_-1 | {status: 1, createdAt: -1} | 232.0 KB |  32 | 2026-11-22 08:05:37.139 |                |
-| ttl_createdAt         | {createdAt: 1}             | 232.0 KB |   0 | 2026-11-22 08:05:37.191 | ttl=315360000s |
+| _id_                  | {_id: 1}                   | 508.0 KB |   6 | 2026-11-22 10:32:18.399 |                |
+| orderNo_1             | {orderNo: 1}               | 248.0 KB |   1 | 2026-11-22 10:32:18.517 | unique         |
+| status_1_createdAt_-1 | {status: 1, createdAt: -1} | 232.0 KB |  32 | 2026-11-22 10:32:18.572 |                |
+| ttl_createdAt         | {createdAt: 1}             | 232.0 KB |   0 | 2026-11-22 10:32:18.623 | ttl=315360000s |
 +-----------------------+----------------------------+----------+-----+-------------------------+----------------+
 4 rows in set
 ```
@@ -844,8 +845,9 @@ totalCreated: 69
 
 | 字段 | 说明 |
 |---|---|
-| `maxSize` | oplog 上限 |
-| `usedSize` | 已经用了多少 |
+| `maxLogical` | oplog 上限（按逻辑大小算，即 `--oplogSize`） |
+| `usedLogical` | 已经用了多少（逻辑大小） |
+| `disk` | oplog 在磁盘上占的空间（压缩后） |
 | `firstEvent` / `lastEvent` | oplog 里最早、最晚一条的时间 |
 | `window` | 两者之差。从节点停机或延迟超过这个时间，就要全量重新同步 |
 | `now` | 当前时间 |
@@ -853,12 +855,13 @@ totalCreated: 69
 ```
 > mt.oplog()
 -- rs.printReplicationInfo()
-   maxSize: 1.4 GB
-  usedSize: 9.5 MB
-firstEvent: 2026-11-22 08:05:23
- lastEvent: 2026-11-22 08:05:37
-    window: 14s (0.00 h)
-       now: 2026-11-22 08:05:48.865
+ maxLogical: 1.4 GB
+usedLogical: 9.5 MB
+       disk: 1.4 MB
+ firstEvent: 2026-11-22 10:32:04
+  lastEvent: 2026-11-22 10:32:19
+     window: 15s (0.00 h)
+        now: 2026-11-22 10:32:31.489
 ```
 
 示例是刚建好的副本集，所以窗口只有几十秒；生产环境一般要有几十个小时以上。
@@ -927,7 +930,7 @@ mt.cache('shop')    // 只看一个库，也可以传 db 对象
 |---|---|
 | `ns` | 库.集合 |
 | `cached` | 数据加索引在缓存里占了多少 |
-| `data` / `indexes` | 其中数据、索引各占多少 |
+| `dataCached` / `indexCached` | 其中数据、索引各占多少 |
 | `share` | 占已用缓存的比例 |
 
 ```
@@ -936,18 +939,18 @@ mt.cache('shop')    // 只看一个库，也可以传 db 对象
  used: 34.1 MB (0.5%)
   max: 7.3 GB
 dirty: 0 B (0.0%)
-+---------------------------+---------+---------+---------+-------+
-| ns                        | cached  | data    | indexes | share |
-+---------------------------+---------+---------+---------+-------+
-| shop.orders               | 18.2 MB |  7.6 MB | 10.6 MB | 53.3% |
-| local.oplog.rs            | 14.5 MB | 14.5 MB |     0 B | 42.4% |
-| config.transactions       | 77.4 KB | 75.8 KB |  1.6 KB |  0.2% |
-| shop.system.profile       | 11.7 KB | 11.7 KB |     0 B |  0.0% |
-| config.system.indexBuilds |  6.2 KB |  4.5 KB |  1.7 KB |  0.0% |
-| local.startup_log         |  4.7 KB |  3.5 KB |  1.2 KB |  0.0% |
-+---------------------------+---------+---------+---------+-------+
++---------------------------+---------+------------+-------------+-------+
+| ns                        | cached  | dataCached | indexCached | share |
++---------------------------+---------+------------+-------------+-------+
+| shop.orders               | 18.2 MB |     7.6 MB |     10.6 MB | 53.3% |
+| local.oplog.rs            | 14.5 MB |    14.5 MB |         0 B | 42.4% |
+| config.transactions       | 77.3 KB |    75.8 KB |      1.6 KB |  0.2% |
+| shop.system.profile       | 11.7 KB |    11.7 KB |         0 B |  0.0% |
+| config.system.indexBuilds |  6.2 KB |     4.5 KB |      1.7 KB |  0.0% |
+| local.startup_log         |  4.7 KB |     3.5 KB |      1.2 KB |  0.0% |
++---------------------------+---------+------------+-------------+-------+
 6 rows in set  (共 25 行，只显示前 6 行)
-以上集合在缓存里合计 32.8 MB，占已用缓存的 96.1%
+以上集合在缓存里合计 32.8 MB，占已用缓存的 96.0%
 ```
 
 - 缓存里放的是解压后的数据，所以一个集合占的缓存可能比它的磁盘文件还大。
