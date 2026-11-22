@@ -183,6 +183,40 @@ run('mt.ttl all dbs', function () { mt.ttl({ cols: 'ns,index' }); }, ['| mtttl.e
 db.adminCommand({ setParameter: 1, ttlMonitorEnabled: true });
 tt.dropDatabase();
 run('mt.ttl none', function () { mt.ttl('nottl'); }, ['Empty set', '没有 TTL 索引']);
+// 索引体检：单独的库 mtidx。a_1 ⊂ a_1_b_1 ⊂ a_1_b_1_c_1 是冗余；u_1 是唯一索引、p_1 只被部分索引覆盖、
+// d_-1 方向不同，都不算冗余。a_1_b_1_c_1 用过一次，其余都没用过
+var ixd = db.getSiblingDB('mtidx'); ixd.dropDatabase();
+var ic = ixd.c;
+ic.insertOne({ a: 1, b: 1, c: 1, u: 1, v: 1, p: 1, q: 1, d: 1, e: 1 });
+[[{ a: 1 }], [{ a: 1, b: 1 }], [{ a: 1, b: 1, c: 1 }], [{ u: 1 }, { unique: true }], [{ u: 1, v: 1 }],
+  [{ p: 1, q: 1 }, { partialFilterExpression: { p: { $gt: 0 } } }], [{ p: 1 }], [{ d: -1 }], [{ d: 1, e: 1 }]]
+  .forEach(function (x) { ic.createIndex(x[0], x[1] || {}); });
+ic.find({ a: 1, b: 1, c: 1 }).hint('a_1_b_1_c_1').toArray();
+// 取出表格里 mtidx.c 那几行的索引名
+function idxNames(fn) {
+  var lines = [], realPrint = G.print;
+  G.print = function () { lines.push(Array.prototype.join.call(arguments, ' ')); };
+  try { fn(); } finally { G.print = realPrint; }
+  var names = [];
+  lines.join('\n').split('\n').forEach(function (l) { var m = /^\| mtidx\.c \| (\S+) /.exec(l); if (m) names.push(m[1]); });
+  return names.sort().join(',');
+}
+run('mt.dupIdx', function () { mt.dupIdx('mtidx', { table: true }); }, [
+  "-- db.getSiblingDB('mtidx'): each collection getIndexes()", '| coveredBy ', '| a_1     | {a: 1}       |', '| a_1_b_1 '
+]);
+run('mt.dupIdx rows', function () {
+  var got = idxNames(function () { mt.dupIdx('mtidx', { cols: 'ns,index', showCmd: false }); });
+  print(got === 'a_1,a_1_b_1' ? 'dup ok' : 'dup bad ' + got);
+}, ['dup ok']);
+run('mt.unusedIdx', function () { mt.unusedIdx(ixd, { table: true }); }, ["-- db.getSiblingDB('mtidx'): each collection", 'uptime: ', '| u_1 ', 'unique']);
+run('mt.unusedIdx rows', function () {
+  var got = idxNames(function () { mt.unusedIdx('mtidx', { cols: 'ns,index', showCmd: false }); });
+  print(got === 'a_1,a_1_b_1,d_-1,d_1_e_1,p_1,p_1_q_1,u_1,u_1_v_1' ? 'unused ok' : 'unused bad ' + got);
+}, ['unused ok']);
+run('mt.dupIdx all dbs', function () { mt.dupIdx({ cols: 'ns,index' }); }, ['| mtidx.c ']);
+run('mt.unusedIdx all dbs', function () { mt.unusedIdx({ cols: 'ns,index' }); }, ['| mtidx.c ']);
+run('mt.dupIdx none', function () { mt.dupIdx('mtest'); }, ['Empty set', '没有冗余索引']);
+ixd.dropDatabase();
 run('mt.repl', function () { mt.repl(); }, ['-- rs.status()', 'set: rs0', '| name ', '| PRIMARY ', '| lagSecs |', '1 row in set']);
 run('mt.dbs', function () { mt.dbs(); }, ['| name ', '| disk ', '| mtest ', '合计 ']);
 run('mt.colls', function () { mt.colls('mtest'); }, ['| orders | ', '| name   | count | logical | disk ']);
