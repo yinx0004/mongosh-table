@@ -249,13 +249,22 @@ run('mt.unusedIdx all dbs', function () { mt.unusedIdx({ cols: 'ns,index' }); },
 run('mt.dupIdx none', function () { mt.dupIdx('mtest'); }, ['Empty set', '没有冗余索引']);
 ixd.dropDatabase();
 // mt.explain：mtest.orders 上有 customer.name_1_createdAt_-1 索引；amount / qty 上没有索引
-run('mt.explain index', function () { mt.explain(c.find({ 'customer.name': 'Alice' }), { table: true }); }, [
+run('mt.explain index', function () { mt.explain(c.find({ 'customer.name': 'Alice' }), { table: true, analyze: true }); }, [
   "-- cursor.explain('executionStats')", 'engine: classic', 'totalKeysExamined: 1', 'nReturned: 1', 'IXSCAN', '| customer.name_1_createdAt_-1 ', 'FETCH'
 ]);
-run('mt.explain collscan sort', function () { mt.explain(c.find({ amount: { $gt: 1 } }).sort({ qty: -1 }), { table: true }); }, [
+run('mt.explain collscan sort', function () { mt.explain(c.find({ amount: { $gt: 1 } }).sort({ qty: -1 }), { table: true, analyze: true }); }, [
   'SORT', 'COLLSCAN', '全表扫描', '内存排序', '注意：', 'docsExaminedPerReturned: '
 ]);
-run('mt.explain plan only', function () { mt.explain(c.find({ 'customer.name': 'Bob' }), { analyze: false }); }, ["-- cursor.explain('queryPlanner')", 'IXSCAN']);
+// 默认只看计划，不执行：没有 executionTimeMillis / nReturned 这些执行统计
+run('mt.explain default plan only', function () {
+  var lines = [], realPrint = G.print;
+  G.print = function () { lines.push(Array.prototype.join.call(arguments, ' ')); };
+  try { mt.explain(c.find({ 'customer.name': 'Bob' })); } finally { G.print = realPrint; }
+  var outText = lines.join('\n');
+  print(outText);
+  print(/executionTimeMillis|nReturned:|totalDocsExamined/.test(outText) ? 'has stats' : 'no stats');
+}, ["-- cursor.explain('queryPlanner')", 'IXSCAN', 'no stats']);
+run('mt.explain analyze false', function () { mt.explain(c.find({ 'customer.name': 'Bob' }), { analyze: false }); }, ["-- cursor.explain('queryPlanner')", 'IXSCAN']);
 run('mt.explain aggregate', function () {
   mt.explain(c.explain('executionStats').aggregate([{ $match: { qty: { $gte: 1 } } }, { $group: { _id: '$qty', n: { $sum: 1 } } }]), { table: true });
 }, ['engine: ', 'COLLSCAN', '全表扫描']);
@@ -263,12 +272,12 @@ run('mt.explain aggregate', function () {
 run('mt.explain command doc', function () {
   mt.explain({ find: 'orders', filter: { 'customer.name': 'Alice' }, sort: { createdAt: -1 }, limit: 5,
     projection: { $sortKey: { $meta: 'sortKey' } }, shardVersion: [new Date(0), ObjectId()],
-    lsid: { id: UUID('3b241101-e2bb-4255-8caf-4136c566a962') }, $db: 'mtest' }, { table: true });
+    lsid: { id: UUID('3b241101-e2bb-4255-8caf-4136c566a962') }, $db: 'mtest' }, { table: true, analyze: true });
 }, ["-- db.getSiblingDB('mtest').runCommand({explain: {find: orders, filter: {customer.name: Alice}, sort: {createdAt: -1}, limit: 5}, verbosity: 'executionStats'})", 'IXSCAN', 'nReturned: 1']);
 // 4.4 起的 JSON 日志行：{$date: ...} 要换回日期，否则查不到
 run('mt.explain json log line', function () {
   mt.explain('{"t":{"$date":"2026-01-01T00:00:00.000+00:00"},"s":"I","c":"COMMAND","id":51803,"ctx":"conn1","msg":"Slow query",' +
-    '"attr":{"type":"command","ns":"mtest.orders","command":{"find":"orders","filter":{"createdAt":{"$gte":{"$date":"2024-01-01T00:00:00.000Z"}}},"$db":"mtest"}}}');
+    '"attr":{"type":"command","ns":"mtest.orders","command":{"find":"orders","filter":{"createdAt":{"$gte":{"$date":"2024-01-01T00:00:00.000Z"}}},"$db":"mtest"}}}', { analyze: true });
 }, ["db.getSiblingDB('mtest')", 'COLLSCAN', 'nReturned: 2']);
 // 4.4 之前的文本日志行：shell 写法，字段名不带引号（带点）、Timestamp / ObjectId / BinData(十六进制) / 超大整数
 run('mt.explain text log line', function () {
@@ -277,17 +286,17 @@ run('mt.explain text log line', function () {
     "shardVersion: [ Timestamp(0, 0), ObjectId('000000000000000000000000') ], $clusterTime: { clusterTime: Timestamp(1795276015, 2), " +
     'signature: { hash: BinData(0, D9414CF6101A9BBBE43BC15ACE884BFEDC177A72), keyId: 7710591826859655200 } }, ' +
     '$client: { application: { name: "order-service" }, mongos: { host: "h:3067", client: "[fdbd::410]:59008" } }, $db: "mtest" } ' +
-    'planSummary: COLLSCAN keysExamined:0 docsExamined:1005163 hasSortStage:1 nreturned:1 465ms');
+    'planSummary: COLLSCAN keysExamined:0 docsExamined:1005163 hasSortStage:1 nreturned:1 465ms', { analyze: true });
 }, ["-- db.getSiblingDB('mtest').runCommand({explain: {find: orders, filter: {customer.name: Alice, amount: {$in: [88, 5]}}, sort: {createdAt: -1}, limit: 20}, verbosity: 'executionStats'})",
   'IXSCAN', 'nReturned: 1']);
 run('mt.explain text log date', function () {
-  mt.explain('2026 I COMMAND  [conn1] command mtest.orders command: find { find: "orders", filter: { createdAt: { $gte: new Date(1704067200000) } }, $db: "mtest" } planSummary: COLLSCAN 3ms');
+  mt.explain('2026 I COMMAND  [conn1] command mtest.orders command: find { find: "orders", filter: { createdAt: { $gte: new Date(1704067200000) } }, $db: "mtest" } planSummary: COLLSCAN 3ms', { analyze: true });
 }, ['nReturned: 2']);
 run('mt.explain text log update', function () {
   mt.explain('2026 I WRITE    [conn5] update mtest.orders command: { q: { orderNo: "SO2" }, u: { $set: { explained: true } }, multi: false, upsert: false } planSummary: IXSCAN 3ms');
   print('written: ' + c.find({ explained: true }).count());
 }, ["runCommand({explain: {update: orders, updates: [{q: {orderNo: SO2}", 'UPDATE', 'written: 0']);
-run('mt.explain shell-style command', function () { mt.explain('{ find: "orders", filter: { qty: 2 } }', { db: 'mtest' }); }, ["db.getSiblingDB('mtest')", 'COLLSCAN', 'nReturned: 1']);
+run('mt.explain shell-style command', function () { mt.explain('{ find: "orders", filter: { qty: 2 } }', { db: 'mtest', analyze: true }); }, ["db.getSiblingDB('mtest')", 'COLLSCAN', 'nReturned: 1']);
 run('mt.explain display text', function () { mt.explain('{find: s02orders, filter: {status: shipped}}'); }, ['mongotab: 解析不了这段文字']);
 run('mt.explain insert', function () { mt.explain({ insert: 'orders', documents: [{ a: 1 }] }); }, ['mongotab: insert 命令不能 explain']);
 run('mt.explain bad input', function () { mt.explain(); mt.explain({ a: 1 }); }, ['mongotab: mt.explain() 需要游标、explain 的结果、慢日志里的命令或行号', 'mongotab: a 命令不能 explain']);

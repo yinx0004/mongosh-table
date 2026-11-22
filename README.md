@@ -334,30 +334,30 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 
 ```
 > mt.cmds()
-+------------------------------+----------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                            | description                                                                                                                                                                            |
-+------------------------------+----------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                 | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                                                        |
-| mt.slow({ms, ns, sort})      | mysql.slow_log                   | 慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前                                                        |
-| mt.top({interval, ns})       | sys.schema_table_statistics      | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                                                             |
-| mt.locks({all})              | sys.innodb_lock_waits            | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                                                           |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX    | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                                                  |
-| mt.repl()                    | SHOW SLAVE STATUS                | 副本集成员状态、复制延迟（秒）、同步源                                                                                                                                                 |
-| mt.dbs()                     | SHOW DATABASES                   | 各库占用的磁盘空间                                                                                                                                                                     |
-| mt.colls('db')               | SHOW TABLE STATUS                | 各集合文档数、数据和索引大小，大的在前；默认当前库                                                                                                                                     |
-| mt.frag('db')                | TABLES.DATA_FREE                 | 各集合删数据后可回收的磁盘空间，多的在前；默认当前库                                                                                                                                   |
-| mt.idx('coll')               | SHOW INDEX FROM t                | 索引的键、大小、使用次数和选项                                                                                                                                                         |
-| mt.explain(cursor | n)       | EXPLAIN ANALYZE                  | 执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；也接受慢日志里的命令，mt.explain(n) 对上次 mt.slow() / mt.log() 的第 n 行；analyze: false 只看计划不执行 |
-| mt.builds()                  | ALTER TABLE progress             | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                                                                                       |
-| mt.unusedIdx('db')           | sys.schema_unused_indexes        | 没被用过的索引（ops = 0），大的在前；默认所有用户库                                                                                                                                    |
-| mt.dupIdx('db')              | sys.schema_redundant_indexes     | 冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库                                                                                                         |
-| mt.conns()                   | PROCESSLIST GROUP BY host        | 按客户端 IP 统计连接数                                                                                                                                                                 |
-| mt.oplog()                   | SHOW BINARY LOGS                 | oplog 大小和能覆盖多长时间                                                                                                                                                             |
-| mt.status({interval})        | SHOW GLOBAL STATUS               | 版本、角色、ops/s、连接、缓存等关键指标                                                                                                                                                |
-| mt.cache('db')               | sys.innodb_buffer_stats_by_table | 各集合占用的 WiredTiger 缓存，多的在前；默认所有库                                                                                                                                     |
-| mt.ttl('db')                 | information_schema.EVENTS        | TTL 索引：过期时间、最早一条的时间、超期了多久，以及 TTL 线程的状态；默认所有库                                                                                                        |
-| mt.log({n, grep, sev})       | performance_schema.error_log     | 最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告                                                                                             |
-+------------------------------+----------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                            | description                                                                                                                                                                                                         |
++------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                 | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                                                                                     |
+| mt.slow({ms, ns, sort})      | mysql.slow_log                   | 慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前                                                                                     |
+| mt.top({interval, ns})       | sys.schema_table_statistics      | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                                                                                          |
+| mt.locks({all})              | sys.innodb_lock_waits            | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                                                                                        |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX    | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                                                                               |
+| mt.repl()                    | SHOW SLAVE STATUS                | 副本集成员状态、复制延迟（秒）、同步源                                                                                                                                                                              |
+| mt.dbs()                     | SHOW DATABASES                   | 各库占用的磁盘空间                                                                                                                                                                                                  |
+| mt.colls('db')               | SHOW TABLE STATUS                | 各集合文档数、数据和索引大小，大的在前；默认当前库                                                                                                                                                                  |
+| mt.frag('db')                | TABLES.DATA_FREE                 | 各集合删数据后可回收的磁盘空间，多的在前；默认当前库                                                                                                                                                                |
+| mt.idx('coll')               | SHOW INDEX FROM t                | 索引的键、大小、使用次数和选项                                                                                                                                                                                      |
+| mt.explain(cursor | n)       | EXPLAIN [ANALYZE]                | 执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；也接受慢日志里的命令，mt.explain(n) 对上次 mt.slow() / mt.log() 的第 n 行；默认只看计划、不执行，analyze: true 执行一遍看扫描数和耗时 |
+| mt.builds()                  | ALTER TABLE progress             | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                                                                                                                    |
+| mt.unusedIdx('db')           | sys.schema_unused_indexes        | 没被用过的索引（ops = 0），大的在前；默认所有用户库                                                                                                                                                                 |
+| mt.dupIdx('db')              | sys.schema_redundant_indexes     | 冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库                                                                                                                                      |
+| mt.conns()                   | PROCESSLIST GROUP BY host        | 按客户端 IP 统计连接数                                                                                                                                                                                              |
+| mt.oplog()                   | SHOW BINARY LOGS                 | oplog 大小和能覆盖多长时间                                                                                                                                                                                          |
+| mt.status({interval})        | SHOW GLOBAL STATUS               | 版本、角色、ops/s、连接、缓存等关键指标                                                                                                                                                                             |
+| mt.cache('db')               | sys.innodb_buffer_stats_by_table | 各集合占用的 WiredTiger 缓存，多的在前；默认所有库                                                                                                                                                                  |
+| mt.ttl('db')                 | information_schema.EVENTS        | TTL 索引：过期时间、最早一条的时间、超期了多久，以及 TTL 线程的状态；默认所有库                                                                                                                                     |
+| mt.log({n, grep, sev})       | performance_schema.error_log     | 最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告                                                                                                                          |
++------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 都可以加 t() 的选项，如 {cols: ...}、{vertical: true}；mt.config({showCmd: false}) 不打印原生命令
 ```
 
@@ -570,11 +570,13 @@ Empty set
 
 ### mt.explain()：执行计划
 
-相当于 MySQL 的 `EXPLAIN ANALYZE`：把 `explain('executionStats')` 那一大段 JSON 排成一张表，一眼看出用了哪个索引、扫了多少、哪一步慢。
+相当于 MySQL 的 `EXPLAIN`，加 `{analyze: true}` 相当于 `EXPLAIN ANALYZE`：把 explain 那一大段 JSON 排成一张表，一眼看出用了哪个索引、扫了多少、哪一步慢。
+
+**默认只看计划，不执行查询**（`explain('queryPlanner')`），在生产库上也可以放心用；加 `{analyze: true}` 才会真的执行一遍（`explain('executionStats')`），拿到每一步扫了多少、返回多少、花了多久。
 
 ```js
-mt.explain(db.orders.find({status: 'PAID'}).sort({createdAt: -1}))   // 游标：会真的执行一遍查询
-mt.explain(db.orders.find({status: 'PAID'}), {analyze: false})       // 只看计划，不执行（queryPlanner）
+mt.explain(db.orders.find({status: 'PAID'}).sort({createdAt: -1}))   // 游标：只看计划，不执行
+mt.explain(db.orders.find({status: 'PAID'}), {analyze: true})        // 真的执行一遍，看扫描数、返回数、耗时
 mt.explain(db.orders.explain('executionStats').aggregate([...]))     // 聚合：先 explain，再把结果交给 mt.explain
 mt.explain(db.orders.aggregate([...]))                               // mongosh 里聚合游标也可以直接传
 mt.explain(1)                                                        // 上一次 mt.slow() / mt.log() 的第 1 行，见下文
@@ -588,7 +590,7 @@ mt.explain(1)                                                        // 上一�
 |---|---|
 | `ns` | 库.集合 |
 | `engine` | 执行引擎：`classic` 经典引擎，`sbe` 新的 slot-based 引擎（5.0 起部分查询使用） |
-| `executionTimeMillis` | 总耗时（毫秒） |
+| `executionTimeMillis` | 总耗时（毫秒）；这一行到 `docsExaminedPerReturned` 只有 `{analyze: true}` 时才有 |
 | `nReturned` | 返回了多少条 |
 | `totalKeysExamined` / `totalDocsExamined` | 一共扫了多少索引键、多少文档 |
 | `docsExaminedPerReturned` | 每返回 1 条要扫多少文档。理想是 1，几十上百说明索引不合适 |
@@ -609,7 +611,7 @@ mt.explain(1)                                                        // 上一�
 走对了索引的：每一步的扫描数和返回数都是 5。
 
 ```
-> mt.explain(db.orders.find({status: 'PAID'}).sort({createdAt: -1}).limit(5))
+> mt.explain(db.orders.find({status: 'PAID'}).sort({createdAt: -1}).limit(5), {analyze: true})
 -- cursor.explain('executionStats')
                      ns: shop.orders
                  engine: classic
@@ -632,7 +634,7 @@ docsExaminedPerReturned: 1
 没有合适的索引：扫了整个集合 2 万条，只要其中 1000 条，还要在内存里排序。这时可以建 `{'customer.name': 1, amount: -1}` 这样的索引。
 
 ```
-> mt.explain(db.orders.find({'customer.name': 'Bob', amount: {$gt: 400}}).sort({amount: -1}))
+> mt.explain(db.orders.find({'customer.name': 'Bob', amount: {$gt: 400}}).sort({amount: -1}), {analyze: true})
 -- cursor.explain('executionStats')
                      ns: shop.orders
                  engine: classic
@@ -676,7 +678,9 @@ docsExaminedPerReturned: 1
 5 rows in set
 ```
 
-- 默认（`executionStats`）会真的执行一遍查询来统计，大查询要注意耗时；只想看计划用 `{analyze: false}`。
+- 默认只看计划：表格里只有计划，没有扫描数、返回数、耗时这几列，也看不出 `docsExaminedPerReturned`；但全表扫描、内存排序、取出后再过滤这些在计划里就能看出来。
+- `{analyze: true}` 会真的执行一遍查询来统计，大查询要注意耗时；写操作（update / delete）只统计，不会真的改数据。
+- 传进来的如果已经是 explain 的结果（如上面第三种写法），里面有什么就显示什么，`analyze` 不起作用。
 - `sbe` 引擎的计划只拿得到每一步的返回行数和耗时，扫描行数只有上面的合计。
 - 分片集群（mongos）的计划会按分片分开显示，但还没测过。
 
@@ -723,10 +727,10 @@ mt.explain(`2026-11-21T15:46:55.624+0000 I COMMAND  [conn2166] command shop.orde
 实际执行的是：
 
 ```js
-db.getSiblingDB('shop').runCommand({explain: {find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}, sort: {createdAt: -1}, limit: 20}, verbosity: 'executionStats'})
+db.getSiblingDB('shop').runCommand({explain: {find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}, sort: {createdAt: -1}, limit: 20}, verbosity: 'queryPlanner'})
 ```
 
-库名、集合名都从这一行里取；`shardVersion`、`$clusterTime`、`$sortKey` 这些自动去掉。4.4 起的 JSON 日志行也一样整行传进来。老的 mongo shell 没有反引号，用单引号包起来，行里的单引号要写成 `\'`。
+要看实际扫了多少、花了多久，在最后加上 `, {analyze: true}`，`verbosity` 就是 `'executionStats'`。库名、集合名都从这一行里取；`shardVersion`、`$clusterTime`、`$sortKey` 这些自动去掉。4.4 起的 JSON 日志行也一样整行传进来。老的 mongo shell 没有反引号，用单引号包起来，行里的单引号要写成 `\'`。
 
 **3. 只复制命令那一段**
 
@@ -755,7 +759,7 @@ mt.explain({find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 'ship
 
 怎么处理的：
 
-- 去掉 mongos、驱动加的字段（`shardVersion`、`databaseVersion`、`lsid`、`$clusterTime`、`readConcern`、投影里的 `$sortKey`...），再用 `db.runCommand({explain: 命令, verbosity: 'executionStats'})` 执行。
+- 去掉 mongos、驱动加的字段（`shardVersion`、`databaseVersion`、`lsid`、`$clusterTime`、`readConcern`、投影里的 `$sortKey`...），再用 `db.runCommand({explain: 命令, verbosity: 'queryPlanner'})` 执行（`{analyze: true}` 时是 `'executionStats'`）。
 - 在哪个库上执行：命令里的 `$db`，或者 `ns` 的库名；都没有就用 `{db: 'shop'}` 选项，再没有就是当前库。
 - 支持 `find`、`aggregate`、`count`、`distinct`、`update`、`delete`、`findAndModify`。profile 和日志里单条的 update / remove 会自动包成 `update` / `delete` 命令；getMore 用它的原始命令（`originatingCommand`）。explain 写操作不会真的修改数据。
 - JSON 日志里的 `{"$date": ...}`、`{"$oid": ...}`、`{"$numberLong": ...}` 会换回真正的类型，否则条件就对不上了。
@@ -777,7 +781,7 @@ sampleRate: 1
 ```
 
 ```
-> mt.explain(1)
+> mt.explain(1, {analyze: true})
 -- db.getSiblingDB('shop').runCommand({explain: {find: orders, filter: {status: shipped, amount: {$gte: 3000}}, sort: {createdAt: -1}, limit: 40}, verbosity: 'executionStats'})
                      ns: shop.orders
                  engine: classic
