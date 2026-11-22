@@ -146,6 +146,17 @@ if (TXN) {
 }
 run('mt.txns bad sort', function () { mt.txns({ sort: 'x' }); }, ["mongotab: mt.txns() 的 sort 可以是 'desc'"]);
 run('mt.txns none', function () { mt.txns(); }, ['没有未提交的事务']);
+run('mt.frag', function () { mt.frag('mtest'); }, ["-- db.getSiblingDB('mtest').getCollectionInfos()", '| orders ', '| reusable ', '合计可回收 ']);
+run('mt.frag db handle', function () { mt.frag(tdb, { cols: 'name,storage', showCmd: false }); }, ['| orders ']);
+run('mt.cache', function () { mt.cache(); }, ['-- db.serverStatus().wiredTiger.cache', 'used: ', '| ns ', '| mtest.orders ', '以上集合在缓存里合计 ']);
+run('mt.cache db', function () { mt.cache('mtest', { cols: 'ns,cached' }); }, ['| mtest.orders ']);
+run('mt.log', function () { mt.log({ cols: 'time,sev,comp,ctx,msg' }); }, ["-- db.adminCommand({getLog: 'global'})", '| time ', '| sev ', '| comp ', '(共 ', '只显示最后 20 行)']);
+run('mt.log n', function () { mt.log(3, { cols: 'sev,msg', table: true }); }, ['3 rows in set', '只显示最后 3 行)']);
+run('mt.log grep', function () { mt.log('connection accepted', { n: 2, cols: 'comp,msg', table: true }); }, ['| NETWORK ', 'onnection accepted']);
+run('mt.log regex', function () { mt.log(/connection ACCEPTED/i, { n: 1, cols: 'msg', table: true }); }, ['onnection accepted', '1 row in set']);
+run('mt.log sev', function () { mt.log({ sev: 'E', n: 5, cols: 'sev,msg' }); }, ["-- db.adminCommand({getLog: 'global'})"]);
+run('mt.log startup', function () { mt.log({ startup: true, n: 50, cols: 'msg', maxCol: 0, table: true }); }, ["getLog: 'startupWarnings'", 'Access control']);
+run('mt.log bad sev', function () { mt.log({ sev: 'x' }); }, ["mongotab: mt.log() 的 sev 可以是 'F'"]);
 run('mt.repl', function () { mt.repl(); }, ['-- rs.status()', 'set: rs0', '| name ', '| PRIMARY ', '| lagSecs |', '1 row in set']);
 run('mt.dbs', function () { mt.dbs(); }, ['| mtest ', '合计 ']);
 run('mt.colls', function () { mt.colls('mtest'); }, ['| orders | ', '| name   | count | size ']);

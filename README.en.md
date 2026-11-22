@@ -334,22 +334,25 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 
 ```
 > mt.cmds()
-+------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                         | description                                                                                                                                                                        |
-+------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST              | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                               |
-| mt.slow({ms, ns, sort})      | mysql.slow_log                | Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first |
-| mt.top({interval, ns})       | sys.schema_table_statistics   | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                       |
-| mt.locks({all})              | sys.innodb_lock_waits         | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                          |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                               |
-| mt.repl()                    | SHOW SLAVE STATUS             | Replica set members, replication lag (seconds), sync source                                                                                                                        |
-| mt.dbs()                     | SHOW DATABASES                | Disk space used by each database                                                                                                                                                   |
-| mt.colls('db')               | SHOW TABLE STATUS             | Documents, data and index size per collection, largest first; current db by default                                                                                                |
-| mt.idx('coll')               | SHOW INDEX FROM t             | Index keys, size, usage count and options                                                                                                                                          |
-| mt.conns()                   | PROCESSLIST GROUP BY host     | Connections per client IP                                                                                                                                                          |
-| mt.oplog()                   | SHOW BINARY LOGS              | Oplog size and how much time it covers                                                                                                                                             |
-| mt.status({interval})        | SHOW GLOBAL STATUS            | Version, role, ops/s, connections, cache and other key metrics                                                                                                                     |
-+------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                            | description                                                                                                                                                                        |
++------------------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                 | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                               |
+| mt.slow({ms, ns, sort})      | mysql.slow_log                   | Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first |
+| mt.top({interval, ns})       | sys.schema_table_statistics      | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                       |
+| mt.locks({all})              | sys.innodb_lock_waits            | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                          |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX    | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                               |
+| mt.repl()                    | SHOW SLAVE STATUS                | Replica set members, replication lag (seconds), sync source                                                                                                                        |
+| mt.dbs()                     | SHOW DATABASES                   | Disk space used by each database                                                                                                                                                   |
+| mt.colls('db')               | SHOW TABLE STATUS                | Documents, data and index size per collection, largest first; current db by default                                                                                                |
+| mt.frag('db')                | TABLES.DATA_FREE                 | Disk space each collection can reuse after deletes, most first; current db by default                                                                                              |
+| mt.idx('coll')               | SHOW INDEX FROM t                | Index keys, size, usage count and options                                                                                                                                          |
+| mt.conns()                   | PROCESSLIST GROUP BY host        | Connections per client IP                                                                                                                                                          |
+| mt.oplog()                   | SHOW BINARY LOGS                 | Oplog size and how much time it covers                                                                                                                                             |
+| mt.status({interval})        | SHOW GLOBAL STATUS               | Version, role, ops/s, connections, cache and other key metrics                                                                                                                     |
+| mt.cache('db')               | sys.innodb_buffer_stats_by_table | WiredTiger cache used by each collection, most first; all databases by default                                                                                                     |
+| mt.log({n, grep, sev})       | performance_schema.error_log     | Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings                                                              |
++------------------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 All accept t() options such as {cols: ...} or {vertical: true}; mt.config({showCmd: false}) hides the native command
 ```
 
@@ -358,7 +361,7 @@ All of them:
 - **Print the native command first**: the `-- ...` line (dimmed in a terminal) is the MongoDB command actually run, so you can copy or check it; turn it off with `mt.config({showCmd: false})`.
 - **Take the same options as `t()`**: `cols`, `exclude`, `limit`, `vertical`, `table` and `tz` all work, e.g. `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`, `mt.idx('orders', {vertical: true})`.
 - **Are read-only**: they never change settings; `mt.slow()` does not turn the profiler on either.
-- **Need monitoring privileges**, such as the `clusterMonitor` role. Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, or `mt.slow()` / `mt.top()` on a mongos, they print a one-line explanation instead of throwing.
+- **Need monitoring privileges**, such as the `clusterMonitor` role. Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, or `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` on a mongos, they print a one-line explanation instead of throwing.
 - **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version; sharded clusters (mongos) are not tested yet.
 
 ### mt.ps(): running operations
@@ -739,6 +742,41 @@ It runs `$collStats` for each collection (views are skipped) and sorts by `stora
 3 rows in set
 ```
 
+### mt.frag(): reusable disk space
+
+Like `DATA_FREE` in MySQL's `information_schema.TABLES`: after deleting a lot of data, which collections have space in their files that can be reclaimed.
+
+```js
+mt.frag()          // current database
+mt.frag('shop')    // another database; a db object works too
+```
+
+WiredTiger does not shrink files when data is deleted; the freed blocks stay in the file for later writes. It runs `$collStats` for each collection and reads `wiredTiger['block-manager']['file bytes available for reuse']`, for indexes too; rows are sorted by reusable data plus indexes, most first, and the last line is the total.
+
+| Column | Meaning |
+|---|---|
+| `storage` | Data file size |
+| `reusable` | Space in it that can be reused |
+| `pct` | Reusable as a share of the data file |
+| `indexSize` / `indexReusable` | Index file size and reusable space in it |
+
+```
+> mt.frag('shop')
+-- db.getSiblingDB('shop').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}]) → wiredTiger['block-manager']
++----------------+---------+----------+-------+-----------+---------------+
+| name           | storage | reusable | pct   | indexSize | indexReusable |
++----------------+---------+----------+-------+-----------+---------------+
+| orders         |  2.0 MB | 952.0 KB | 45.9% |    3.6 MB |        1.2 MB |
+| system.profile | 20.0 KB |      0 B |  0.0% |       0 B |           0 B |
+| users          | 20.0 KB |      0 B |  0.0% |   20.0 KB |           0 B |
++----------------+---------+----------+-------+-----------+---------------+
+3 rows in set
+Total reusable 2.1 MB (data 952.0 KB, indexes 1.2 MB)
+```
+
+- New writes use the reusable space first. To give it back to the operating system, run `compact` on the collection (it no longer blocks reads and writes since 4.4, but it does use I/O), or resync a secondary from scratch.
+- The numbers are as of WiredTiger's last checkpoint (every 60 seconds by default), so data you just deleted takes a moment to show up.
+
 ### mt.idx(): indexes
 
 Like `SHOW INDEX FROM t`.
@@ -872,6 +910,131 @@ activeClients.writers: 0
             cache.max: 7.3 GB
           cache.dirty: 11.0 MB
 ```
+
+### mt.cache(): what is in the cache
+
+Like MySQL's `sys.innodb_buffer_stats_by_table`: which collections take up the WiredTiger cache.
+
+```js
+mt.cache()          // every database
+mt.cache('shop')    // one database only; a db object works too
+```
+
+The lines on top come from `serverStatus().wiredTiger.cache`: `used` (in parentheses, the share of the maximum), `max` (by default half of RAM minus 1 GB, at least 256 MB) and `dirty`, data not yet written back to disk. The table runs `$collStats` for each collection and reads `wiredTiger.cache['bytes currently in the cache']`.
+
+| Column | Meaning |
+|---|---|
+| `ns` | database.collection |
+| `cached` | Data plus indexes in the cache |
+| `data` / `indexes` | Of which data / indexes |
+| `share` | Share of the cache in use |
+
+```
+> mt.cache({limit: 6})
+-- db.serverStatus().wiredTiger.cache; every db: each collection aggregate([{$collStats: {storageStats: {}}}]) → wiredTiger.cache
+ used: 34.1 MB (0.5%)
+  max: 7.3 GB
+dirty: 0 B (0.0%)
++---------------------------+---------+---------+---------+-------+
+| ns                        | cached  | data    | indexes | share |
++---------------------------+---------+---------+---------+-------+
+| shop.orders               | 18.2 MB |  7.6 MB | 10.6 MB | 53.3% |
+| local.oplog.rs            | 14.5 MB | 14.5 MB |     0 B | 42.4% |
+| config.transactions       | 77.3 KB | 75.8 KB |  1.6 KB |  0.2% |
+| shop.system.profile       | 10.5 KB | 10.5 KB |     0 B |  0.0% |
+| config.system.indexBuilds |  6.2 KB |  4.5 KB |  1.7 KB |  0.0% |
+| local.startup_log         |  4.7 KB |  3.5 KB |  1.2 KB |  0.0% |
++---------------------------+---------+---------+---------+-------+
+6 rows in set  (showing the first 6 of 25 rows)
+These collections hold 32.8 MB in the cache, 96.1% of the cache in use
+```
+
+- The cache holds uncompressed data, so a collection can take more cache than its file takes on disk.
+- The collections add up to a little less than `used`; the rest is WiredTiger's own metadata and so on.
+- It runs `$collStats` once per collection, which is slow with thousands of collections; use `mt.cache('shop')` to look at one database.
+- It must run on a mongod; a mongos has no cache.
+- `dirty` staying above roughly 20% of the maximum means writes are coming in faster than they can be written back.
+
+### mt.log(): recent log lines
+
+Like MySQL's `performance_schema.error_log`: read the recent log from the shell without logging in to the server.
+
+```js
+mt.log()                        // last 20 lines
+mt.log(100)                     // last 100 lines
+mt.log('Slow query')            // only lines containing this text (case-insensitive)
+mt.log(/COLLSCAN|IXSCAN/)       // a regex
+mt.log({sev: 'W'})              // only warnings (W), errors (E) and fatal (F)
+mt.log({startup: true})         // startup warnings, e.g. no access control, too few file descriptors
+mt.log('Slow query', {n: 5, vertical: true})   // same options as t()
+```
+
+It runs `db.adminCommand({getLog: 'global'})` and shows the last `n` lines, oldest first.
+
+| Option | Meaning |
+|---|---|
+| `n` | How many of the last lines to show, 20 by default |
+| `grep` | Text (case-insensitive) or a regex; a string or regex as the first argument is `grep` |
+| `sev` | `'F'`, `'E'`, `'W'`, `'I'` or `'D'`: this level and more severe |
+| `startup` | `true` shows the startup warnings (`getLog: 'startupWarnings'`) |
+
+| Column | Meaning |
+|---|---|
+| `time` | Time, in the `tz` time zone |
+| `sev` | Severity: `F` fatal, `E` error, `W` warning, `I` info, `D1`–`D5` debug |
+| `comp` | Component: `NETWORK`, `COMMAND`, `REPL`, `STORAGE`... |
+| `ctx` | Thread, e.g. `conn89`, `listener` |
+| `id` / `attr` | Only in 4.4+ logs: message ID and details |
+| `msg` | Message |
+
+```
+> mt.log({n: 6, cols: 'time,sev,comp,ctx,msg'})
+-- db.adminCommand({getLog: 'global'})
++-------------------------+-----+---------+----------+------------------------------------------+
+| time                    | sev | comp    | ctx      | msg                                      |
++-------------------------+-----+---------+----------+------------------------------------------+
+| 2026-11-22 09:50:17.576 | I   | NETWORK | listener | Connection accepted                      |
+| 2026-11-22 09:50:17.579 | I   | NETWORK | conn84   | client metadata                          |
+| 2026-11-22 09:50:17.579 | I   | ACCESS  | conn84   | Connection not authenticating            |
+| 2026-11-22 09:50:17.580 | I   | NETWORK | conn85   | client metadata                          |
+| 2026-11-22 09:50:17.580 | I   | ACCESS  | conn85   | Connection not authenticating            |
+| 2026-11-22 09:50:17.581 | I   | NETWORK | conn85   | Received first command on ingress con... |
++-------------------------+-----+---------+----------+------------------------------------------+
+6 rows in set
+(showing the last 6 of 755 rows)
+```
+
+```
+> mt.log('COLLSCAN', {n: 1, vertical: true})
+-- db.adminCommand({getLog: 'global'})
+*************************** 1. row ***************************
+time: 2026-11-22 09:50:14.217
+ sev: I
+comp: WRITE
+ ctx: conn79
+  id: 51803
+ msg: Slow query
+attr: {type: remove, ns: shop.orders, appName: mongosh 2.14.2, command: {q: {amount: {$lt: {$numberDecimal: 300}}}, limit: 0}, planSummary: COLLSCAN, planningTimeMicros: 129, totalOplogSlotDurationMicros: 7975, keysExamined: 0, docsExamined: 13333, ndeleted: 8000, keysDeleted: 32000, numYields: 13, locks: {ParallelBatchWriterMode: {acquireCount: {r: 14}}, FeatureCompatibilityVersion: {acquireCount: {w: 14}}, ReplicationStateTransition: {acquireCount: {w: 14}}, Global: {acquireCount: {w: 14}}, Database: {acquireCount: {w: 14}}, Collection: {acquireCount: {w: 14}}}, flowControl: {acquireCount: 14}, readConcern: {level: local, provenance: implicitDefault}, storage: {data: {bytesRead: 124878, timeReadingMicros: 124}}, cpuNanos: 57315703, remote: "192.168.117.6:33208", durationMillis: 64}
+1 row in set
+(showing the last 1 of 4 rows)
+```
+
+```
+> mt.log({startup: true})
+-- db.adminCommand({getLog: 'startupWarnings'})
++-------------------------+-----+---------+---------------+-------+------------------------------------------+------------------------------------------+
+| time                    | sev | comp    | ctx           | id    | msg                                      | attr                                     |
++-------------------------+-----+---------+---------------+-------+------------------------------------------+------------------------------------------+
+| 2026-11-22 09:49:43.633 | W   | CONTROL | initandlisten | 22120 | Access control is not enabled for the... |                                          |
+| 2026-11-22 09:49:43.633 | W   | CONTROL | initandlisten | 22184 | Soft rlimits for open file descriptor... | {currentValue: 20480, recommendedMini... |
++-------------------------+-----+---------+---------------+-------+------------------------------------------+------------------------------------------+
+2 rows in set
+```
+
+- `getLog` keeps only the last 1024 lines in memory; for older lines, read the log file.
+- Since 4.4 the log is JSON: `msg` is a fixed template (such as `Slow query`) and the details are in `attr`, which is cut in a table; use `{vertical: true}` or `{maxCol: 0}` to see it all. Before 4.4 each line is plain text, all in `msg`, with no `id` / `attr` columns.
+- Filters (`grep`, `sev`) apply first, then the last `n` lines are taken; the footer shows how many lines matched.
+- On 4.2 and earlier, startup warnings are multi-line text at level `I` (`** WARNING: ...`), so `{sev: 'W'}` filters them out; use `mt.log({startup: true})` instead.
 
 ### Or wrap the native commands yourself
 
