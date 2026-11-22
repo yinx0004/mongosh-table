@@ -13,7 +13,7 @@
 **Make mongosh readable.**
 
 MongoTab 在 mongosh 里把查询结果排成 MySQL 风格的表格 / `\G` 竖排，不改变你写 MongoDB 命令的方式。单个 JS 文件，无依赖。
-MongoDB 5.0 及更早版本自带的老 `mongo` shell 也能用，见[老的 mongo shell](#老的-mongo-shell)。
+MongoDB 5.0 及更早版本自带的老 `mongo` shell 也能用（v0.2.0 起），见[老的 mongo shell](#老的-mongo-shell)。
 
 **零侵入**：只新增 `t`、`g`、`mt` 三个全局函数（名字被占用就跳过，改用 `mongotab.xxx`）。
 不改 mongosh 的对象、prototype、`.mongoshrc` 或任何配置，退出会话即失效。
@@ -215,7 +215,7 @@ test/format.sh mongo:4.0
 
 ### 老的 mongo shell
 
-从 v0.2.0 起，MongoDB 5.0 及更早版本自带的老 `mongo` 命令（提示符像 `rs0:PRIMARY>`）也能用，加载方法和 mongosh 一样，把命令里的 `mongosh` 换成 `mongo` 即可：
+从 [v0.2.0](https://github.com/yinx0004/mongosh-table/releases/tag/v0.2.0) 起，MongoDB 5.0 及更早版本自带的老 `mongo` 命令（提示符像 `rs0:PRIMARY>`）也能用，加载方法和 mongosh 一样，把命令里的 `mongosh` 换成 `mongo` 即可：
 
 ```js
 load('/path/to/mongotab.js')
@@ -224,6 +224,8 @@ load('/path/to/mongotab.js')
 ```bash
 mongo "mongodb://user@host:27017/admin" /path/to/mongotab.js --shell
 ```
+
+> **版本说明**：v0.1.x 不支持老 shell。v0.1.0 在老 shell 里加载会报 `TypeError: root is undefined`，v0.1.1 会提示“MongoTab 需要 mongosh”。遇到这两种情况，按[下载](#下载)换成最新版即可。改动和测试范围见 [v0.2.0 release 说明](https://github.com/yinx0004/mongosh-table/releases/tag/v0.2.0)。
 
 表格、竖排、CSV 和各种 BSON 类型的显示和 mongosh 里一样，只有下面几点不同，因为老 shell 缺少 mongosh 自带的这些能力：
 
