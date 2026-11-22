@@ -116,6 +116,7 @@ mt.config({tz: 'Asia/Shanghai', maxCol: 60})    // change defaults for this sess
 mt.ps() / mt.slow() / mt.colls() ...            // DBA commands, see the next section
 mt.help()                                       // help: usage, options (with current values), session settings; t() / g() with no arguments too
 mt.cmds()                                       // every DBA command, by category
+mt.check()                                      // health check: common problems in one table
 mt.help('ps')                                   // detailed usage, options and output columns of one command
 ```
 
@@ -337,17 +338,18 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 ```
 > mt.cmds()
 ── Server activity ──
-+------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                         | description                                                                                                                                          |
-+------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.status({interval})        | SHOW GLOBAL STATUS            | Version, role, ops/s, connections, cache and other key metrics                                                                                       |
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST              | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid' |
-| mt.conns()                   | PROCESSLIST GROUP BY host     | Connections per client IP                                                                                                                            |
-| mt.locks({all})              | sys.innodb_lock_waits         | Who is waiting for a lock and who holds it; all = every lock that is held                                                                            |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                 |
-| mt.top({interval, ns})       | sys.schema_table_statistics   | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                         |
-| mt.builds()                  | ALTER TABLE progress          | Index builds in progress: collection, index, phase, progress and how long they have run                                                              |
-+------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+-------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                         | description                                                                                                                                                                                                                            |
++------------------------------+-------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.check({quick, issues})    | mysqltuner / pt-summary       | Health check: replication, oplog, cache, connections, long operations and transactions, TTL, redundant / unused indexes and more, each with OK / WARN / CRIT and advice; quick skips per-collection checks, issues shows only problems |
+| mt.status({interval})        | SHOW GLOBAL STATUS            | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                         |
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST              | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                   |
+| mt.conns()                   | PROCESSLIST GROUP BY host     | Connections per client IP                                                                                                                                                                                                              |
+| mt.locks({all})              | sys.innodb_lock_waits         | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                              |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                   |
+| mt.top({interval, ns})       | sys.schema_table_statistics   | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                           |
+| mt.builds()                  | ALTER TABLE progress          | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                                                |
++------------------------------+-------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Slow queries and plans ──
 +-------------------------+------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -429,6 +431,79 @@ All of them:
 - **Tell logical from disk sizes**: columns with `logical` in the name are the uncompressed data size (BSON), `disk` is what it actually takes on disk (compressed by WiredTiger), and `cached` is what it takes in the in-memory cache (uncompressed). The three can differ several times over for the same data.
 - **Need monitoring privileges**, such as the `clusterMonitor` role. Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, or `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` on a mongos, they print a one-line explanation instead of throwing.
 - **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version; sharded clusters (mongos) are not tested yet.
+
+### mt.check(): health check
+
+Collects common problems into one table: each check gets OK / WARN / CRIT / INFO / SKIP, the value measured, and advice or the command to look closer. Run it first when you take over an unfamiliar instance or start troubleshooting.
+
+```js
+mt.check()                  // every check
+mt.check({issues: true})    // only WARN / CRIT
+mt.check({quick: true})     // skip per-collection checks (indexes, TTL, disk space); for many collections
+```
+
+| Check | Based on | WARN | CRIT |
+|---|---|---|---|
+| Startup warnings | `getLog: 'startupWarnings'` | any | |
+| Writes locked (fsyncLock) | `currentOp` | | locked |
+| FCV | `featureCompatibilityVersion` vs the binary | below the binary version (not raised after an upgrade) | |
+| Replica set members | `rs.status()` | | a member not PRIMARY / SECONDARY / ARBITER, or health != 1 |
+| Replication lag | largest lagSecs | >= 10 s | >= 60 s |
+| Oplog window | oldest to newest entry | < 24 h | < 3 h |
+| Cache used / cache dirty | WiredTiger cache | >= 90% / >= 10% | >= 95% / >= 20% |
+| Read/write tickets | in use / total (before 7.0) | >= 80% | >= 95% |
+| Lock queue | `globalLock.currentQueue` readers + writers | >= 5 | >= 50 |
+| Connections | current / (current + available) | >= 80% | >= 95% |
+| Long-running operations | client operations | over 60 s | over 600 s |
+| Lock waits / long transactions | `waitingForLock` / open 30+ s | any | |
+| TTL thread / profiler | `ttlMonitorEnabled` / a database at level 2 | stopped / any | |
+| Index builds | `currentOp` | INFO | |
+| TTL overdue | as in `mt.ttl()` | overdue by over 1 hour | |
+| Redundant indexes | as in `mt.dupIdx()` | any | |
+| Unused indexes | as in `mt.unusedIdx()`, not unique / ttl | any (only INFO before 7 days of uptime) | |
+| Reusable disk space | as in `mt.frag()`, all user databases | over 30% and over 1 GB | |
+
+An instance with problems: fsyncLock left on (writes queue behind it), the TTL thread stopped (`sessions` over 5 hours overdue), and a redundant index.
+
+```
+> mt.check()
+-- serverStatus, currentOp, replSetGetStatus, getLog, getParameter; every user db: getIndexes, $indexStats, $collStats
+   host: db1
+version: 7.0.48
+   role: PRIMARY (rs0)
+ uptime: 19s
++---------------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
+| check                     | status | value                                                            | advice                                                      |
++---------------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
+| Startup warnings          | WARN   | 2 lines: Access control is not enabled for the database. Read... | mt.log({startup: true})                                     |
+| Writes locked (fsyncLock) | CRIT   | locked                                                           | db.fsyncUnlock()                                            |
+| FCV                       | OK     | FCV 7.0, binary 7.0                                              |                                                             |
+| Replica set members       | OK     | 1 member, all healthy                                            | mt.repl()                                                   |
+| Replication lag           | OK     | 0s                                                               | mt.repl()                                                   |
+| Oplog window              | CRIT   | 7s (0.00 h)                                                      | grow the oplog: replSetResizeOplog; mt.oplog()              |
+| Cache used                | OK     | 0.2% (15.1 MB / 7.3 GB)                                          | mt.cache()                                                  |
+| Cache dirty               | OK     | 0.0% (0 B)                                                       | mt.status()                                                 |
+| Read/write tickets        | OK     | read 1/10, write 1/10                                            | mt.ps()                                                     |
+| Lock queue                | OK     | readers 0, writers 3                                             | mt.locks()                                                  |
+| Connections               | OK     | 10 / 8192 (0.1%)                                                 | mt.conns()                                                  |
+| Long-running operations   | OK     | none over 60 seconds                                             |                                                             |
+| Lock waits                | WARN   | 1                                                                | mt.locks()                                                  |
+| Long transactions         | OK     | none open 30+ seconds                                            |                                                             |
+| Index builds              | OK     | 0                                                                |                                                             |
+| TTL thread                | WARN   | stopped                                                          | db.adminCommand({setParameter: 1, ttlMonitorEnabled: true}) |
+| Profiler                  | OK     | no database at level 2                                           |                                                             |
+| TTL overdue               | WARN   | 1 overdue by over 1 hour, worst 5h 30m                           | mt.ttl()                                                    |
+| Redundant indexes         | WARN   | 1, 116.0 KB in total                                             | mt.dupIdx()                                                 |
+| Unused indexes            | INFO   | up only 19s; check again after 7 days                            | mt.unusedIdx()                                              |
+| Reusable disk space       | OK     | 0 B / 1.4 MB (0.0%)                                              |                                                             |
++---------------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
+CRIT 2, WARN 5, OK 13, INFO 1
+```
+
+- A check that fails (e.g. no privilege) becomes SKIP with the reason; the others still run.
+- Replica set checks are SKIP on a standalone; it must run on a mongod, and on a mongos it prints a one-line explanation.
+- Per-collection checks scan every user database like `mt.dupIdx()` and friends; use `{quick: true}` with thousands of collections.
+- Thresholds are common rules of thumb and do not fit every workload; a WARN is not necessarily a problem, so look closer with the suggested command.
 
 ### mt.ps(): running operations
 

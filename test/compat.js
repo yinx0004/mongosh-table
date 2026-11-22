@@ -85,7 +85,7 @@ run('help', function () { mt.help(); }, ['mt.csv(x, ...)', '  选项（每次调
 run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '── 慢查询和执行计划 ──', '── 存储和索引 ──', '── 复制 ──',
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
-var ALL_CMDS = ['ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
+var ALL_CMDS = ['check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
   'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log'];
 run('mt.help each command', function () {
   var bad = [];
@@ -99,10 +99,10 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 22 ok']);
+}, ['all 23 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
-run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'ps'、'slow'"]);
+run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'check'、'ps'"]);
 run('mt.ps', function () { mt.ps(); }, ['-- db.adminCommand({currentOp: 1, active: true})']);
 run('mt.ps slow query', function () {
   for (var i = 0; i < 20 && !db.currentOp({ ns: 'mtslow.slow' }).inprog.length; i++) sleep(500);
@@ -402,6 +402,23 @@ run('mt.status', function () { mt.status(); }, ['role: PRIMARY (rs0)', 'ops/s.in
 run('mt.status totals', function () { mt.status({ interval: 0, cols: 'opcounters' }); }, ['opcounters.insert: ']);
 run('mt.status en', function () { mt.config({ lang: 'en' }); mt.idx(); mt.config({ lang: 'zh' }); }, ["mongotab: mt.idx() needs a collection"]);
 
+// mt.check：单独的库里放一对冗余索引；停掉 TTL 线程、fsyncLock 时对应的项要报出来
+var ckd = db.getSiblingDB('mtcheck'); ckd.dropDatabase();
+ckd.c.insertOne({ a: 1, b: 1 }); ckd.c.createIndex({ a: 1 }); ckd.c.createIndex({ a: 1, b: 1 });
+run('mt.check', function () { mt.check({ table: true }); }, [
+  '-- serverStatus, currentOp', 'role: PRIMARY (rs0)', 'uptime: ', '| check ', '| 启动警告 ', '| 写入被锁（fsyncLock） | OK ', '| FCV 版本 ', '| 副本集成员 ', '| 复制延迟 ',
+  '| oplog 窗口 ', '| 缓存使用率 ', '| 连接数 ', '| 冗余索引 ', '| WARN   | 1 个，共 ', '| 没被用过的索引 ', 'INFO', '| 可回收的磁盘空间 '
+]);
+run('mt.check problems', function () {
+  db.adminCommand({ setParameter: 1, ttlMonitorEnabled: false });
+  db.fsyncLock();
+  try { mt.check({ quick: true, issues: true, table: true }); } finally { db.fsyncUnlock(); db.adminCommand({ setParameter: 1, ttlMonitorEnabled: true }); }
+}, ['| 写入被锁（fsyncLock） | CRIT ', '| TTL 线程 ', '| WARN   | 已停止 ', 'quick: true']);
+run('mt.check issues only', function () {
+  var o = capOut(function () { mt.check({ issues: true, quick: true }); });
+  print(/\| OK\s/.test(o) ? 'has ok' : 'no ok rows');
+}, ['no ok rows']);
+ckd.dropDatabase();
 run('reload', function () { load('mongotab.js'); t([{ ok: 1 }]); }, ['MongoTab ' + mt.version, '| ok |']);
 
 finish();
