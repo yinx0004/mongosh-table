@@ -5,7 +5,7 @@
 load('test/lib.js');
 load('mongotab.js');
 
-print('### env server=' + db.version() + ' mongosh=' + version());
+print('### env server=' + db.version() + ' shell=' + SHELL);
 mt.config({ lang: 'zh', tz: 'UTC' });
 
 var tdb = db.getSiblingDB('mtest');
@@ -17,7 +17,7 @@ c.insertMany([
     amount: NumberDecimal('1299.50'), qty: NumberInt(2), big: NumberLong('9007199254740993'),
     dbl: 3.14, createdAt: ISODate('2024-01-01T08:30:00.123Z'), remark: null, coupon: '',
     tags: ['a', 'b'], items: [{ sku: 'A', n: 1 }, { sku: 'B', n: 2 }],
-    ts: Timestamp({ t: 1700000000, i: 3 }), uid: UUID('3b241101-e2bb-4255-8caf-4136c566a962'),
+    ts: Timestamp(1700000000, 3), uid: UUID('3b241101-e2bb-4255-8caf-4136c566a962'),
     bin: BinData(0, 'AAECAwQFBgcICQ=='), re: /ab+c/i, mk: MinKey(), Mk: MaxKey(),
     oid: ObjectId('65a1b2c3d4e5f60718293a4b'), note: 'line1\nline2\tx'
   },
@@ -52,7 +52,7 @@ run('aggregate cursor', function () {
   t(c.aggregate([{ $group: { _id: '$coupon', n: { $sum: 1 }, total: { $sum: '$amount' } } }, { $sort: { total: -1 } }]));
 }, ['|       | 1 | 1299.50 |', '| VIP10 | 1 |      88 |', '| NULL  | 1 |       5 |']);
 run('tz +08:00', function () { t(c.find(), { cols: 'orderNo,createdAt', tz: '+08:00' }); }, ['2024-01-01 16:30:00.123']);
-run('tz IANA', function () { t(c.find(), { cols: 'orderNo,createdAt', tz: 'Asia/Shanghai' }); }, ['2024-01-01 17:00:00']);
+runIanaTz('tz IANA', function () { t(c.find(), { cols: 'orderNo,createdAt', tz: 'Asia/Shanghai' }); }, ['2024-01-01 17:00:00']);
 run('csv', function () { mt.csv(c.find(), 'orderNo,customer.name,remark,coupon,qty,amount'); }, [
   'orderNo,customer.name,remark,coupon,qty,amount', 'SO1,张三,NULL,,2,1299.50', 'SO2,Alice,,VIP10,(无字段),88'
 ]);

@@ -1,4 +1,5 @@
 // MongoTab (mongotab.js) — 在 mongosh 里把结果排成 MySQL 风格的表格 / \G 竖排
+// 也能在老的 mongo shell（MongoDB 5.0 及更早版本自带的 mongo 命令）里用。
 //
 //   load('/path/to/mongotab.js')
 //   t(db.orders.find({status: 'PAID'}))          // 表格（太宽自动竖排）
@@ -7,25 +8,20 @@
 //   mt.help()
 //
 // 只新增三个全局函数 t、g、mt（名字已被占用就跳过，并提示改用 mongotab.xxx），
-// 不改 mongosh 的任何对象、prototype 和配置；退出会话即失效。
+// 不改 shell 的任何对象、prototype 和配置；退出会话即失效。
 (function () {
   'use strict';
 
-  var VERSION = '0.1.1';
+  var VERSION = '0.2.0';
   var MARK = '__mongotab__';
 
-  // 老的 mongo shell（MongoDB 4.x 自带的 mongo 命令）不是 mongosh：没有 globalThis / process / Intl。
-  // 在那里只给出提示，不定义任何东西。
-  if (typeof globalThis === 'undefined' || typeof process === 'undefined') {
-    print([
-      'MongoTab 需要 mongosh，不支持老的 mongo shell（MongoDB 4.x 自带的 mongo 命令）。',
-      'MongoDB 4.0 请用 mongosh 1.x，4.2 及以上用 mongosh 1.x 或 2.x，见：',
-      '  https://github.com/yinx0004/mongosh-table#mongodb-40',
-      'MongoTab needs mongosh; the legacy mongo shell is not supported.',
-      'Use mongosh 1.x for MongoDB 4.0, or mongosh 1.x / 2.x for 4.2 and later, see:',
-      '  https://github.com/yinx0004/mongosh-table/blob/main/README.en.md#mongodb-40'
-    ].join('\n'));
-    return;
+  // mongosh 跑在 Node 上，有 globalThis / process / Intl；老的 mongo shell 都没有：
+  // 全局对象用 Function('return this') 拿，环境变量只有 4.4 起的 _getEnv 能读，时区名（Intl）不支持。
+  var root = typeof globalThis !== 'undefined' ? globalThis : Function('return this')();
+  function getEnv(name) {
+    var v = safe(function () { return process.env[name]; });
+    if (v == null && typeof _getEnv === 'function') v = safe(function () { return _getEnv(name); });
+    return v ? String(v) : '';
   }
 
   // ───────────────────────── 配置 ─────────────────────────
@@ -46,10 +42,7 @@
   // ───────────────────────── 提示信息（中 / 英） ─────────────────────────
   function normLang(l) { return /^zh/i.test(String(l || '')) ? 'zh' : 'en'; }
   function detectLang() {
-    var v = safe(function () {
-      var e = process.env;
-      return e.MONGOTAB_LANG || e.LC_ALL || e.LC_MESSAGES || e.LANG;
-    }, '');
+    var v = getEnv('MONGOTAB_LANG') || getEnv('LC_ALL') || getEnv('LC_MESSAGES') || getEnv('LANG');
     if (!v) v = safe(function () { return Intl.DateTimeFormat().resolvedOptions().locale; }, '');
     return normLang(v);
   }
@@ -65,6 +58,7 @@
   var MSG = {
     zh: {
       badTz: function (s) { return "mongotab: 无法识别的时区 '" + s + "'，可用 'UTC'、'local'、'+08:00'、'Asia/Shanghai'"; },
+      noIntl: function (s) { return "mongotab: 老的 mongo shell 不支持时区名 '" + s + "'，请用 'UTC'、'local' 或 '+08:00' 这样的偏移"; },
       more: function (n, next, fn) { return '(只显示前 ' + n + ' 行，还有更多；用 ' + fn + '(x, {limit: ' + next + '}) 看更多)'; },
       partial: function (n, total) { return '(共 ' + total + ' 行，只显示前 ' + n + ' 行)'; },
       missing: '(无字段)',
@@ -91,6 +85,7 @@
     },
     en: {
       badTz: function (s) { return "mongotab: unknown time zone '" + s + "'; try 'UTC', 'local', '+08:00' or 'Asia/Shanghai'"; },
+      noIntl: function (s) { return "mongotab: the legacy mongo shell does not support time zone names like '" + s + "'; use 'UTC', 'local' or an offset such as '+08:00'"; },
       more: function (n, next, fn) { return '(showing the first ' + n + ' rows, more available; use ' + fn + '(x, {limit: ' + next + '}) to see more)'; },
       partial: function (n, total) { return '(showing the first ' + n + ' of ' + total + ' rows)'; },
       missing: '(missing)',
@@ -119,7 +114,7 @@
   function L(lang) { return MSG[normLang(lang)]; }
   function missingText(o) { return o.missingText != null ? String(o.missingText) : L(o.lang).missing; }
 
-  var envTz = safe(function () { return process.env.MONGOTAB_TZ; });
+  var envTz = getEnv('MONGOTAB_TZ');
   var envTzError = null;
   if (envTz) cfg.tz = envTz;
   try { cfg._tz = parseTz(cfg.tz, cfg.lang); } catch (e) {
@@ -133,10 +128,24 @@
   function isDate(v) { return toStr.call(v) === '[object Date]'; }
   function isRegExp(v) { return toStr.call(v) === '[object RegExp]'; }
   function isBytes(v) { return typeof Uint8Array !== 'undefined' && v instanceof Uint8Array; }
+  // 老 mongo shell 的 BSON 值没有 _bsontype，按内部类型标签认，统一成 mongosh 的名字
+  var LEGACY_TYPES = {
+    NumberLong: 'Long', NumberInt: 'Int32', NumberDecimal: 'Decimal128', ObjectId: 'ObjectId',
+    BinData: 'Binary', Timestamp: 'Timestamp', MinKey: 'MinKey', MaxKey: 'MaxKey',
+    DBRef: 'DBRef', DBPointer: 'DBPointer', Code: 'Code'
+  };
   function bsonType(v) {
-    if (v === null || typeof v !== 'object') return null;
+    if (v === null || (typeof v !== 'object' && typeof v !== 'function')) return null;
     var bt = safe(function () { return v._bsontype; });
-    return typeof bt === 'string' ? bt : null;
+    if (typeof bt === 'string') return bt;
+    var tag = toStr.call(v).slice(8, -1);
+    if (Object.prototype.hasOwnProperty.call(LEGACY_TYPES, tag)) return LEGACY_TYPES[tag];
+    // 老 shell 4.2 起，库里读出来的 MinKey / MaxKey 就是这两个函数本身
+    if (typeof v === 'function') {
+      if (typeof MinKey !== 'undefined' && v === MinKey) return 'MinKey';
+      if (typeof MaxKey !== 'undefined' && v === MaxKey) return 'MaxKey';
+    }
+    return null;
   }
   function isLeaf(v) {
     return v === null || v === undefined || typeof v !== 'object' ||
@@ -160,6 +169,7 @@
     if (/^local$/i.test(s)) return { kind: 'local' };
     var m = /^([+-])(\d{1,2})(?::?(\d{2}))?$/.exec(s);
     if (m) return { kind: 'offset', min: (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3] || 0)) };
+    if (typeof Intl === 'undefined') throw new Error(L(lang).noIntl(s));
     try {
       return {
         kind: 'intl',
@@ -209,19 +219,26 @@
     return [t, i];
   }
   function binText(v) {
-    var sub = v.sub_type;
-    var hex = safe(function () { return v.toString('hex'); }, '');
+    var legacy = typeof v.base64 === 'function';          // 老 shell 的 BinData
+    var sub = legacy ? v.subtype() : v.sub_type;
+    var hex = safe(function () { return legacy ? v.hex() : v.toString('hex'); }, '');
     if ((sub === 4 || sub === 3) && hex.length === 32) {
       return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20);
     }
-    var b64 = safe(function () { return v.toString('base64'); }, '');
+    var b64 = safe(function () { return legacy ? v.base64() : v.toString('base64'); }, '');
     var n = hex.length / 2;
     return 'Binary(' + sub + ', ' + (b64.length > 24 ? b64.slice(0, 24) + '...' : b64) + ', ' + n + ' bytes)';
   }
+  // 老 shell 的 NumberLong / NumberDecimal / NumberInt 只能从 NumberLong("123") 这样的文本里取数
+  function numText(v) {
+    var s = String(v.toString());
+    var m = /^Number(?:Long|Decimal|Int)\("?(.*?)"?\)$/.exec(s);
+    return m ? m[1] : s;
+  }
   function bsonText(v, bt, o) {
     switch (bt) {
-      case 'ObjectId': case 'ObjectID': return v.toHexString();
-      case 'Long': case 'Int32': case 'Double': case 'Decimal128': return v.toString();
+      case 'ObjectId': case 'ObjectID': return typeof v.str === 'string' ? v.str : v.toHexString();
+      case 'Long': case 'Int32': case 'Double': case 'Decimal128': return numText(v);
       case 'Timestamp': {
         var p = tsParts(v);
         return dateText(new Date(p[0] * 1000), o._tz) + ' (' + p[0] + ':' + p[1] + ')';
@@ -232,7 +249,7 @@
       case 'BSONRegExp': return '/' + v.pattern + '/' + v.options;
       case 'BSONSymbol': return String(v.value);
       case 'Code': return 'Code(' + String(v.code) + ')';
-      case 'DBRef': return 'DBRef(' + (v.collection || v.namespace) + ', ' + valText(v.oid, true, o) + ')';
+      case 'DBRef': return 'DBRef(' + (v.collection || v.namespace || v.$ref) + ', ' + valText(v.oid !== undefined ? v.oid : v.$id, true, o) + ')';
       default: return safe(function () { return v.toString(); }, '[' + bt + ']');
     }
   }
@@ -247,12 +264,12 @@
     switch (typeof v) {
       case 'string': return nested && NEED_QUOTE.test(v) ? JSON.stringify(v) : v;
       case 'number': case 'bigint': case 'boolean': return String(v);
-      case 'function': return '[Function]';
     }
     if (isDate(v)) return dateText(v, o._tz);
     if (isRegExp(v)) return String(v);
     var bt = bsonType(v);
     if (bt) return bsonText(v, bt, o);
+    if (typeof v === 'function') return '[Function]';
     if (isBytes(v)) return 'Bytes(' + v.length + ')';
     var parts = [], i;
     if (Array.isArray(v)) {
@@ -316,14 +333,29 @@
     if (o.width) return o.width;
     var c = safe(function () { return process.stdout.columns; });
     if (c > 0) return c;
-    c = Number(safe(function () { return process.env.COLUMNS; }));
+    c = Number(getEnv('COLUMNS'));
     return c > 0 ? c : 160;
   }
+
+  // ───────────────────────── 字符串键的 Map ─────────────────────────
+  // 老 mongo shell 用自己的 Map 工具类覆盖了内置 Map（方法是 put，没有 set），
+  // 所以这里用一个按插入顺序保存、只认字符串键的小实现，两种 shell 通用。
+  function StrMap() { this._keys = []; this._vals = Object.create(null); }
+  StrMap.prototype.has = function (k) { return k in this._vals; };
+  StrMap.prototype.get = function (k) { return this._vals[k]; };
+  StrMap.prototype.set = function (k, v) {
+    if (!(k in this._vals)) this._keys.push(k);
+    this._vals[k] = v;
+    return this;
+  };
+  StrMap.prototype.forEach = function (fn) {
+    for (var i = 0; i < this._keys.length; i++) fn(this._vals[this._keys[i]], this._keys[i]);
+  };
 
   // ───────────────────────── 展开 / 选列 ─────────────────────────
   // 嵌套文档展开成 a.b.c；subs 不为空时，把“文档数组”单独收集起来做子表
   function flatten(doc, o, subs) {
-    var out = new Map();
+    var out = new StrMap();
     (function walk(obj, prefix, depth) {
       var ks = Object.keys(obj);
       for (var i = 0; i < ks.length; i++) {
@@ -340,7 +372,7 @@
     if (Array.isArray(s)) return s.map(String);
     return String(s).split(',').map(function (x) { return x.trim(); }).filter(Boolean);
   }
-  var reCache = new Map();
+  var reCache = new StrMap();
   function matchCol(col, pat) {
     if (col === pat || col.indexOf(pat + '.') === 0) return true;
     if (pat.indexOf('*') < 0 && pat.indexOf('?') < 0) return false;
@@ -353,10 +385,10 @@
   }
   function selectCols(cols, inc, exc) {
     if (inc && inc.length) {
-      var out = [], seen = new Set();
+      var out = [], seen = new StrMap();
       for (var i = 0; i < inc.length; i++) {
         for (var j = 0; j < cols.length; j++) {
-          if (!seen.has(cols[j]) && matchCol(cols[j], inc[i])) { seen.add(cols[j]); out.push(cols[j]); }
+          if (!seen.has(cols[j]) && matchCol(cols[j], inc[i])) { seen.set(cols[j], true); out.push(cols[j]); }
         }
       }
       cols = out;
@@ -430,11 +462,11 @@
     out.push(msg);
   }
   function renderRows(rows, o, out, more, total) {
-    var flats = [], cols = [], seen = new Set();
+    var flats = [], cols = [], seen = new StrMap();
     rows.forEach(function (r) {
       var f = flatten(isDoc(r) ? r : { value: r }, o, null);
       flats.push(f);
-      f.forEach(function (_, k) { if (!seen.has(k)) { seen.add(k); cols.push(k); } });
+      f.forEach(function (_, k) { if (!seen.has(k)) { seen.set(k, true); cols.push(k); } });
     });
     cols = selectCols(cols, o.cols, o.exclude);
     if (!rows.length) { footer(0, 0, false, o, out); return; }
@@ -478,11 +510,11 @@
 
   function csvLines(x, o, out) {
     var rows = Array.isArray(x) ? x : [x];
-    var flats = [], cols = [], seen = new Set();
+    var flats = [], cols = [], seen = new StrMap();
     rows.forEach(function (r) {
       var f = flatten(isDoc(r) ? r : { value: r }, o, null);
       flats.push(f);
-      f.forEach(function (_, k) { if (!seen.has(k)) { seen.add(k); cols.push(k); } });
+      f.forEach(function (_, k) { if (!seen.has(k)) { seen.set(k, true); cols.push(k); } });
     });
     cols = selectCols(cols, o.cols, o.exclude);
     var q = function (s) { return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
@@ -575,7 +607,6 @@
   var api = { table: t, vertical: g, csv: csv, config: config, help: help, version: VERSION };
   t[MARK] = g[MARK] = api[MARK] = true;
 
-  var root = typeof globalThis !== 'undefined' ? globalThis : this;
   var skipped = [];
   function define(name, val) {
     var cur = safe(function () { return root[name]; });

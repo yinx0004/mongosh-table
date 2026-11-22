@@ -3,8 +3,8 @@
 [![release](https://img.shields.io/github/v/release/yinx0004/mongosh-table)](https://github.com/yinx0004/mongosh-table/releases/latest)
 [![license](https://img.shields.io/github/license/yinx0004/mongosh-table)](LICENSE)
 [![compat](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml/badge.svg)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
-[![mongosh](https://img.shields.io/badge/mongosh-1.x%20%7C%202.x-47A248?logo=mongodb&logoColor=white)](https://www.mongodb.com/docs/mongodb-shell/)
-[![MongoDB](https://img.shields.io/badge/MongoDB-4.0%20%7C%204.4%20%7C%205.0%20%7C%206.0%20%7C%207.0%20%7C%208.0-47A248?logo=mongodb&logoColor=white)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
+[![shell](https://img.shields.io/badge/shell-mongosh%201.x%20%7C%202.x%20%7C%20legacy%20mongo-47A248?logo=mongodb&logoColor=white)](#老的-mongo-shell)
+[![MongoDB](https://img.shields.io/badge/MongoDB-3.6%20%7C%204.0%20%7C%204.2%20%7C%204.4%20%7C%205.0%20%7C%206.0%20%7C%207.0%20%7C%208.0-47A248?logo=mongodb&logoColor=white)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
 [![platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](#兼容性)
 [![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](mongotab.js)
 
@@ -13,13 +13,14 @@
 **Make mongosh readable.**
 
 MongoTab 在 mongosh 里把查询结果排成 MySQL 风格的表格 / `\G` 竖排，不改变你写 MongoDB 命令的方式。单个 JS 文件，无依赖。
+MongoDB 5.0 及更早版本自带的老 `mongo` shell 也能用，见[老的 mongo shell](#老的-mongo-shell)。
 
 **零侵入**：只新增 `t`、`g`、`mt` 三个全局函数（名字被占用就跳过，改用 `mongotab.xxx`）。
 不改 mongosh 的对象、prototype、`.mongoshrc` 或任何配置，退出会话即失效。
 
 ## 下载
 
-只有一个文件 `mongotab.js`，放到**运行 mongosh 的机器**上（你的电脑或跳板机），哪个目录都行。连接远程 MongoDB 时，服务器上不用放任何东西，见[连接远程 MongoDB](#连接远程-mongodb)。连 MongoDB 4.0 要用 mongosh 1.x，见 [MongoDB 4.0](#mongodb-40)。
+只有一个文件 `mongotab.js`，放到**运行 mongosh 的机器**上（你的电脑或跳板机），哪个目录都行。连接远程 MongoDB 时，服务器上不用放任何东西，见[连接远程 MongoDB](#连接远程-mongodb)。用老的 `mongo` shell 时同样放在运行 `mongo` 的机器上。
 
 Linux / macOS：
 
@@ -182,11 +183,12 @@ mt.help()
 
 ## 兼容性
 
-每个 PR 和每次推送到 main 都会在 GitHub Actions 里跑 [test/compat.js](test/compat.js)，下面每个 MongoDB 版本和每个 mongosh 版本两两组合各跑一遍（共 12 组）：
+每个 PR 和每次推送到 main 都会在 GitHub Actions 里跑 [test/compat.js](test/compat.js)（连真实数据库）：
 
-- MongoDB：4.4、5.0、6.0、7.0、8.0（单节点副本集）
-- mongosh：1.8.0、2.x 最新版
-- MongoDB 4.0 只配 mongosh 1.x：1.8.0、1.10.6（mongosh 2.x 连不了 4.0）
+- mongosh：MongoDB 4.4、5.0、6.0、7.0、8.0 各配 mongosh 1.8.0 和 2.x 最新版；MongoDB 4.0 配 mongosh 1.8.0 和 1.10.6（mongosh 2.x 连不了 4.0）。共 12 组。
+- 老的 mongo shell：MongoDB 3.6、4.0、4.2、4.4、5.0，各用自带的 `mongo` 连同版本的服务器。共 5 组。
+
+都是单节点副本集。另外还跑 [test/format.js](test/format.js)（不连数据库，只测排版、`load()` 路径和 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量）：Linux、macOS、Windows 上的 mongosh 1.8.0 和 2.14.2，以及上面 5 个版本的老 `mongo`。
 
 本地跑（需要 Docker）：
 
@@ -195,24 +197,54 @@ test/run.sh mongo:7.0
 ```
 
 ```bash
-# mongo:4.4 镜像里没有 mongosh，第二个参数指定客户端镜像（mongo:6.0.4 带 mongosh 1.8.0）
+# 第二个参数指定客户端镜像：mongo:6.0.4 带 mongosh 1.8.0
 test/run.sh mongo:4.4 mongo:6.0.4
 ```
 
-另外在 Linux、macOS、Windows 上分别用 mongosh 1.8.0 和 2.14.2 跑 [test/format.js](test/format.js)（共 6 组）。它不连数据库，只测排版、`load()` 路径（含 Windows 的正斜杠和反斜杠写法）以及 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量。本地跑：
+```bash
+# 镜像里没有 mongosh 时自动用老的 mongo；两个都有时用 MONGO_SHELL=mongo 指定
+test/run.sh mongo:4.0
+MONGO_SHELL=mongo test/run.sh mongo:5.0
+```
 
 ```bash
+# 只测排版，不连数据库
 mongosh --nodb test/format.js
+test/format.sh mongo:4.0
+```
+
+### 老的 mongo shell
+
+从 v0.2.0 起，MongoDB 5.0 及更早版本自带的老 `mongo` 命令（提示符像 `rs0:PRIMARY>`）也能用，加载方法和 mongosh 一样，把命令里的 `mongosh` 换成 `mongo` 即可：
+
+```js
+load('/path/to/mongotab.js')
+```
+
+```bash
+mongo "mongodb://user@host:27017/admin" /path/to/mongotab.js --shell
+```
+
+表格、竖排、CSV 和各种 BSON 类型的显示和 mongosh 里一样，只有下面几点不同，因为老 shell 缺少 mongosh 自带的这些能力：
+
+| | mongosh | 老 mongo shell |
+|---|---|---|
+| 时区 | `'UTC'`、`'local'`、`'+08:00'`、`'Asia/Shanghai'` | 不支持 `'Asia/Shanghai'` 这样的时区名，用 `'+08:00'` 这样的偏移 |
+| `MONGOTAB_LANG` / `MONGOTAB_TZ` | 都能读 | 4.4、5.0 能读；3.6–4.2 读不到，默认英文、UTC，用 `mt.config({lang: 'zh', tz: '+08:00'})` 切换 |
+| 终端宽度 | 自动检测 | 读不到，按 160 列算；终端较窄时用 `mt.config({width: 120})` |
+| 颜色 | 终端里自动开启 | 默认关闭，用 `mt.config({color: true})` 打开 |
+
+每次连接都要设的话，可以一起写在启动命令里：
+
+```bash
+mongo "mongodb://user@host:27017/admin" --eval "load('/path/to/mongotab.js'); mt.config({lang: 'zh', tz: '+08:00'})" --shell
 ```
 
 ### MongoDB 4.0
 
-MongoDB 4.0 要用 **mongosh 1.x** 来连：
+MongoDB 4.0 用老的 `mongo`（见上一节）或 **mongosh 1.x** 都可以；mongosh 2.x 不行，它最低要求 MongoDB 4.2，连 4.0 会报 `requires at least 8 (MongoDB 4.2)`。
 
-- mongosh 2.x 最低要求 MongoDB 4.2，连 4.0 会报 `requires at least 8 (MongoDB 4.2)`。
-- MongoDB 5.0 及更早版本自带的老 `mongo` 命令（提示符像 `rs0:PRIMARY>`）不是 mongosh，MongoTab 不支持。从 v0.1.1 起，在老 `mongo` 里 `load()` 会直接提示改用 mongosh，不再报 `root is undefined`；CI 用 3.6、4.0、4.2、4.4、5.0 的老 `mongo` 检查这一点。
-
-mongosh 1.x 解压就能用，不需要 root，也不影响机器上原来的 `mongo`。以 Linux x64 为例（1.10.6 是 1.x 的最后一版）：
+想用 mongosh 的话，1.x 解压就能用，不需要 root，也不影响机器上原来的 `mongo`。以 Linux x64 为例（1.10.6 是 1.x 的最后一版）：
 
 ```bash
 curl -fLO https://downloads.mongodb.com/compass/mongosh-1.10.6-linux-x64.tgz && tar xzf mongosh-1.10.6-linux-x64.tgz
