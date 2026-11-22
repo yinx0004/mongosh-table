@@ -127,7 +127,7 @@ mt.help()
 
 ### For DBAs
 
-Since v0.3.0, `mt` comes with a set of read-only shortcuts for the usual MySQL `SHOW ...` commands:
+Since v0.3.0, `mt` comes with a set of read-only shortcuts for the usual MySQL `SHOW ...` commands (`mt.slow()` and `mt.top()` since v0.4.0):
 
 ```js
 mt.cmds()                     // list all commands
@@ -135,6 +135,10 @@ mt.ps()                       // SHOW PROCESSLIST: running operations, longest f
 mt.ps({secs: 5})              // only those running for more than 5 seconds
 mt.ps({ns: 'shop.orders'})    // only one database or collection
 mt.ps({all: true})            // include idle connections and internal threads
+mt.slow()                     // slow query log: reads system.profile, newest first; current db, or mt.slow('shop')
+mt.slow({ms: 500, ns: 'orders'})  // only those over 500 ms, only one collection
+mt.top()                      // read/write time per collection (ms), sampled 1 second apart, busiest first; like mongotop
+mt.top({interval: 0})         // totals since startup
 mt.repl()                     // SHOW REPLICA STATUS: member state, replication lag (seconds), sync source
 mt.dbs()                      // SHOW DATABASES: disk space per database
 mt.colls('shop')              // SHOW TABLE STATUS: documents, data and index size per collection, largest first; current db if omitted
@@ -173,6 +177,8 @@ date: 2026-11-22 05:02:46.493
 - Each command first prints the native command it runs (the `-- ...` line, dimmed in a terminal) so you can copy or check it. Turn it off with `mt.config({showCmd: false})`.
 - They take the same options as `t()`, e.g. `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`, `mt.colls('shop', {limit: 200})`, `mt.idx('orders', {vertical: true})`.
 - By default `mt.ps()` hides idle connections, internal threads, drivers' awaitable `hello` polls and its own query.
+- `mt.slow()` only reads `system.profile` and never changes profiler settings. The profiler is off by default; when it is, `mt.slow()` tells you to turn it on with `db.setProfilingLevel(1, {slowms: 100})` (set per database).
+- `mt.slow()` and `mt.top()` must run on a mongod; a mongos has no such data.
 - They need monitoring privileges (such as the `clusterMonitor` role). Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, they print a one-line explanation instead of throwing.
 - They work in both the legacy mongo shell and mongosh and are tested in CI on a replica set for every version; sharded clusters (mongos) are not tested yet.
 

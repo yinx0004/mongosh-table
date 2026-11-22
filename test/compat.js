@@ -84,6 +84,20 @@ run('mt.ps slow query', function () {
 run('mt.ps secs filter', function () { mt.ps({ secs: 100000 }); }, ['Empty set']);
 run('mt.ps all', function () { mt.ps({ all: true, cols: 'opid,secs,op,client' }); }, ['| opid ']);
 run('mt.ps ns filter', function () { mt.ps({ ns: 'nosuchdb' }); }, ['Empty set']);
+// mt.slow：在单独的库里开 profiler（slowms 0 记下所有操作），用完关掉
+var pdb = db.getSiblingDB('mtprof');
+pdb.dropDatabase();
+pdb.c.insert({ a: 1 });
+pdb.runCommand({ profile: 1, slowms: 0 });
+pdb.c.find({ a: 1 }).toArray();
+run('mt.slow', function () { mt.slow('mtprof'); }, ['-- db.getSiblingDB(\'mtprof\').system.profile.find({}).sort({ts: -1})', 'level: 1', 'slowms: 0', '| mtprof.c ', '| ts ']);
+run('mt.slow ns filter', function () { mt.slow(pdb, { ns: 'c', cols: 'ns,op,docsExamined,command', showCmd: false }); }, ['| mtprof.c | query ', '{find: c, filter: {a: 1}']);
+run('mt.slow ms filter', function () { mt.slow('mtprof', { ms: 100000000 }); }, ['.find({millis: {$gte: 100000000}})', 'Empty set']);
+pdb.runCommand({ profile: 0, slowms: 100 });
+pdb.dropDatabase();
+run('mt.slow profiler off', function () { mt.slow('mtnoprof'); }, ['level: 0', 'Empty set', '没有开 profiler']);
+run('mt.top totals', function () { mt.top({ interval: 0, ns: 'mtest' }); }, ['-- db.adminCommand({top: 1})，启动以来累计', '| mtest.orders ', '| totalMs |']);
+run('mt.top', function () { mt.top(); }, ['-- db.adminCommand({top: 1})，间隔 1 秒采样两次']);
 run('mt.repl', function () { mt.repl(); }, ['-- rs.status()', 'set: rs0', '| name ', '| PRIMARY ', '| lagSecs |', '1 row in set']);
 run('mt.dbs', function () { mt.dbs(); }, ['| mtest ', '合计 ']);
 run('mt.colls', function () { mt.colls('mtest'); }, ['| orders | ', '| name   | count | size ']);
