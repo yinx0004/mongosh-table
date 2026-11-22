@@ -1201,7 +1201,7 @@ It runs `db.adminCommand({currentOp: 1, $all: true})` and picks the operations t
 ```
 
 - Since 4.4 indexes are built on a background thread while the client's `createIndexes` waits alongside; the two are shown as one row.
-- A build that has not started yet (waiting for a lock, say) shows as `waiting to start`.
+- A client `createIndexes` with no build thread shows as `waiting`: it either has not started yet (waiting for a lock, say) or has finished building and is waiting to commit (since 4.4 a majority of members must finish first).
 - To stop one: since 4.4 drop it with `db.orders.dropIndex('name')`; on earlier versions use `db.killOp(opid)`.
 - On a replica set, secondaries build the index too (at the same time since 4.4); connect to a secondary to see its progress.
 

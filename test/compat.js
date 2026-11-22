@@ -114,7 +114,11 @@ var building = function () {
 for (var bi = 0; bi < 60 && !building(); bi++) sleep(250);
 run('mt.builds', function () { mt.builds({ table: true }); }, ['-- db.adminCommand({currentOp: 1, $all: true})', '| mtbuild.c ', '| a_1_b_1 ', '{a: 1, b: 1}', '| phase ']);
 buildFp.forEach(function (f) { db.adminCommand({ configureFailPoint: f, mode: 'off' }); });
-var built = function () { return bdb.c.getIndexes().some(function (ix) { return ix.name === 'a_1_b_1'; }) && !building(); };
+// 建完的标准：索引已出现、建索引线程已结束、客户端的 createIndexes 也已返回（8.0 上它会多等一会儿提交）
+var createPending = function () {
+  return db.adminCommand({ currentOp: 1, $all: true }).inprog.some(function (op) { return op.command && op.command.createIndexes && /^mtbuild\./.test(op.ns || ''); });
+};
+var built = function () { return bdb.c.getIndexes().some(function (ix) { return ix.name === 'a_1_b_1'; }) && !building() && !createPending(); };
 for (bi = 0; bi < 60 && !built(); bi++) sleep(250);
 run('mt.builds none', function () { mt.builds(); }, ['没有正在建的索引']);
 run('mt.ps ns filter', function () { mt.ps({ ns: 'nosuchdb' }); }, ['Empty set']);

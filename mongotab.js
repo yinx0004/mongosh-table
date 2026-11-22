@@ -92,7 +92,7 @@
       noTtl: '没有 TTL 索引',
       noUnused: '没有没被用过的索引',
       noBuild: '没有正在建的索引',
-      buildWaiting: '等待开始',
+      buildWaiting: '等待中',
       noDup: '没有冗余索引',
       needExplain: "mt.explain() 需要游标、explain 的结果、慢日志里的命令或行号，例如 mt.explain(db.orders.find({status: 'PAID'}))、mt.explain({find: 'orders', filter: {...}})、mt.explain(1)",
       noRow: function (n) { return '没有第 ' + n + ' 行：mt.explain(行号) 用的是上一次 mt.slow() 或 mt.log() 列出的行'; },
@@ -180,7 +180,7 @@
       noTtl: 'no TTL indexes',
       noUnused: 'no unused indexes',
       noBuild: 'no index builds in progress',
-      buildWaiting: 'waiting to start',
+      buildWaiting: 'waiting',
       noDup: 'no redundant indexes',
       needExplain: "mt.explain() needs a cursor, an explain result, a command from a slow log, or a row number, e.g. mt.explain(db.orders.find({status: 'PAID'})), mt.explain({find: 'orders', filter: {...}}) or mt.explain(1)",
       noRow: function (n) { return 'there is no row ' + n + ': mt.explain(n) uses the rows of the last mt.slow() or mt.log()'; },
@@ -1966,7 +1966,8 @@
       byKey[keyOf(op)] = row;
       rows.push(row);
     });
-    // 客户端连接上的 createIndexes：补上客户端和时长；找不到对应的建索引线程的，说明还在等着开始
+    // 客户端连接上的 createIndexes：补上客户端和时长。找不到对应建索引线程的，可能还没开始（如在等锁），
+    // 也可能已经建完、在等提交或写关注（4.4 起），从 currentOp 分不出来，统一显示“等待中”
     ops.forEach(function (op) {
       var c = op.command || {};
       if (!c.createIndexes || /index build/i.test(String(op.msg || ''))) return;
