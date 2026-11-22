@@ -401,8 +401,10 @@ run('mt.idx coll object', function () { mt.idx(c, 'name,key,options'); }, ['| cu
 run('mt.idx missing', function () { mt.idx('nope_no_such'); }, ['mongotab: 集合 test.nope_no_such 不存在']);
 run('mt.conns', function () { mt.conns(); }, ['current: ', '| client ', '| conns |']);
 run('mt.oplog', function () { mt.oplog(); }, ['-- rs.printReplicationInfo()', 'maxLogical: ', 'usedLogical: ', 'disk: ', 'firstEvent: ', 'window: ']);
-run('mt.host', function () { mt.host(); }, ['-- db.hostInfo()', 'host.hostname: ', 'host.platform: 容器（', 'mongod 是 1 号进程', 'host.cpuCores: ', 'host.memory: ', 'os.type: Linux', 'os.maxOpenFiles: ',
-  'mongod.version: ' + db.version(), 'mongod.edition: ', 'mongod.storageEngine: wiredTiger', 'mongod.uptime: ', 'startup.argv: mongod', 'startup.replSet: rs0']);
+// Some servers (6.0.28 on GitHub's x86 runners) return hostInfo without `extra`, so maxOpenFiles is only expected when it is there.
+var hostExtra = db.adminCommand({ hostInfo: 1 }).extra || {};
+run('mt.host', function () { mt.host(); }, ['-- db.hostInfo()', 'host.hostname: ', 'host.platform: 容器（', 'mongod 是 1 号进程', 'host.cpuCores: ', 'host.memory: ', 'os.type: Linux',
+  'mongod.version: ' + db.version(), 'mongod.edition: ', 'mongod.storageEngine: wiredTiger', 'mongod.uptime: ', 'startup.argv: mongod', 'startup.replSet: rs0'].concat(hostExtra.maxOpenFiles != null ? ['os.maxOpenFiles: '] : []));
 run('mt.host cols', function () { mt.host('mongod.version'); }, ['mongod.version: ' + db.version()]);
 run('mt.host all', function () { mt.host({ all: true, cols: 'parsed' }); }, ['parsed.replication.']);
 run('mt.status', function () { mt.status(); }, ['role: PRIMARY (rs0)', 'ops/s.insert: ', 'connections.current: ']);
