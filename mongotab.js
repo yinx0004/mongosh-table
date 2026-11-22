@@ -92,6 +92,9 @@
       noTtl: '没有 TTL 索引',
       noUnused: '没有没被用过的索引',
       noDup: '没有冗余索引',
+      needExplain: "mt.explain() 需要游标或 explain 的结果，例如 mt.explain(db.orders.find({status: 'PAID'}))、mt.explain(db.orders.explain('executionStats').aggregate([...]))",
+      exNote: { fullScan: '全表扫描', memSort: '内存排序', spilled: '用到了磁盘', postFilter: '取出后再过滤', multikey: '多键索引' },
+      exNotes: function (list) { return '注意：' + list.join('；'); },
       cmdDesc: {
         ps: "正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'",
         slow: "慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前",
@@ -103,6 +106,7 @@
         ttl: 'TTL 索引：过期时间、最早一条的时间、超期了多久，以及 TTL 线程的状态；默认所有库',
         unusedIdx: '没被用过的索引（ops = 0），大的在前；默认所有用户库',
         dupIdx: '冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库',
+        explain: '执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；analyze: false 只看计划不执行',
         log: "最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告",
         repl: '副本集成员状态、复制延迟（秒）、同步源',
         dbs: '各库占用的磁盘空间',
@@ -128,7 +132,7 @@
           helpRow("t(x, {tz: '+08:00'})", '本次用指定时区显示时间'),
           helpRow('mt.csv(x, ...)', '输出 CSV（贴进 Excel）'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'en'})", '改本会话默认值'),
-          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.locks()、mt.txns()、mt.frag()、mt.cache()、mt.ttl()、mt.log()、mt.unusedIdx()、mt.dupIdx()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
+          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.locks()、mt.txns()、mt.frag()、mt.cache()、mt.ttl()、mt.log()、mt.unusedIdx()、mt.dupIdx()、mt.explain()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
           '',
           '  示例：'
         ].concat(HELP_EXAMPLES, ['', '  显示约定：' + (nul || '空白') + ' = 值为 null；空白 = 空字符串 ""；' +
@@ -169,6 +173,9 @@
       noTtl: 'no TTL indexes',
       noUnused: 'no unused indexes',
       noDup: 'no redundant indexes',
+      needExplain: "mt.explain() needs a cursor or an explain result, e.g. mt.explain(db.orders.find({status: 'PAID'})) or mt.explain(db.orders.explain('executionStats').aggregate([...]))",
+      exNote: { fullScan: 'full scan', memSort: 'in-memory sort', spilled: 'spilled to disk', postFilter: 'filtered after fetch', multikey: 'multikey' },
+      exNotes: function (list) { return 'Note: ' + list.join('; '); },
       cmdDesc: {
         ps: "Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'",
         slow: "Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first",
@@ -180,6 +187,7 @@
         ttl: 'TTL indexes: expiry, oldest document, how far past expiry, and the TTL thread; all databases by default',
         unusedIdx: 'Indexes never used (ops = 0), largest first; all user databases by default',
         dupIdx: 'Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default',
+        explain: 'Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; analyze: false = plan only, no execution',
         log: "Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings",
         repl: 'Replica set members, replication lag (seconds), sync source',
         dbs: 'Disk space used by each database',
@@ -205,7 +213,7 @@
           helpRow("t(x, {tz: '+08:00'})", 'Show times in this time zone for this call'),
           helpRow('mt.csv(x, ...)', 'Print CSV (paste into Excel)'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'zh'})", 'Change defaults for this session'),
-          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.locks(), mt.txns(), mt.frag(), mt.cache(), mt.ttl(), mt.log(), mt.unusedIdx(), mt.dupIdx(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
+          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.locks(), mt.txns(), mt.frag(), mt.cache(), mt.ttl(), mt.log(), mt.unusedIdx(), mt.dupIdx(), mt.explain(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
           '',
           '  Examples:'
         ].concat(HELP_EXAMPLES, ['', '  Conventions: ' + (nul || 'blank') + ' = value is null; blank = empty string ""; ' +
@@ -1567,6 +1575,116 @@
     emit(out);
   }
 
+  // ─── 执行计划。树从上往下：最上面是最后一步（结果），缩进最深的是最先执行的（读索引 / 读集合）。
+  // 经典引擎：executionStats.executionStages 就是带统计的计划树。
+  // SBE（explainVersion 2）：可读的树在 winningPlan.queryPlan，executionStages 是底层的 SBE 阶段，
+  // 按 planNodeId 对回去，只拿得到每个节点的返回行数和耗时；扫描行数只有表头的合计
+  function exChildren(n) {
+    var out = [];
+    if (Array.isArray(n.shards)) {   // 分片：每个分片一棵子树
+      n.shards.forEach(function (sh) {
+        var t = sh.executionStages || sh.winningPlan;
+        if (t) out.push({ stage: 'shard ' + (sh.shardName || ''), _child: t.queryPlan || t });
+      });
+      return out;
+    }
+    Object.keys(n).forEach(function (k) {
+      var v = n[k];
+      if (isDoc(v) && typeof v.stage === 'string') out.push(v);
+      else if (Array.isArray(v)) v.forEach(function (x) { if (isDoc(x) && typeof x.stage === 'string') out.push(x); });
+    });
+    return out;
+  }
+  // indexBounds 的每个区间本来就是字符串，如 {status: ['["PAID", "PAID"]']}：直接拼起来，不再加引号
+  function boundsText(b, o) {
+    if (!isDoc(b)) return valText(b, true, o);
+    return Object.keys(b).map(function (k) {
+      var v = b[k];
+      return k + ' ' + (Array.isArray(v) ? v.map(String).join(' or ') : valText(v, true, o));
+    }).join(', ');
+  }
+  function sbeStats(root) {
+    var by = {};
+    (function walk(n) {
+      if (!isDoc(n)) return;
+      if (n.planNodeId != null && !by[n.planNodeId]) by[n.planNodeId] = n;   // 同一个节点取最上面那层
+      exChildren(n).forEach(walk);
+    })(root);
+    return by;
+  }
+  function explain(x, opts) {
+    var o = dbaOpts(opts, ['nReturned', 'keysExamined', 'docsExamined', 'ms']), out = [];
+    var m = M(), analyze = o.analyze !== false, verb = analyze ? 'executionStats' : 'queryPlanner';
+    var ex;
+    if (x && typeof x.explain === 'function') {
+      cmdLine(o, "cursor.explain('" + verb + "')", out);
+      ex = unwrap(x.explain(verb));
+    } else {
+      ex = unwrap(x);
+      if (!isDoc(ex) || !(ex.queryPlanner || ex.stages)) fail(m.needExplain);
+    }
+    // 聚合：$cursor 之后的阶段在树的上面，倒过来排
+    var stages = Array.isArray(ex.stages) ? ex.stages : [];
+    var cur = ex.queryPlanner ? ex : null, rest = [];
+    stages.forEach(function (st) {
+      var k = Object.keys(st).filter(function (key) { return key.charAt(0) === '$'; })[0];
+      if (k === '$cursor') cur = st.$cursor;
+      else if (k) rest.push({ name: k, st: st });
+    });
+    var qp = cur ? cur.queryPlanner || {} : {}, es = cur ? cur.executionStats || null : null;
+    var sbe = String(ex.explainVersion) === '2' || !!(qp.winningPlan && qp.winningPlan.queryPlan);
+    var wp = qp.winningPlan ? qp.winningPlan.queryPlan || qp.winningPlan : null;
+    var root = sbe ? wp : (es && es.executionStages) || wp, sbeBy = sbe && es ? sbeStats(es.executionStages) : {};
+    var rows = [], notes = new StrMap(), depth = 0;
+    var note = function (row, key) { row.note = row.note ? row.note + ', ' + m.exNote[key] : m.exNote[key]; notes.set(key, true); };
+    for (var i = rest.length - 1; i >= 0; i--) {
+      var r = rest[i], spec = {};
+      spec[r.name] = r.st[r.name];
+      var row = { stage: '  '.repeat(depth) + r.name, index: '', nReturned: r.st.nReturned != null ? toNum(r.st.nReturned) : '',
+        keysExamined: '', docsExamined: '', ms: r.st.executionTimeMillisEstimate != null ? toNum(r.st.executionTimeMillisEstimate) : '',
+        detail: valText(r.st[r.name], true, o), note: '' };
+      if (r.st.usedDisk) note(row, 'spilled');
+      rows.push(row);
+      depth++;
+    }
+    (function walk(n, d) {
+      if (!isDoc(n)) return;
+      if (n._child) { rows.push({ stage: '  '.repeat(d) + n.stage, index: '', nReturned: '', keysExamined: '', docsExamined: '', ms: '', detail: '', note: '' }); walk(n._child, d + 1); return; }
+      var st = sbe && n.planNodeId != null ? sbeBy[n.planNodeId] || {} : n;
+      var num = function (v) { return v != null ? toNum(v) : ''; };
+      var row = { stage: '  '.repeat(d) + n.stage, index: n.indexName || '', nReturned: num(st.nReturned),
+        keysExamined: sbe ? '' : num(n.keysExamined), docsExamined: sbe ? '' : num(n.docsExamined), ms: num(st.executionTimeMillisEstimate), detail: '', note: '' };
+      if (n.indexBounds) row.detail = boundsText(n.indexBounds, o);
+      else if (n.sortPattern) row.detail = 'sort ' + valText(n.sortPattern, true, o);
+      else if (n.filter) row.detail = 'filter ' + valText(n.filter, true, o);
+      else if (n.limitAmount != null) row.detail = 'limit ' + toNum(n.limitAmount);
+      else if (n.skipAmount != null) row.detail = 'skip ' + toNum(n.skipAmount);
+      else if (n.transformBy) row.detail = valText(n.transformBy, true, o);
+      if (n.stage === 'COLLSCAN') note(row, 'fullScan');
+      if (n.stage === 'SORT') note(row, 'memSort');
+      if (n.usedDisk) note(row, 'spilled');
+      if (n.isMultiKey) note(row, 'multikey');
+      if (n.stage === 'FETCH' && n.filter) note(row, 'postFilter');
+      rows.push(row);
+      exChildren(n).forEach(function (c) { walk(c, d + 1); });
+    })(root, depth);
+    var h = { ns: qp.namespace, engine: sbe ? 'sbe' : 'classic' };
+    if (es) {
+      h.executionTimeMillis = toNum(es.executionTimeMillis); h.nReturned = toNum(es.nReturned);
+      h.totalKeysExamined = toNum(es.totalKeysExamined); h.totalDocsExamined = toNum(es.totalDocsExamined);
+      var nr = toNum(es.nReturned), de = toNum(es.totalDocsExamined);
+      if (de > 0) h.docsExaminedPerReturned = nr > 0 ? Math.round(de / nr * 10) / 10 : 'Infinity';
+    }
+    if (qp.rejectedPlans) h.rejectedPlans = qp.rejectedPlans.length;
+    if (qp.indexFilterSet) h.indexFilterSet = true;
+    headOut(h, Object.assign({}, o, { cols: null, exclude: null }), out);
+    renderRows(rows, o, out, false, rows.length);
+    var nl = [];
+    notes.forEach(function (_, k) { nl.push(m.exNote[k]); });
+    if (nl.length) out.push(m.exNotes(nl));
+    emit(out);
+  }
+
   // 日志：getLog 只保留内存里最近的 1024 行。4.4 起每行是 JSON，之前是文本：
   // 2024-01-01T08:30:00.123+0000 I NETWORK  [listener] connection accepted ...
   var SEV_RANK = { F: 0, E: 1, W: 2, I: 3, D: 4 };
@@ -1629,6 +1747,7 @@
     ["mt.colls('db')", 'SHOW TABLE STATUS', 'colls'],
     ["mt.frag('db')", 'TABLES.DATA_FREE', 'frag'],
     ["mt.idx('coll')", 'SHOW INDEX FROM t', 'idx'],
+    ['mt.explain(cursor)', 'EXPLAIN ANALYZE', 'explain'],
     ["mt.unusedIdx('db')", 'sys.schema_unused_indexes', 'unusedIdx'],
     ["mt.dupIdx('db')", 'sys.schema_redundant_indexes', 'dupIdx'],
     ['mt.conns()', 'PROCESSLIST GROUP BY host', 'conns'],
@@ -1651,7 +1770,7 @@
     table: t, vertical: g, csv: csv, config: config, help: help, version: VERSION,
     cmds: cmds, ps: dba(ps), slow: dba(slow), top: dba(top), locks: dba(locks), txns: dba(txns), repl: dba(repl), dbs: dba(dbs), colls: dba(colls), idx: dba(idx),
     conns: dba(conns), oplog: dba(oplog), status: dba(status), frag: dba(frag), cache: dba(cache), ttl: dba(ttl), log: dba(log),
-    unusedIdx: dba(unusedIdx), dupIdx: dba(dupIdx)
+    unusedIdx: dba(unusedIdx), dupIdx: dba(dupIdx), explain: dba(explain)
   };
   t[MARK] = g[MARK] = api[MARK] = true;
 

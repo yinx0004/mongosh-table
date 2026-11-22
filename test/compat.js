@@ -217,6 +217,18 @@ run('mt.dupIdx all dbs', function () { mt.dupIdx({ cols: 'ns,index' }); }, ['| m
 run('mt.unusedIdx all dbs', function () { mt.unusedIdx({ cols: 'ns,index' }); }, ['| mtidx.c ']);
 run('mt.dupIdx none', function () { mt.dupIdx('mtest'); }, ['Empty set', '没有冗余索引']);
 ixd.dropDatabase();
+// mt.explain：mtest.orders 上有 customer.name_1_createdAt_-1 索引；amount / qty 上没有索引
+run('mt.explain index', function () { mt.explain(c.find({ 'customer.name': 'Alice' }), { table: true }); }, [
+  "-- cursor.explain('executionStats')", 'engine: classic', 'totalKeysExamined: 1', 'nReturned: 1', 'IXSCAN', '| customer.name_1_createdAt_-1 ', 'FETCH'
+]);
+run('mt.explain collscan sort', function () { mt.explain(c.find({ amount: { $gt: 1 } }).sort({ qty: -1 }), { table: true }); }, [
+  'SORT', 'COLLSCAN', '全表扫描', '内存排序', '注意：', 'docsExaminedPerReturned: '
+]);
+run('mt.explain plan only', function () { mt.explain(c.find({ 'customer.name': 'Bob' }), { analyze: false }); }, ["-- cursor.explain('queryPlanner')", 'IXSCAN']);
+run('mt.explain aggregate', function () {
+  mt.explain(c.explain('executionStats').aggregate([{ $match: { qty: { $gte: 1 } } }, { $group: { _id: '$qty', n: { $sum: 1 } } }]), { table: true });
+}, ['engine: ', 'COLLSCAN', '全表扫描']);
+run('mt.explain bad input', function () { mt.explain({ a: 1 }); }, ['mongotab: mt.explain() 需要游标或 explain 的结果']);
 run('mt.repl', function () { mt.repl(); }, ['-- rs.status()', 'set: rs0', '| name ', '| PRIMARY ', '| lagSecs |', '1 row in set']);
 run('mt.dbs', function () { mt.dbs(); }, ['| name ', '| disk ', '| mtest ', '合计 ']);
 run('mt.colls', function () { mt.colls('mtest'); }, ['| orders | ', '| name   | count | logical | disk ']);
