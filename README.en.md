@@ -102,53 +102,287 @@ A `~` in command-line arguments is expanded by your shell, so this works; a `~` 
 
 ## Usage
 
+Quick reference first; the sections below have the details.
+
 ```js
-t(db.orders.find({status: 'PAID'}))              // table; switches to vertical when too wide
-g(db.orders.findOne())                           // vertical, like MySQL \G
+t(db.orders.find({status: 'PAID'}))          // table; switches to vertical when too wide
+g(db.orders.findOne())                       // vertical, like \G
 t(db.orders.find(), 'orderNo,customer,amount')   // pick columns; customer = all of customer.*
 t(db.orders.find(), {exclude: 'items,raw.*'})    // exclude columns
-t(db.orders.find(), {limit: 200})                // shows at most 50 rows by default
+t(db.orders.find(), {limit: 200})                // 50 rows by default
 t(db.orders.find(), {tz: '+08:00'})              // show times in UTC+8 for this call
-mt.csv(db.orders.find(), 'orderNo,amount')       // print CSV, ready to paste into Excel
-mt.config({tz: 'Asia/Shanghai', maxCol: 60})     // change defaults for this session
-mt.ps() / mt.repl() / mt.colls() ...             // DBA commands, see below
-mt.help()
+mt.csv(db.orders.find(), 'orderNo,amount')      // print CSV to paste into Excel
+mt.config({tz: 'Asia/Shanghai', maxCol: 60})    // change defaults for this session
+mt.ps() / mt.slow() / mt.colls() ...            // DBA commands, see the next section
+mt.help()                                       // help; t() / g() with no arguments also show it
+```
+
+All examples below come from a 3-node replica set (`db1` / `db2` / `db3`) with 20,000 orders in `shop.orders`; the output is real.
+
+### Tables and vertical output: t() / g()
+
+```js
+t(x)                 // table
+t(x, 'a,b,c')        // a string as the second argument picks columns
+t(x, {limit: 200})   // an object as the second argument sets options, see "All options"
+g(x)                 // vertical; same arguments as t()
+```
+
+`x` can be:
+
+| Input | Examples | Shown as |
+|---|---|---|
+| A cursor | `find()`, `aggregate()`, with or without `.sort()` / `.limit()` | One row per document, at most `limit` rows (50 by default) |
+| An array | `toArray()`, `getIndexes()`, `currentOp().inprog`, `rs.status().members` | One row per element |
+| A single document | `findOne()`, `rs.status()`, `serverStatus()`, `db.stats()` | Vertical `field: value`; arrays of documents inside become sub-tables |
+| Anything else | a number, a string | Printed as is |
+
+- **Table or vertical**: `t()` builds a table and switches to vertical output when it is wider than the terminal; `{table: true}` always keeps the table (the terminal wraps long lines). `g()` is always vertical, the same as `t(x, {vertical: true})`.
+- **Nested documents** become `a.b` columns such as `customer.name`; `{depth: 1}` expands one level only and puts anything deeper in a single cell, like `{city: Shanghai, zip: 200000}`.
+- **Plain arrays** show as `[a, b]` and arrays of documents as `[{...}, {...}]`; inside a single document, an array of documents (such as `members` in `rs.status()`) becomes its own sub-table.
+- **Column order** follows the order in which fields first appear; a document without a field shows `(missing)`, see [Display conventions](#display-conventions).
+- Numbers are right-aligned; CJK characters count as two columns; cells longer than `maxCol` (40 by default) are cut to `...` in tables, never in vertical output.
+
+```
+> t(db.orders.find({status: 'PAID'}).sort({_id: 1}).limit(3), 'orderNo,customer,amount,createdAt')
++---------------+---------------+--------------+--------+---------------------+
+| orderNo       | customer.name | customer.vip | amount | createdAt           |
++---------------+---------------+--------------+--------+---------------------+
+| SO20240101001 | Alice         | false        |    1.5 | 2024-01-01 08:31:00 |
+| SO20240101002 | Bob           | false        |    2.5 | 2024-01-01 08:32:00 |
+| SO20240101004 | 张三          | false        |    4.5 | 2024-01-01 08:34:00 |
++---------------+---------------+--------------+--------+---------------------+
+3 rows in set
 ```
 
 ```
-+---------------+---------------+---------+---------------------+
-| orderNo       | customer.name | amount  | createdAt           |
-+---------------+---------------+---------+---------------------+
-| SO20240101001 | 张三          | 1299.50 | 2024-01-01 16:30:00 |
-| SO20240101002 | Alice         |   88.00 | 2024-01-01 17:00:00 |
-+---------------+---------------+---------+---------------------+
+> g(db.orders.findOne({orderNo: 'SO20240101001'}))
+          _id: 6b02a27307cd0862525ce7b2
+      orderNo: SO20240101001
+       status: PAID
+       amount: 1.5
+customer.name: Alice
+ customer.vip: false
+    createdAt: 2024-01-01 08:31:00
+       coupon: 
+       remark: NULL
+
+── items (1) ──
+*************************** 1. row ***************************
+sku: A1
+  n: 2
+1 row in set
+```
+
+```
+> t(db.orders.aggregate([{$group: {_id: '$status', n: {$sum: 1}, total: {$sum: '$amount'}}}, {$sort: {_id: 1}}]))
++------+-------+-----------+
+| _id  | n     | total     |
++------+-------+-----------+
+| NEW  |  6667 | 1666666.5 |
+| PAID | 13333 | 3333333.5 |
++------+-------+-----------+
 2 rows in set
 ```
 
-### For DBAs
-
-Since v0.3.0, `mt` comes with a set of read-only shortcuts for the usual MySQL `SHOW ...` commands:
+### Picking and excluding columns
 
 ```js
-mt.cmds()                     // list all commands
-mt.ps()                       // SHOW PROCESSLIST: running operations, longest first
-mt.ps({secs: 5})              // only those running for more than 5 seconds
-mt.ps({ns: 'shop.orders'})    // only one database or collection
-mt.ps({all: true})            // include idle connections and internal threads
-mt.ps({sort: 'asc'})          // shortest running first; 'opid' sorts by opid, or pass a sort document such as {ns: 1, secs: -1}
-mt.slow()                     // slow query log: reads system.profile, newest first; current db, or mt.slow('shop')
-mt.slow({ms: 500, ns: 'orders'})  // only those over 500 ms, only one collection
-mt.slow({sort: 'ms'})         // slowest first; 'asc' = oldest first, or a sort document such as {docsExamined: -1}
-mt.top()                      // read/write time per collection (ms), sampled 1 second apart, busiest first; like mongotop
-mt.top({interval: 0})         // totals since startup
-mt.repl()                     // SHOW REPLICA STATUS: member state, replication lag (seconds), sync source
-mt.dbs()                      // SHOW DATABASES: disk space per database
-mt.colls('shop')              // SHOW TABLE STATUS: documents, data and index size per collection, largest first; current db if omitted
-mt.idx('orders')              // SHOW INDEX: index keys, size, usage count; 'shop.orders' or db.orders also work
-mt.conns()                    // connections per client IP
-mt.oplog()                    // SHOW BINARY LOGS: oplog size and how much time it covers
-mt.status()                   // SHOW GLOBAL STATUS: version, role, ops/s (sampled 1 second apart), connections, cache
+t(x, 'orderNo,customer,amount')            // a comma-separated string
+t(x, ['orderNo', 'customer', 'amount'])    // or an array
+t(x, {cols: 'orderNo,amount', limit: 10})  // use cols together with other options
+t(x, {exclude: '_id,items,raw.*'})         // exclude columns
 ```
+
+- Columns appear in the order you list them.
+- `customer` means `customer` plus all of `customer.*`.
+- Wildcards: `*` matches any characters and `?` matches one, e.g. `'*.name'`, `'customer.*'`, `'item?'`.
+- `cols` and `exclude` work together: pick first, then exclude.
+- For a single document, columns can reach into sub-tables: `'members.name'` shows only the `name` column of `members`; if nothing about `members` is listed, that sub-table is left out.
+
+```
+> t(db.orders.find().sort({_id: 1}).limit(2), {exclude: '_id,items'})
++---------------+--------+--------+---------------+--------------+---------------------+-----------+-----------+-----------+
+| orderNo       | status | amount | customer.name | customer.vip | createdAt           | level     | coupon    | remark    |
++---------------+--------+--------+---------------+--------------+---------------------+-----------+-----------+-----------+
+| SO20240101000 | NEW    |    0.5 | 张三          | true         | 2024-01-01 08:30:00 | gold      | (missing) | (missing) |
+| SO20240101001 | PAID   |    1.5 | Alice         | false        | 2024-01-01 08:31:00 | (missing) |           | NULL      |
++---------------+--------+--------+---------------+--------------+---------------------+-----------+-----------+-----------+
+2 rows in set
+```
+
+```
+> t(rs.status(), 'set,myState,members.name,members.stateStr,members.health')
+    set: rs0
+myState: 1
+
+── members (3) ──
++-----------+-----------+--------+
+| name      | stateStr  | health |
++-----------+-----------+--------+
+| db1:27017 | PRIMARY   |      1 |
+| db2:27017 | SECONDARY |      1 |
+| db3:27017 | SECONDARY |      1 |
++-----------+-----------+--------+
+3 rows in set
+```
+
+### Row limit
+
+- Cursors show at most 50 rows by default. When there are more, the footer tells you how to see them:
+
+```
+> t(db.orders.find().sort({_id: 1}), {cols: 'orderNo,status', limit: 3})
++---------------+--------+
+| orderNo       | status |
++---------------+--------+
+| SO20240101000 | NEW    |
+| SO20240101001 | PAID   |
+| SO20240101002 | PAID   |
++---------------+--------+
+3 rows in set  (showing the first 3 rows, more available; use t(x, {limit: 200}) to see more)
+```
+
+- `{limit: 0}` means no limit; `mt.config({limit: 200})` changes the default for the session.
+- Arrays are cut at `limit` too, and the footer says "showing the first M of N rows".
+- To fetch less from the server, put `.limit(n)` on the cursor itself; that saves traffic compared with `{limit: n}`.
+
+### Dates and time zones
+
+Dates show in UTC as `2024-01-01 08:30:00`, with `.123` when there are milliseconds.
+
+```js
+t(x, {tz: '+08:00'})          // UTC+8 for this call
+t(x, {tz: 'Asia/Shanghai'})   // an IANA name (not in the legacy mongo shell; use an offset there)
+t(x, {tz: 'local'})           // the time zone of the machine running the shell
+mt.config({tz: '+08:00'})     // default for this session
+```
+
+You can also set `MONGOTAB_TZ=+08:00` before starting the shell, see [Options](#options).
+
+```
+> t(db.orders.find().sort({_id: 1}).limit(2), {cols: 'orderNo,createdAt', tz: '+08:00'})
++---------------+---------------------+
+| orderNo       | createdAt           |
++---------------+---------------------+
+| SO20240101000 | 2024-01-01 16:30:00 |
+| SO20240101001 | 2024-01-01 16:31:00 |
++---------------+---------------------+
+2 rows in set
+```
+
+### CSV export: mt.csv()
+
+```js
+mt.csv(db.orders.find({status: 'PAID'}), 'orderNo,customer.name,amount')
+```
+
+- Same arguments as `t()`: columns, `exclude`, `limit` and `tz` all work. Cursors stop at `limit` rows; arrays are printed in full.
+- Values with commas, quotes or line breaks are quoted by CSV rules; there are no colors or footer, so you can paste the output straight into Excel.
+- `NULL`, empty strings and `(missing)` follow the same conventions as tables.
+
+```
+> mt.csv(db.orders.find().sort({_id: 1}).limit(3), 'orderNo,customer.name,amount,remark')
+orderNo,customer.name,amount,remark
+SO20240101000,张三,0.5,(missing)
+SO20240101001,Alice,1.5,NULL
+SO20240101002,Bob,2.5,(missing)
+```
+
+### All options
+
+Every option can be passed to a single call (`t(x, {maxCol: 80})`) or set as the session default with `mt.config()`.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `cols` | all | Only these columns, see "Picking and excluding columns" |
+| `exclude` | none | Leave these columns out |
+| `limit` | `50` | Max rows for cursors and arrays; `0` = no limit |
+| `table` | `false` | Always a table, never switch to vertical |
+| `vertical` | `false` | Always vertical; `g()` is `vertical: true` |
+| `tz` | `'UTC'` | Time zone: `'UTC'`, `'local'`, `'+08:00'`, `'Asia/Shanghai'` |
+| `maxCol` | `40` | Max width of a table cell; longer values are cut to `...`; `0` = never cut |
+| `width` | auto | Terminal width; wider tables switch to vertical. 160 when it cannot be detected |
+| `depth` | all | How many levels of nested documents to expand |
+| `color` | auto | `true` / `false`: bold headers, dimmed `(missing)` and so on; off when not a terminal |
+| `nullText` | `'NULL'` | What a null value shows as |
+| `missingText` | follows `lang` | What a missing field shows as: `(missing)` / `(无字段)` by default |
+| `lang` | auto | `'en'` / `'zh'`: language of messages and help |
+| `showCmd` | `true` | DBA commands print the native command first |
+
+DBA commands have their own options too (`secs`, `ns`, `sort`, `interval`...); see each command in the next section.
+
+### Session defaults: mt.config()
+
+```js
+mt.config()                                  // show the current settings
+mt.config({tz: '+08:00', limit: 100})        // change them for this session
+```
+
+```
+> mt.config()
+{"limit":50,"maxCol":40,"tz":"UTC","nullText":"NULL","missingText":null,"color":null,"width":200,"depth":null,"showCmd":true,"lang":"en"}
+```
+
+- Settings last for the current shell session only; running `load()` again also resets them.
+- To make them stick, use the `MONGOTAB_TZ` and `MONGOTAB_LANG` environment variables, see [Options](#options).
+- If the names `t`, `g` or `mt` are already taken by another script, MongoTab leaves them alone and says so when it loads; use `mongotab.table()`, `mongotab.vertical()`, `mongotab.ps()` and so on instead, which work the same way.
+
+## For DBAs
+
+`mt` comes with a set of read-only shortcuts for the usual MySQL `SHOW ...` commands. `mt.cmds()` lists them:
+
+```
+> mt.cmds()
++------------------------------+-----------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                       | description                                                                                                                                                                        |
++------------------------------+-----------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST            | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                               |
+| mt.slow({ms, ns, sort})      | mysql.slow_log              | Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first |
+| mt.top({interval, ns})       | sys.schema_table_statistics | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                       |
+| mt.repl()                    | SHOW SLAVE STATUS           | Replica set members, replication lag (seconds), sync source                                                                                                                        |
+| mt.dbs()                     | SHOW DATABASES              | Disk space used by each database                                                                                                                                                   |
+| mt.colls('db')               | SHOW TABLE STATUS           | Documents, data and index size per collection, largest first; current db by default                                                                                                |
+| mt.idx('coll')               | SHOW INDEX FROM t           | Index keys, size, usage count and options                                                                                                                                          |
+| mt.conns()                   | PROCESSLIST GROUP BY host   | Connections per client IP                                                                                                                                                          |
+| mt.oplog()                   | SHOW BINARY LOGS            | Oplog size and how much time it covers                                                                                                                                             |
+| mt.status({interval})        | SHOW GLOBAL STATUS          | Version, role, ops/s, connections, cache and other key metrics                                                                                                                     |
++------------------------------+-----------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+All accept t() options such as {cols: ...} or {vertical: true}; mt.config({showCmd: false}) hides the native command
+```
+
+All of them:
+
+- **Print the native command first**: the `-- ...` line (dimmed in a terminal) is the MongoDB command actually run, so you can copy or check it; turn it off with `mt.config({showCmd: false})`.
+- **Take the same options as `t()`**: `cols`, `exclude`, `limit`, `vertical`, `table` and `tz` all work, e.g. `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`, `mt.idx('orders', {vertical: true})`.
+- **Are read-only**: they never change settings; `mt.slow()` does not turn the profiler on either.
+- **Need monitoring privileges**, such as the `clusterMonitor` role. Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, or `mt.slow()` / `mt.top()` on a mongos, they print a one-line explanation instead of throwing.
+- **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version; sharded clusters (mongos) are not tested yet.
+
+### mt.ps(): running operations
+
+Like `SHOW PROCESSLIST`. It runs `db.adminCommand({currentOp: 1, active: true})`.
+
+| Option | Meaning |
+|---|---|
+| `secs` | Only operations running for at least this many seconds, e.g. `{secs: 5}` |
+| `ns` | Only one database or collection: `'shop'` matches every collection in `shop`, `'shop.orders'` only that one |
+| `all` | `true` uses `$all: true` instead, including idle connections and internal threads |
+| `sort` | `'desc'` (default, longest running first), `'asc'` (shortest first), `'opid'`, or a sort document on the column names such as `{ns: 1, secs: -1}`; ties fall back to longest running first |
+
+| Column | Meaning |
+|---|---|
+| `opid` | Operation ID, the one `db.killOp(opid)` takes |
+| `secs` | Seconds it has been running |
+| `op` | `query`, `getmore`, `insert`, `update`, `remove`, `command`; `idle` for idle connections |
+| `ns` | database.collection |
+| `client` | Client IP:port |
+| `app` | The client's appName, e.g. `mongosh 2.14.2`, `OplogFetcher` |
+| `lock` | `WAIT` while waiting for a lock |
+| `plan` | Plan summary; `COLLSCAN` is a full collection scan |
+| `command` | The command, without driver fields such as `lsid` and `$clusterTime` |
+
+Hidden by default: idle connections, internal threads with no client, drivers' awaitable `hello` polls, and the `mt.ps()` query itself.
 
 ```
 > mt.ps()
@@ -156,74 +390,411 @@ mt.status()                   // SHOW GLOBAL STATUS: version, role, ops/s (sampl
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
 | opid | secs | op      | ns             | client              | app            | lock | plan                                | command                                  |
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
-| 1625 |    9 | query   | shop.orders    | 192.168.147.5:47218 | mongosh 2.14.2 |      | IXSCAN { status: 1, createdAt: -1 } | {find: orders, filter: {$where: sleep... |
-| 1791 |    0 | getmore | local.oplog.rs | 192.168.147.3:41478 | OplogFetcher   |      | COLLSCAN                            | {getMore: 7311352941832819751, collec... |
-| 1790 |    0 | getmore | local.oplog.rs | 192.168.147.4:55718 | OplogFetcher   |      | COLLSCAN                            | {getMore: 8081156913663858071, collec... |
+| 1867 |    9 | query   | shop.orders    | 192.168.117.5:55214 | mongosh 2.14.2 |      | IXSCAN { status: 1, createdAt: -1 } | {find: orders, filter: {$where: sleep... |
+| 2032 |    0 | getmore | local.oplog.rs | 192.168.117.3:38576 | OplogFetcher   |      | COLLSCAN                            | {getMore: 3734861326900604230, collec... |
+| 2033 |    0 | getmore | local.oplog.rs | 192.168.117.4:59068 | OplogFetcher   |      | COLLSCAN                            | {getMore: 6599645867319134113, collec... |
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
 3 rows in set
-
-> mt.repl()
--- rs.status()
- set: rs0
-date: 2026-11-22 05:02:46.493
-+-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
-| name      | state     | health | lagSecs | optime              | syncSource | pingMs | lastHeartbeat           | self |
-+-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
-| db1:27017 | PRIMARY   |      1 |       0 | 2026-11-22 05:02:36 |            |        |                         | *    |
-| db2:27017 | SECONDARY |      1 |       0 | 2026-11-22 05:02:36 | db1:27017  |      0 | 2026-11-22 05:02:45.284 |      |
-| db3:27017 | SECONDARY |      1 |       0 | 2026-11-22 05:02:36 | db1:27017  |      0 | 2026-11-22 05:02:45.284 |      |
-+-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
-3 rows in set
 ```
 
-- Each command first prints the native command it runs (the `-- ...` line, dimmed in a terminal) so you can copy or check it. Turn it off with `mt.config({showCmd: false})`.
-- They take the same options as `t()`, e.g. `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`, `mt.colls('shop', {limit: 200})`, `mt.idx('orders', {vertical: true})`.
-- By default `mt.ps()` hides idle connections, internal threads, drivers' awaitable `hello` polls and its own query. `sort` is applied in the shell to the filtered rows; a sort document uses the output column names (`opid`, `secs`, `op`, `ns`, `client`, `app`...), and ties fall back to longest running first.
-- `mt.slow()` only reads `system.profile` and never changes profiler settings. The profiler is off by default; when it is, `mt.slow()` tells you to turn it on with `db.setProfilingLevel(1, {slowms: 100})` (set per database).
-- `mt.slow()` and `mt.top()` must run on a mongod; a mongos has no such data.
-- They need monitoring privileges (such as the `clusterMonitor` role). Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, they print a one-line explanation instead of throwing.
-- They work in both the legacy mongo shell and mongosh and are tested in CI on a replica set for every version; sharded clusters (mongos) are not tested yet.
+```
+> mt.ps({all: true, cols: 'opid,secs,op,ns,client,app', limit: 5})
+-- db.adminCommand({currentOp: 1, $all: true})
++------+------+---------+-------------+---------------------+----------------+
+| opid | secs | op      | ns          | client              | app            |
++------+------+---------+-------------+---------------------+----------------+
+| 1867 |    9 | query   | shop.orders | 192.168.117.5:55214 | mongosh 2.14.2 |
+| 1876 |    8 | command | admin.$cmd  | 192.168.117.5:55198 | mongosh 2.14.2 |
+| 2037 |    0 | command | admin.$cmd  | 192.168.117.6:60902 | mongosh 2.14.2 |
+|      |    0 | idle    |             | 192.168.117.3:38586 |                |
+|      |    0 | idle    |             | 192.168.117.2:39932 |                |
++------+------+---------+-------------+---------------------+----------------+
+5 rows in set  (showing the first 5 of 74 rows)
+```
 
-#### How mt.slow() works
+### mt.slow(): slow queries
 
-It reads what the profiler writes to the `system.profile` collection of the current database, roughly:
+Like the MySQL slow query log. It reads what the profiler writes to the `system.profile` collection.
 
 ```js
-db.getProfilingStatus()                        // level / slowms / sampleRate in the header
-db.system.profile.find({...}).sort({ts: -1})   // newest first by default; see sort below
+mt.slow()                           // current database
+mt.slow('shop')                     // another database; a db object works too: mt.slow(db.getSiblingDB('shop'))
+mt.slow({ms: 500, ns: 'orders'})    // only those over 500 ms, only the orders collection
+mt.slow('shop', {sort: 'ms'})       // slowest first
 ```
 
-- The profiler is set per database: `level` 0 is off, 1 records operations slower than `slowms`, 2 records everything; `sampleRate` is the fraction sampled. `mt.slow()` only reads; it never changes these settings.
-- Filters: `ms` becomes `{millis: {$gte: ms}}`; `ns` takes a collection name (`'orders'`) or a full `'db.collection'`. Reads of `system.profile` itself and `profile` commands are always left out, so at level 2 you do not see `mt.slow()` itself.
-- `sort`: `'desc'` (default) is `{ts: -1}`, newest first; `'asc'` is `{ts: 1}`, oldest first; `'ms'` is `{millis: -1, ts: -1}`, slowest first; or pass a sort document such as `{docsExamined: -1}`.
-- It first runs `count` for the total, then sorts and takes the first `limit` entries (50 by default, `{limit: 0}` for all); when there are more, the footer says "showing the first 50 of N rows". So by default you get the 50 newest, and with `{sort: 'ms'}` the 50 slowest.
-- Per row: `ts` time, `ms` duration (`millis`), `op`, `ns`, `plan` (`planSummary`, e.g. `COLLSCAN` or `IXSCAN {...}`), `keysExamined` / `docsExamined` index keys and documents scanned, `nreturned` documents returned, `client`, `user`, and `command` (without driver fields such as `lsid` and `$clusterTime`). Without authentication `user` is always empty, so that column is hidden.
+| Option | Meaning |
+|---|---|
+| `ms` | Only operations that took at least this many milliseconds; becomes `{millis: {$gte: ms}}` |
+| `ns` | A collection name (`'orders'`) or a full `'db.collection'` |
+| `sort` | `'desc'` (default, `{ts: -1}`, newest first), `'asc'` (`{ts: 1}`, oldest first), `'ms'` (`{millis: -1, ts: -1}`, slowest first), or a sort document such as `{docsExamined: -1}` |
+
+The header shows the profiler settings:
+
+- The profiler is set per database: `level` 0 is off, 1 records operations slower than `slowms` milliseconds, 2 records everything; `sampleRate` is the fraction sampled.
+- It is off by default. When it is, `mt.slow()` tells you to turn it on with `db.setProfilingLevel(1, {slowms: 100})`, which you run in each database.
+
+| Column | Meaning |
+|---|---|
+| `ts` | When the operation finished |
+| `ms` | Duration in milliseconds (`millis`) |
+| `op` | `query`, `update`, `command`... |
+| `ns` | database.collection |
+| `plan` | Plan summary, e.g. `COLLSCAN`, `IXSCAN { status: 1 }` |
+| `keysExamined` / `docsExamined` | Index keys and documents scanned |
+| `nreturned` | Documents returned |
+| `client` / `user` | Client IP and user; without authentication `user` is always empty, so that column is hidden |
+| `command` | The command, without driver fields |
+
+```
+> mt.slow()
+-- db.getSiblingDB('shop').system.profile.find({}).sort({ts: -1})
+        db: shop
+     level: 1
+    slowms: 20
+sampleRate: 1
++-------------------------+-----+--------+-------------+-------------------------------------+--------------+--------------+-----------+---------------+------------------------------------------+
+| ts                      | ms  | op     | ns          | plan                                | keysExamined | docsExamined | nreturned | client        | command                                  |
++-------------------------+-----+--------+-------------+-------------------------------------+--------------+--------------+-----------+---------------+------------------------------------------+
+| 2026-11-22 08:06:12.189 |  46 | update | shop.orders | COLLSCAN                            |            0 |        20000 |           | 192.168.117.5 | {q: {customer.vip: true}, u: {$set: {... |
+| 2026-11-22 08:06:12.140 | 186 | query  | shop.orders | IXSCAN { status: 1, createdAt: -1 } |           80 |           80 |        80 | 192.168.117.5 | {find: orders, filter: {$where: sleep... |
++-------------------------+-----+--------+-------------+-------------------------------------+--------------+--------------+-----------+---------------+------------------------------------------+
+2 rows in set
+```
+
+```
+> mt.slow({sort: 'ms', limit: 2, vertical: true})
+-- db.getSiblingDB('shop').system.profile.find({}).sort({millis: -1, ts: -1})
+        db: shop
+     level: 1
+    slowms: 20
+sampleRate: 1
+*************************** 1. row ***************************
+          ts: 2026-11-22 08:06:12.140
+          ms: 186
+          op: query
+          ns: shop.orders
+        plan: IXSCAN { status: 1, createdAt: -1 }
+keysExamined: 80
+docsExamined: 80
+   nreturned: 80
+      client: 192.168.117.5
+     command: {find: orders, filter: {$where: sleep(1) || true, status: NEW}, limit: 80}
+*************************** 2. row ***************************
+          ts: 2026-11-22 08:06:12.189
+          ms: 46
+          op: update
+          ns: shop.orders
+        plan: COLLSCAN
+keysExamined: 0
+docsExamined: 20000
+   nreturned: 
+      client: 192.168.117.5
+     command: {q: {customer.vip: true}, u: {$set: {level: gold}}, multi: true, upsert: false}
+2 rows in set
+```
+
+```
+> mt.slow('crm')
+-- db.getSiblingDB('crm').system.profile.find({}).sort({ts: -1})
+        db: crm
+     level: 0
+    slowms: 20
+sampleRate: 1
+Empty set
+the profiler is off (level 0); turn it on with db.setProfilingLevel(1, {slowms: 100})
+```
+
+How it works:
+
+- It runs `profile: -1` for the header (the same as `db.getProfilingStatus()`), `count` for the number of matching entries, then `find(filter).sort(sort).limit(limit)`. So by default you get the 50 newest, and with `{sort: 'ms'}` the 50 slowest; when there are more than `limit`, the footer gives the total.
+- Reads of `system.profile` itself and `profile` commands are always left out, so at level 2 you do not see `mt.slow()` itself.
 - `docsExamined` far above `nreturned`, or a `COLLSCAN` plan, usually means a missing index.
 - `system.profile` is a 1 MB capped collection that overwrites its oldest entries when full, so it only covers recent activity.
 
-#### How mt.top() works
+### mt.top(): time per collection
 
-Like mongotop, it uses `db.adminCommand({top: 1})`. mongod keeps per-collection totals since startup: time (microseconds) and count:
+Like mongotop: which collections are busiest.
 
 ```js
-totals: {
-  "shop.orders": {
-    total:     { time: 244000, count: 22 },   // all operations
-    readLock:  { time: 2000,   count: 5 },    // reads
-    writeLock: { time: 242000, count: 17 },   // writes
-    ...
-  },
-  ...
-}
+mt.top()                    // two samples 1 second apart: time spent in that second
+mt.top({interval: 5})       // 5 seconds apart
+mt.top({interval: 0})       // one sample: totals since startup
+mt.top({ns: 'shop'})        // only the shop database; 'shop.orders' for one collection
 ```
 
-- By default it takes two samples with a 1-second `sleep` in between (change it with `interval`); the difference is the time each collection used in that second. `{interval: 0}` takes one sample and shows the totals since startup.
-- Per row: `totalMs`, `readMs` and `writeMs` come from the `time` of `total`, `readLock` and `writeLock` (converted to milliseconds, rounded); `ops` comes from `total.count`.
+| Column | Meaning |
+|---|---|
+| `ns` | database.collection |
+| `totalMs` | Time spent by all operations in the interval (ms) |
+| `readMs` / `writeMs` | Of which under read locks / write locks |
+| `ops` | Number of operations |
+
+```
+> mt.top()
+-- db.adminCommand({top: 1}), sampled twice 1s apart; time spent in between (ms)
++----------------+---------+--------+---------+-----+
+| ns             | totalMs | readMs | writeMs | ops |
++----------------+---------+--------+---------+-----+
+| shop.orders    |   10338 |  10338 |       0 |   1 |
+| local.oplog.rs |       0 |      0 |       0 |   2 |
++----------------+---------+--------+---------+-----+
+2 rows in set
+```
+
+```
+> mt.top({interval: 0, ns: 'shop'})
+-- db.adminCommand({top: 1}), totals since startup (ms)
++---------------------+---------+--------+---------+-----+
+| ns                  | totalMs | readMs | writeMs | ops |
++---------------------+---------+--------+---------+-----+
+| shop.orders         |   10818 |  10537 |     280 |  49 |
+| shop.users          |       7 |      0 |       7 |   1 |
+| shop.system.profile |       0 |      0 |       0 |   4 |
+| shop.system.js      |       0 |      0 |       0 |   4 |
++---------------------+---------+--------+---------+-----+
+4 rows in set
+```
+
+How it works:
+
+- It runs `db.adminCommand({top: 1})`. mongod keeps per-collection totals since startup, time in microseconds and count:
+
+  ```js
+  totals: {
+    "shop.orders": {
+      total:     { time: 244000, count: 22 },   // all operations
+      readLock:  { time: 2000,   count: 5 },    // reads
+      writeLock: { time: 242000, count: 17 },   // writes
+      ...
+    },
+    ...
+  }
+  ```
+
+- By default it takes two samples with a 1-second `sleep` in between; the difference is the time each collection used in that second. `totalMs`, `readMs` and `writeMs` come from the `time` of `total`, `readLock` and `writeLock` (converted to milliseconds, rounded); `ops` comes from `total.count`.
 - Collections with no activity in the interval are left out; rows are sorted by `totalMs`, highest first.
-- `top` records time when an operation **finishes**: a long query still running is not counted until it ends; use `mt.ps()` for those.
+- `top` records time when an operation **finishes**, all at once. That is why the 1-second sample above shows over 10,000 ms for `shop.orders`: a long query had just finished a batch. Use `mt.ps()` for operations still running.
 - Some operations take neither a read nor a write lock, so `readMs + writeMs` can be less than `totalMs`.
 
-#### Or wrap the native commands yourself
+### mt.repl(): replica set status
+
+Like `SHOW REPLICA STATUS`. It runs `rs.status()` and only works on a replica set member.
+
+| Column | Meaning |
+|---|---|
+| `name` | Member address |
+| `state` | `PRIMARY`, `SECONDARY`, `ARBITER`, `RECOVERING`... |
+| `health` | 1 is up, 0 is unreachable |
+| `lagSecs` | Replication lag in seconds: the primary's optime minus this member's; without a primary, compared with the member with the latest optime |
+| `optime` | Time of the last operation this member applied |
+| `syncSource` | The member it syncs from |
+| `pingMs` | Heartbeat round-trip time |
+| `lastHeartbeat` | When the last heartbeat arrived |
+| `self` | `*` marks the member you are connected to |
+
+```
+> mt.repl()
+-- rs.status()
+ set: rs0
+date: 2026-11-22 08:06:23.473
++-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
+| name      | state     | health | lagSecs | optime              | syncSource | pingMs | lastHeartbeat           | self |
++-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
+| db1:27017 | PRIMARY   |      1 |       0 | 2026-11-22 08:06:12 |            |        |                         | *    |
+| db2:27017 | SECONDARY |      1 |       0 | 2026-11-22 08:06:12 | db1:27017  |      0 | 2026-11-22 08:06:22.561 |      |
+| db3:27017 | SECONDARY |      1 |       0 | 2026-11-22 08:06:12 | db1:27017  |      0 | 2026-11-22 08:06:22.562 |      |
++-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
+3 rows in set
+```
+
+### mt.dbs(): database sizes
+
+Like `SHOW DATABASES`. It runs `listDatabases`, sorts by name and ends with the total. `size` is disk usage (`sizeOnDisk`).
+
+```
+> mt.dbs()
+-- db.adminCommand({listDatabases: 1})
++--------+----------+-------+
+| name   | size     | empty |
++--------+----------+-------+
+| admin  |  80.0 KB | false |
+| config | 168.0 KB | false |
+| crm    |  40.0 KB | false |
+| local  |   1.8 MB | false |
+| shop   |   2.2 MB | false |
++--------+----------+-------+
+5 rows in set
+Total 4.2 MB
+```
+
+### mt.colls(): collection sizes
+
+Like `SHOW TABLE STATUS`.
+
+```js
+mt.colls()          // current database
+mt.colls('shop')    // another database; a db object works too
+```
+
+It runs `$collStats` for each collection (views are skipped) and sorts by `storage + indexSize`, largest first.
+
+| Column | Meaning |
+|---|---|
+| `count` | Number of documents |
+| `size` | Data size (uncompressed) |
+| `storage` | Disk space used by the data (compressed) |
+| `indexes` | Number of indexes |
+| `indexSize` | Disk space used by the indexes |
+
+```
+> mt.colls()
+-- db.getSiblingDB('shop').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}])
++----------------+-------+--------+----------+---------+-----------+
+| name           | count | size   | storage  | indexes | indexSize |
++----------------+-------+--------+----------+---------+-----------+
+| orders         | 20000 | 3.6 MB | 956.0 KB |       4 |    1.2 MB |
+| users          |     2 |   68 B |  20.0 KB |       1 |   20.0 KB |
+| system.profile |     3 | 5.0 KB |   4.0 KB |       0 |       0 B |
++----------------+-------+--------+----------+---------+-----------+
+3 rows in set
+```
+
+### mt.idx(): indexes
+
+Like `SHOW INDEX FROM t`.
+
+```js
+mt.idx('orders')          // orders in the current database
+mt.idx('shop.orders')     // another database
+mt.idx(db.orders)         // a collection object
+```
+
+It uses `getIndexes()` for the definitions, `$indexStats` for usage and `$collStats` for each index's size.
+
+| Column | Meaning |
+|---|---|
+| `name` | Index name |
+| `key` | Index key |
+| `size` | Disk usage |
+| `ops` | Times queries used it since `since`; an index that stays at 0 may be worth dropping |
+| `since` | When counting started (reset when mongod restarts or the index is rebuilt) |
+| `options` | `unique`, `sparse`, `ttl=seconds`, `partial=filter`, `hidden`, `collation=locale` |
+
+```
+> mt.idx('orders')
+-- db.getSiblingDB('shop').getCollection('orders').getIndexes(); aggregate([{$indexStats: {}}])
++-----------------------+----------------------------+----------+-----+-------------------------+----------------+
+| name                  | key                        | size     | ops | since                   | options        |
++-----------------------+----------------------------+----------+-----+-------------------------+----------------+
+| _id_                  | {_id: 1}                   | 508.0 KB |   6 | 2026-11-22 08:06:11.520 |                |
+| orderNo_1             | {orderNo: 1}               | 248.0 KB |   1 | 2026-11-22 08:06:11.646 | unique         |
+| status_1_createdAt_-1 | {status: 1, createdAt: -1} | 232.0 KB |  32 | 2026-11-22 08:06:11.699 |                |
+| ttl_createdAt         | {createdAt: 1}             | 232.0 KB |   0 | 2026-11-22 08:06:11.747 | ttl=315360000s |
++-----------------------+----------------------------+----------+-----+-------------------------+----------------+
+4 rows in set
+```
+
+### mt.conns(): where connections come from
+
+Counts connections per client IP, so you can see which machine or application holds the most.
+
+- The lines on top come from `db.serverStatus().connections`: `current` open connections, `available` how many more can be opened, `totalCreated` how many were opened since startup.
+- The table comes from `currentOp` with `$all: true`: `conns` connections, `active` how many of them are running an operation, `apps` their appNames.
+
+```
+> mt.conns()
+-- db.serverStatus().connections; db.adminCommand({currentOp: 1, $all: true})
+     current: 17
+   available: 8175
+totalCreated: 66
++---------------+-------+--------+----------------+
+| client        | conns | active | apps           |
++---------------+-------+--------+----------------+
+| 192.168.117.3 |     4 |      1 | OplogFetcher   |
+| 192.168.117.4 |     4 |      1 | OplogFetcher   |
+| 192.168.117.5 |     4 |      2 | mongosh 2.14.2 |
+| 192.168.117.6 |     4 |      1 | mongosh 2.14.2 |
+| 192.168.117.2 |     1 |      0 |                |
++---------------+-------+--------+----------------+
+5 rows in set
+```
+
+### mt.oplog(): oplog window
+
+Like `SHOW BINARY LOGS`; it answers the same question as `rs.printReplicationInfo()`: how much time the oplog covers. Only works on a replica set member.
+
+| Field | Meaning |
+|---|---|
+| `maxSize` | Oplog size limit |
+| `usedSize` | How much is used |
+| `firstEvent` / `lastEvent` | Times of the oldest and newest entries |
+| `window` | The difference. A secondary that is down or behind for longer than this needs a full resync |
+| `now` | Current time |
+
+```
+> mt.oplog()
+-- rs.printReplicationInfo()
+   maxSize: 1.3 GB
+  usedSize: 9.5 MB
+firstEvent: 2026-11-22 08:05:58
+ lastEvent: 2026-11-22 08:06:12
+    window: 14s (0.00 h)
+       now: 2026-11-22 08:06:23.515
+```
+
+The example is a freshly created replica set, so the window is only seconds long; in production it is usually dozens of hours or more.
+
+### mt.status(): key metrics
+
+Like `SHOW GLOBAL STATUS`: the `serverStatus` metrics people look at most.
+
+```js
+mt.status()                 // two samples 1 second apart; ops/s and network/s are per second
+mt.status({interval: 5})    // 5 seconds apart
+mt.status({interval: 0})    // one sample: opcounters totals since startup
+```
+
+| Field | Meaning |
+|---|---|
+| `host` / `version` / `role` / `uptime` | Host, version, role (with the replica set name), uptime |
+| `ops/s.*` | insert / query / update / delete / getmore / command per second |
+| `connections.*` | Open connections and how many more are available |
+| `activeClients.*` | Clients running reads / writes right now |
+| `queue.*` | Reads / writes waiting for a lock; staying above 0 means pressure |
+| `network/s.*` | Bytes in / out per second |
+| `mem.*` | Resident and virtual memory |
+| `cache.*` | WiredTiger cache: used, maximum, dirty |
+
+```
+> mt.status()
+-- db.serverStatus(), sampled twice 1s apart for ops/s
+                 host: db1
+              version: 7.0.48
+                 role: PRIMARY (rs0)
+               uptime: 33s
+         ops/s.insert: 0
+          ops/s.query: 0
+         ops/s.update: 0
+         ops/s.delete: 0
+        ops/s.getmore: 0
+        ops/s.command: 4
+  connections.current: 18
+connections.available: 8174
+activeClients.readers: 1
+activeClients.writers: 0
+        queue.readers: 0
+        queue.writers: 0
+         network/s.in: 1.0 KB
+        network/s.out: 76.0 KB
+         mem.resident: 215.0 MB
+          mem.virtual: 1.1 GB
+           cache.used: 22.2 MB
+            cache.max: 7.3 GB
+          cache.dirty: 11.0 MB
+```
+
+### Or wrap the native commands yourself
 
 | MySQL habit | mongosh + MongoTab |
 |---|---|
@@ -271,7 +842,7 @@ CJK characters count as 2 columns, so tables stay aligned. Cells longer than `ma
 
 ## Options
 
-`limit` 50 · `maxCol` 40 · `tz` `'UTC'` · `nullText` `'NULL'` · `missingText` follows `lang` · `color` auto · `width` auto · `depth` fully expanded · `lang` auto · `showCmd` true (DBA commands print the native command first)
+Defaults and meanings of every option are in [All options](#all-options); change them in a session with [`mt.config()`](#session-defaults-mtconfig).
 
 When `missingText` is unset it shows `(missing)` / `(无字段)` depending on the language; once you set it, that value is used in every language, e.g. `mt.config({missingText: '-'})`, and `''` leaves the cell blank.
 

@@ -1084,7 +1084,7 @@
   // 慢查询：读 system.profile，不改 profiler 设置
   function slow(dbName, opts) {
     if (dbName && typeof dbName === 'object' && !isDbHandle(dbName)) { opts = dbName; dbName = null; }
-    var o = dbaOpts(opts, ['ms']), out = [];
+    var o = dbaOpts(opts, ['ms', 'keysExamined', 'docsExamined', 'nreturned']), out = [];
     notMongos('mt.slow()');
     var d = isDbHandle(dbName) ? dbName : dbName ? curDb().getSiblingDB(String(dbName)) : curDb();
     var dn = d.getName();
