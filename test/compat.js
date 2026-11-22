@@ -132,6 +132,17 @@ run('mt.slow sort asc', function () { mt.slow('mtprof', { sort: 'asc', limit: 1,
 run('mt.slow sort ms', function () { mt.slow('mtprof', { sort: 'ms', limit: 1, cols: 'ms,command' }); }, ['.sort({millis: -1, ts: -1})', '$where']);
 run('mt.slow sort doc', function () { mt.slow('mtprof', { sort: { millis: 1 }, limit: 1, cols: 'command' }); }, ['.sort({millis: 1})', '{find: c, filter: {a: 1}']);
 run('mt.slow bad sort', function () { mt.slow('mtprof', { sort: 'x' }); }, ["mongotab: mt.slow() 的 sort 可以是 'desc'"]);
+// mt.explain(行号)：对上一次 mt.slow() 列出的行做 explain
+run('mt.explain slow row', function () { mt.slow('mtprof', { sort: 'asc', limit: 1, showCmd: false, cols: '#,command' }); mt.explain(1); }, [
+  '| 1 | {find: c, filter: {a: 1}}', "-- db.getSiblingDB('mtprof').runCommand({explain: {find: c, filter: {a: 1}}", 'COLLSCAN'
+]);
+run('mt.explain no row', function () { mt.explain(99); }, ['mongotab: 没有第 99 行']);
+// mt.log 的 Slow query 行（4.4 起是 JSON，带命令；之前是纯文本）。slowms 现在是 0，所有操作都会记日志
+var V44 = (function () { var v = db.version().split('.').map(Number); return v[0] > 4 || (v[0] === 4 && v[1] >= 4); })();
+tdb.orders.find({ 'customer.name': 'Zed' }).toArray();
+run('mt.explain log row', function () { mt.log(/Zed/, { n: 1, cols: '#,msg' }); mt.explain(1); },
+  V44 ? ['| 1 | ', "-- db.getSiblingDB('mtest').runCommand({explain: {find: orders, filter: {customer.name: Zed}", 'IXSCAN']
+    : ['mongotab: 第 1 行没有可以 explain 的命令']);
 run('mt.slow ms filter', function () { mt.slow('mtprof', { ms: 100000000 }); }, ['.find({millis: {$gte: 100000000}})', 'Empty set']);
 pdb.runCommand({ profile: 0, slowms: 100 });
 pdb.dropDatabase();
@@ -244,7 +255,20 @@ run('mt.explain plan only', function () { mt.explain(c.find({ 'customer.name': '
 run('mt.explain aggregate', function () {
   mt.explain(c.explain('executionStats').aggregate([{ $match: { qty: { $gte: 1 } } }, { $group: { _id: '$qty', n: { $sum: 1 } } }]), { table: true });
 }, ['engine: ', 'COLLSCAN', '全表扫描']);
-run('mt.explain bad input', function () { mt.explain({ a: 1 }); }, ['mongotab: mt.explain() 需要游标或 explain 的结果']);
+// 慢日志里的命令：去掉 mongos / 驱动加的字段
+run('mt.explain command doc', function () {
+  mt.explain({ find: 'orders', filter: { 'customer.name': 'Alice' }, sort: { createdAt: -1 }, limit: 5,
+    projection: { $sortKey: { $meta: 'sortKey' } }, shardVersion: [new Date(0), ObjectId()],
+    lsid: { id: UUID('3b241101-e2bb-4255-8caf-4136c566a962') }, $db: 'mtest' }, { table: true });
+}, ["-- db.getSiblingDB('mtest').runCommand({explain: {find: orders, filter: {customer.name: Alice}, sort: {createdAt: -1}, limit: 5}, verbosity: 'executionStats'})", 'IXSCAN', 'nReturned: 1']);
+// 4.4 起的 JSON 日志行：{$date: ...} 要换回日期，否则查不到
+run('mt.explain json log line', function () {
+  mt.explain('{"t":{"$date":"2026-01-01T00:00:00.000+00:00"},"s":"I","c":"COMMAND","id":51803,"ctx":"conn1","msg":"Slow query",' +
+    '"attr":{"type":"command","ns":"mtest.orders","command":{"find":"orders","filter":{"createdAt":{"$gte":{"$date":"2024-01-01T00:00:00.000Z"}}},"$db":"mtest"}}}');
+}, ["db.getSiblingDB('mtest')", 'COLLSCAN', 'nReturned: 2']);
+run('mt.explain display text', function () { mt.explain('{find: s02orders, filter: {status: shipped}}'); }, ['mongotab: 解析不了这段文字']);
+run('mt.explain insert', function () { mt.explain({ insert: 'orders', documents: [{ a: 1 }] }); }, ['mongotab: insert 命令不能 explain']);
+run('mt.explain bad input', function () { mt.explain(); mt.explain({ a: 1 }); }, ['mongotab: mt.explain() 需要游标、explain 的结果、慢日志里的命令或行号', 'mongotab: a 命令不能 explain']);
 run('mt.repl', function () { mt.repl(); }, ['-- rs.status()', 'set: rs0', '| name ', '| PRIMARY ', '| lagSecs |', '1 row in set']);
 run('mt.dbs', function () { mt.dbs(); }, ['| name ', '| disk ', '| mtest ', '合计 ']);
 run('mt.colls', function () { mt.colls('mtest'); }, ['| orders | ', '| name   | count | logical | disk ']);

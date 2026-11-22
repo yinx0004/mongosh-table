@@ -94,7 +94,11 @@
       noBuild: '没有正在建的索引',
       buildWaiting: '等待开始',
       noDup: '没有冗余索引',
-      needExplain: "mt.explain() 需要游标或 explain 的结果，例如 mt.explain(db.orders.find({status: 'PAID'}))、mt.explain(db.orders.explain('executionStats').aggregate([...]))",
+      needExplain: "mt.explain() 需要游标、explain 的结果、慢日志里的命令或行号，例如 mt.explain(db.orders.find({status: 'PAID'}))、mt.explain({find: 'orders', filter: {...}})、mt.explain(1)",
+      noRow: function (n) { return '没有第 ' + n + ' 行：mt.explain(行号) 用的是上一次 mt.slow() 或 mt.log() 列出的行'; },
+      rowNoCmd: function (n) { return '第 ' + n + ' 行没有可以 explain 的命令（4.4 之前的日志是纯文本，没有命令结构；可以改用 mt.slow()）'; },
+      notJson: "解析不了这段文字：mt.slow() / mt.log() 显示的命令去掉了引号，不能直接粘贴；请用 mt.explain(行号)，或者传 JSON 日志的整行、命令文档",
+      cantExplain: function (v) { return v + ' 命令不能 explain，支持 find、aggregate、count、distinct、update、delete、findAndModify'; },
       exNote: { fullScan: '全表扫描', memSort: '内存排序', spilled: '用到了磁盘', postFilter: '取出后再过滤', multikey: '多键索引' },
       exNotes: function (list) { return '注意：' + list.join('；'); },
       cmdDesc: {
@@ -109,7 +113,7 @@
         unusedIdx: '没被用过的索引（ops = 0），大的在前；默认所有用户库',
         dupIdx: '冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库',
         builds: '正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久',
-        explain: '执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；analyze: false 只看计划不执行',
+        explain: '执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；也接受慢日志里的命令，mt.explain(n) 对上次 mt.slow() / mt.log() 的第 n 行；analyze: false 只看计划不执行',
         log: "最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告",
         repl: '副本集成员状态、复制延迟（秒）、同步源',
         dbs: '各库占用的磁盘空间',
@@ -178,7 +182,11 @@
       noBuild: 'no index builds in progress',
       buildWaiting: 'waiting to start',
       noDup: 'no redundant indexes',
-      needExplain: "mt.explain() needs a cursor or an explain result, e.g. mt.explain(db.orders.find({status: 'PAID'})) or mt.explain(db.orders.explain('executionStats').aggregate([...]))",
+      needExplain: "mt.explain() needs a cursor, an explain result, a command from a slow log, or a row number, e.g. mt.explain(db.orders.find({status: 'PAID'})), mt.explain({find: 'orders', filter: {...}}) or mt.explain(1)",
+      noRow: function (n) { return 'there is no row ' + n + ': mt.explain(n) uses the rows of the last mt.slow() or mt.log()'; },
+      rowNoCmd: function (n) { return 'row ' + n + ' has no command that can be explained (logs before 4.4 are plain text without the command structure; try mt.slow())'; },
+      notJson: "cannot parse this text: the commands shown by mt.slow() / mt.log() drop the quotes and cannot be pasted back; use mt.explain(n), or pass a whole JSON log line or a command document",
+      cantExplain: function (v) { return 'a ' + v + ' command cannot be explained; find, aggregate, count, distinct, update, delete and findAndModify can'; },
       exNote: { fullScan: 'full scan', memSort: 'in-memory sort', spilled: 'spilled to disk', postFilter: 'filtered after fetch', multikey: 'multikey' },
       exNotes: function (list) { return 'Note: ' + list.join('; '); },
       cmdDesc: {
@@ -193,7 +201,7 @@
         unusedIdx: 'Indexes never used (ops = 0), largest first; all user databases by default',
         dupIdx: 'Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default',
         builds: 'Index builds in progress: collection, index, phase, progress and how long they have run',
-        explain: 'Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; analyze: false = plan only, no execution',
+        explain: 'Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; also takes slow-log commands, and mt.explain(n) explains row n of the last mt.slow() / mt.log(); analyze: false = plan only, no execution',
         log: "Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings",
         repl: 'Replica set members, replication lag (seconds), sync source',
         dbs: 'Disk space used by each database',
@@ -1147,7 +1155,7 @@
   // 慢查询：读 system.profile，不改 profiler 设置
   function slow(dbName, opts) {
     if (dbName && typeof dbName === 'object' && !isDbHandle(dbName)) { opts = dbName; dbName = null; }
-    var o = dbaOpts(opts, ['ms', 'keysExamined', 'docsExamined', 'nreturned']), out = [];
+    var o = dbaOpts(opts, ['#', 'ms', 'keysExamined', 'docsExamined', 'nreturned']), out = [];
     notMongos('mt.slow()');
     var d = isDbHandle(dbName) ? dbName : dbName ? curDb().getSiblingDB(String(dbName)) : curDb();
     var dn = d.getName();
@@ -1173,10 +1181,11 @@
       throw e;
     }
     headOut({ db: dn, level: st.was, slowms: st.slowms, sampleRate: st.sampleRate }, Object.assign({}, o, { cols: null, exclude: null }), out);
-    var rows = docs.map(function (p) {
+    lastRows = docs.map(function (p) { return { op: p.op, ns: p.ns, command: p.command, originatingCommand: p.originatingCommand }; });
+    var rows = docs.map(function (p, i) {
       var cc = cleanCmd(p.command || p.query || {});
       return {
-        ts: isDate(p.ts) ? p.ts : '', ms: toNum(p.millis), op: p.op || '', ns: p.ns || '', plan: p.planSummary || '',
+        '#': i + 1, ts: isDate(p.ts) ? p.ts : '', ms: toNum(p.millis), op: p.op || '', ns: p.ns || '', plan: p.planSummary || '',
         keysExamined: p.keysExamined != null ? toNum(p.keysExamined) : '',
         docsExamined: p.docsExamined != null ? toNum(p.docsExamined) : '',
         nreturned: p.nreturned != null ? toNum(p.nreturned) : '',
@@ -1618,17 +1627,98 @@
     })(root);
     return by;
   }
+  // ─── 慢日志里的命令 → explain 命令
+  var lastRows = null;   // 上一次 mt.slow() / mt.log() 列出的行，给 mt.explain(n) 用
+  // JSON 日志里的扩展 JSON：{$date: ...}、{$oid: ...}、{$numberLong: ...} 等换回真正的类型
+  function ejsonFix(v) {
+    if (Array.isArray(v)) return v.map(ejsonFix);
+    if (!isDoc(v)) return v;
+    var ks = Object.keys(v), k = ks[0], w = v[k];
+    if (ks.length === 1 || (ks.length === 2 && k === '$binary')) {
+      var r = safe(function () {
+        switch (k) {
+          case '$oid': return ObjectId(w);   // eslint-disable-line no-undef
+          case '$date': return new Date(isDoc(w) ? Number(w.$numberLong) : w);
+          case '$numberLong': return NumberLong(w);   // eslint-disable-line no-undef
+          case '$numberInt': return NumberInt(w);   // eslint-disable-line no-undef
+          case '$numberDouble': return Number(w);
+          case '$numberDecimal': return NumberDecimal(w);   // eslint-disable-line no-undef
+          case '$uuid': return UUID(w);   // eslint-disable-line no-undef
+          case '$regularExpression': return new RegExp(w.pattern, w.options);
+          case '$timestamp': return safe(function () { return Timestamp(w.t, w.i); }) || Timestamp({ t: w.t, i: w.i });   // eslint-disable-line no-undef
+          case '$minKey': return MinKey();   // eslint-disable-line no-undef
+          case '$maxKey': return MaxKey();   // eslint-disable-line no-undef
+          case '$binary': return typeof w === 'string' ? BinData(parseInt(v.$type, 16), w) : BinData(parseInt(w.subType, 16), w.base64);   // eslint-disable-line no-undef
+        }
+        return undefined;
+      });
+      if (r !== undefined && r !== null) return r;
+    }
+    var out = {};
+    ks.forEach(function (key) { out[key] = ejsonFix(v[key]); });
+    return out;
+  }
+  // mongos、驱动、副本集内部加的字段，explain 时去掉
+  var EXPLAIN_DROP = ['lsid', 'txnNumber', 'txnRetryCounter', 'autocommit', 'startTransaction', 'readConcern', 'writeConcern',
+    'shardVersion', 'databaseVersion', 'clientOperationKey', 'apiVersion', 'apiStrict', 'apiDeprecationErrors',
+    'mayBypassWriteBlocking', 'runtimeConstants', 'fromMongos', 'fromRouter', 'needsMerge', 'exchange', 'isMongosTopLevel', 'maxTimeMSOpOnly'];
+  var EXPLAIN_VERBS = ['find', 'aggregate', 'count', 'distinct', 'update', 'delete', 'findAndModify', 'findandmodify'];
+  // entry：{op, ns, command, originatingCommand}（来自 system.profile、日志的 attr，或者只有 command）
+  function explainCmd(entry, o) {
+    var c = entry.command || {}, ns = String(entry.ns || '');
+    if ((entry.op === 'getmore' || c.getMore != null) && isDoc(entry.originatingCommand)) c = entry.originatingCommand;
+    var coll = ns.indexOf('.') > 0 ? ns.slice(ns.indexOf('.') + 1) : '';
+    // profile / 日志里单条的 update、remove 只记了语句本身
+    if (c.q !== undefined && c.u !== undefined && c.update == null) c = { update: coll, updates: [c] };
+    else if (c.q !== undefined && (entry.op === 'remove' || entry.op === 'delete') && c.delete == null) c = { delete: coll, deletes: [{ q: c.q, limit: c.limit || 0 }] };
+    var verb = Object.keys(c)[0];
+    if (EXPLAIN_VERBS.indexOf(verb) < 0) fail(M().cantExplain(verb || '?'));
+    var cmd = {};
+    Object.keys(c).forEach(function (k) {
+      if (k.charAt(0) === '$' || EXPLAIN_DROP.indexOf(k) >= 0) return;
+      cmd[k] = c[k];
+    });
+    // mongos 发给分片时加的 projection: {$sortKey: {$meta: 'sortKey'}}
+    if (isDoc(cmd.projection)) {
+      var pj = {};
+      Object.keys(cmd.projection).forEach(function (k) {
+        var v = cmd.projection[k];
+        if (!(isDoc(v) && v.$meta === 'sortKey')) pj[k] = v;
+      });
+      if (Object.keys(pj).length) cmd.projection = pj; else delete cmd.projection;
+    }
+    if (verb === 'aggregate' && !cmd.cursor) cmd.cursor = {};
+    var db0 = c.$db || (ns.indexOf('.') > 0 ? ns.slice(0, ns.indexOf('.')) : '') || o.db || curDb().getName();
+    return { db: String(db0), cmd: cmd };
+  }
   function explain(x, opts) {
     var o = dbaOpts(opts, ['nReturned', 'keysExamined', 'docsExamined', 'ms']), out = [];
     var m = M(), analyze = o.analyze !== false, verb = analyze ? 'executionStats' : 'queryPlanner';
-    var ex;
-    if (x && typeof x.explain === 'function') {
+    var ex, entry = null;
+    if (typeof x === 'number') {
+      if (!lastRows || x < 1 || x > lastRows.length || x !== Math.floor(x)) fail(m.noRow(x));
+      entry = lastRows[x - 1];
+      if (!entry) fail(m.rowNoCmd(x));
+    } else if (typeof x === 'string') {
+      var j = safe(function () { return JSON.parse(x); });
+      if (!isDoc(j)) fail(m.notJson);
+      j = ejsonFix(j);
+      entry = isDoc(j.attr) && isDoc(j.attr.command) ? { op: j.attr.type, ns: j.attr.ns, command: j.attr.command, originatingCommand: j.attr.originatingCommand }
+        : isDoc(j.command) ? j : { command: j };
+    } else if (x && typeof x.explain === 'function') {
       cmdLine(o, "cursor.explain('" + verb + "')", out);
       ex = unwrap(x.explain(verb));
     } else {
-      ex = unwrap(x);
-      if (!isDoc(ex) || !(ex.queryPlanner || ex.stages)) fail(m.needExplain);
+      var d0 = unwrap(x);
+      if (isDoc(d0) && !d0.queryPlanner && !d0.stages) entry = isDoc(d0.command) ? d0 : { command: ejsonFix(d0) };
+      else ex = d0;
     }
+    if (entry) {
+      var ec = explainCmd(entry, o);
+      cmdLine(o, "db.getSiblingDB('" + ec.db + "').runCommand({explain: " + valText(ec.cmd, true, o) + ", verbosity: '" + verb + "'})", out);
+      ex = runCmd(curDb().getSiblingDB(ec.db), { explain: ec.cmd, verbosity: verb });
+    }
+    if (!isDoc(ex) || !(ex.queryPlanner || ex.stages)) fail(m.needExplain);
     // 聚合：$cursor 之后的阶段在树的上面，倒过来排
     var stages = Array.isArray(ex.stages) ? ex.stages : [];
     var cur = ex.queryPlanner ? ex : null, rest = [];
@@ -1776,7 +1866,7 @@
     if (typeof a === 'number') opts = Object.assign({}, b, { n: a });
     else if (typeof a === 'string' || isRegExp(a)) opts = Object.assign({}, b, { grep: a });
     var grep = opts && opts.grep, sev = opts && opts.sev;
-    var o = dbaOpts(opts && typeof opts === 'object' ? Object.assign({}, opts, { grep: null }) : opts, ['id']), out = [];
+    var o = dbaOpts(opts && typeof opts === 'object' ? Object.assign({}, opts, { grep: null }) : opts, ['#', 'id']), out = [];
     var n = toNum(o.n) || 20;
     if (sev != null && !(String(sev).charAt(0).toUpperCase() in SEV_RANK)) fail(M().badSev);
     var maxRank = sev != null ? SEV_RANK[String(sev).charAt(0).toUpperCase()] : null;
@@ -1792,12 +1882,20 @@
       if (maxRank != null && !(SEV_RANK[String(r.sev).charAt(0)] <= maxRank)) return;
       if (re && !re.test(r.raw)) return;
       if (needle && r.raw.toLowerCase().indexOf(needle) < 0) return;
-      var row = { time: r.time, sev: r.sev, comp: r.comp, ctx: r.ctx, id: r.id, msg: r.msg };
+      var row = { '#': 0, time: r.time, sev: r.sev, comp: r.comp, ctx: r.ctx, id: r.id, msg: r.msg };
       if (r.json) row.attr = r.attr != null ? valText(r.attr, true, o) : '';
+      row._attr = r.attr;
       rows.push(row);
     });
     var total = rows.length;
     if (rows.length > n) rows = rows.slice(rows.length - n);
+    // 4.4 起 Slow query 的 attr 里有 ns、command、type（update / remove 是单条语句）
+    lastRows = rows.map(function (r, i) {
+      r['#'] = i + 1;
+      var a = r._attr;
+      delete r._attr;
+      return isDoc(a) && isDoc(a.command) ? { op: a.type, ns: a.ns, command: a.command, originatingCommand: a.originatingCommand } : null;
+    });
     if (rows.every(function (r) { return r.id === ''; })) rows.forEach(function (r) { delete r.id; });   // 4.4 之前没有 id
     renderRows(rows, o, out, false, rows.length);
     if (total > rows.length) out.push(paint(o, DIM, M().logTail(rows.length, total)));
@@ -1815,7 +1913,7 @@
     ["mt.colls('db')", 'SHOW TABLE STATUS', 'colls'],
     ["mt.frag('db')", 'TABLES.DATA_FREE', 'frag'],
     ["mt.idx('coll')", 'SHOW INDEX FROM t', 'idx'],
-    ['mt.explain(cursor)', 'EXPLAIN ANALYZE', 'explain'],
+    ['mt.explain(cursor | n)', 'EXPLAIN ANALYZE', 'explain'],
     ['mt.builds()', 'ALTER TABLE progress', 'builds'],
     ["mt.unusedIdx('db')", 'sys.schema_unused_indexes', 'unusedIdx'],
     ["mt.dupIdx('db')", 'sys.schema_redundant_indexes', 'dupIdx'],
