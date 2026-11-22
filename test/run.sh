@@ -57,8 +57,11 @@ docker run -d --name "$name-slow" --network "$net" --entrypoint "$shell" "$clien
   --eval "db.getSiblingDB('mtslow').slow.find({\$where: 'sleep(120000) || true'}).toArray()" >/dev/null
 
 # A writer for mt.locks(): it inserts every 200 ms (~4 minutes), so while
-# compat.js holds db.fsyncLock() it queues for the global lock.
+# compat.js holds db.fsyncLock() it queues for the global lock. It uses w: 1:
+# with the default majority write concern (5.0+) an insert can instead hang
+# waiting for the journal, which fsyncLock also blocks, and never show up as
+# waiting for a lock.
 docker run -d --name "$name-writer" --network "$net" --entrypoint "$shell" "$client" --quiet "$uri" \
-  --eval "for (var i = 0; i < 1200; i++) { db.getSiblingDB('mtlock').c.insertOne({i: i}); sleep(200); }" >/dev/null
+  --eval "for (var i = 0; i < 1200; i++) { db.getSiblingDB('mtlock').c.insertOne({i: i}, {writeConcern: {w: 1}}); sleep(200); }" >/dev/null
 
 msh test/compat.js
