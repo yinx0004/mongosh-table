@@ -114,7 +114,9 @@ t(db.orders.find(), {tz: '+08:00'})              // show times in UTC+8 for this
 mt.csv(db.orders.find(), 'orderNo,amount')      // print CSV to paste into Excel
 mt.config({tz: 'Asia/Shanghai', maxCol: 60})    // change defaults for this session
 mt.ps() / mt.slow() / mt.colls() ...            // DBA commands, see the next section
-mt.help()                                       // help; t() / g() with no arguments also show it
+mt.help()                                       // help: usage, options (with current values), session settings; t() / g() with no arguments too
+mt.cmds()                                       // every DBA command, by category
+mt.help('ps')                                   // detailed usage, options and output columns of one command
 ```
 
 All examples below come from a 3-node replica set (`db1` / `db2` / `db3`) with 20,000 orders in `shop.orders`; the output is real.
@@ -330,37 +332,93 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 
 ## For DBAs
 
-`mt` comes with a set of read-only shortcuts for the usual MySQL `SHOW ...` commands. `mt.cmds()` lists them:
+`mt` comes with a set of read-only shortcuts for the usual MySQL `SHOW ...` commands. `mt.cmds()` lists them by category (server activity, slow queries and plans, storage and indexes, replication), each with the matching MySQL command and a description; `mt.help('ps')` (or `mt.cmds('ps')`, `mt.help('mt.ps()')`) shows the detailed usage, options, output columns and notes of one command:
 
 ```
 > mt.cmds()
-+------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                            | description                                                                                                                                                                                                   |
-+------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                 | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                          |
-| mt.slow({ms, ns, sort})      | mysql.slow_log                   | Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first                            |
-| mt.top({interval, ns})       | sys.schema_table_statistics      | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                  |
-| mt.locks({all})              | sys.innodb_lock_waits            | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                     |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX    | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                          |
-| mt.repl()                    | SHOW SLAVE STATUS                | Replica set members, replication lag (seconds), sync source                                                                                                                                                   |
-| mt.dbs()                     | SHOW DATABASES                   | Disk space used by each database                                                                                                                                                                              |
-| mt.colls('db')               | SHOW TABLE STATUS                | Documents, data and index size per collection, largest first; current db by default                                                                                                                           |
-| mt.frag('db')                | TABLES.DATA_FREE                 | Disk space each collection can reuse after deletes, most first; current db by default                                                                                                                         |
-| mt.idx('coll')               | SHOW INDEX FROM t                | Index keys, size, usage count and options                                                                                                                                                                     |
-| mt.explain(cursor)           | EXPLAIN [ANALYZE]                | Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; plan only by default, nothing runs; analyze: true runs it for rows scanned and time        |
-| mt.explainLog(n | line)      | EXPLAIN on a slow log query      | Explain a query from a slow log: first what the log recorded about the real run, then the current plan, noting if the plan changed; n is a row of mt.slow() / mt.log(), or pass a whole log line or a command |
-| mt.logQuery(n | line)        | slow log → SQL                   | Turn a query from a slow log into a mongosh statement you can run (nothing runs), keeping the types                                                                                                           |
-| mt.builds()                  | ALTER TABLE progress             | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                       |
-| mt.unusedIdx('db')           | sys.schema_unused_indexes        | Indexes never used (ops = 0), largest first; all user databases by default                                                                                                                                    |
-| mt.dupIdx('db')              | sys.schema_redundant_indexes     | Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default                                                                                  |
-| mt.conns()                   | PROCESSLIST GROUP BY host        | Connections per client IP                                                                                                                                                                                     |
-| mt.oplog()                   | SHOW BINARY LOGS                 | Oplog size and how much time it covers                                                                                                                                                                        |
-| mt.status({interval})        | SHOW GLOBAL STATUS               | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                |
-| mt.cache('db')               | sys.innodb_buffer_stats_by_table | WiredTiger cache used by each collection, most first; all databases by default                                                                                                                                |
-| mt.ttl('db')                 | information_schema.EVENTS        | TTL indexes: expiry, oldest document, how far past expiry, and the TTL thread; all databases by default                                                                                                       |
-| mt.log({n, grep, sev})       | performance_schema.error_log     | Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings                                                                                         |
-+------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+── Server activity ──
++------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                         | description                                                                                                                                          |
++------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.status({interval})        | SHOW GLOBAL STATUS            | Version, role, ops/s, connections, cache and other key metrics                                                                                       |
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST              | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid' |
+| mt.conns()                   | PROCESSLIST GROUP BY host     | Connections per client IP                                                                                                                            |
+| mt.locks({all})              | sys.innodb_lock_waits         | Who is waiting for a lock and who holds it; all = every lock that is held                                                                            |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                 |
+| mt.top({interval, ns})       | sys.schema_table_statistics   | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                         |
+| mt.builds()                  | ALTER TABLE progress          | Index builds in progress: collection, index, phase, progress and how long they have run                                                              |
++------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+── Slow queries and plans ──
++-------------------------+------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                 | mysql                        | description                                                                                                                                                                                                   |
++-------------------------+------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.slow({ms, ns, sort}) | mysql.slow_log               | Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first                            |
+| mt.log({n, grep, sev})  | performance_schema.error_log | Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings                                                                                         |
+| mt.explain(cursor)      | EXPLAIN [ANALYZE]            | Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; plan only by default, nothing runs; analyze: true runs it for rows scanned and time        |
+| mt.explainLog(n | line) | EXPLAIN on a slow log query  | Explain a query from a slow log: first what the log recorded about the real run, then the current plan, noting if the plan changed; n is a row of mt.slow() / mt.log(), or pass a whole log line or a command |
+| mt.logQuery(n | line)   | slow log → SQL               | Turn a query from a slow log into a mongosh statement you can run (nothing runs), keeping the types                                                                                                           |
++-------------------------+------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+── Storage and indexes ──
++--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------+
+| command            | mysql                            | description                                                                                                                  |
++--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------+
+| mt.dbs()           | SHOW DATABASES                   | Disk space used by each database                                                                                             |
+| mt.colls('db')     | SHOW TABLE STATUS                | Documents, data and index size per collection, largest first; current db by default                                          |
+| mt.frag('db')      | TABLES.DATA_FREE                 | Disk space each collection can reuse after deletes, most first; current db by default                                        |
+| mt.cache('db')     | sys.innodb_buffer_stats_by_table | WiredTiger cache used by each collection, most first; all databases by default                                               |
+| mt.idx('coll')     | SHOW INDEX FROM t                | Index keys, size, usage count and options                                                                                    |
+| mt.unusedIdx('db') | sys.schema_unused_indexes        | Indexes never used (ops = 0), largest first; all user databases by default                                                   |
+| mt.dupIdx('db')    | sys.schema_redundant_indexes     | Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default |
+| mt.ttl('db')       | information_schema.EVENTS        | TTL indexes: expiry, oldest document, how far past expiry, and the TTL thread; all databases by default                      |
++--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------+
+
+── Replication ──
++------------+-------------------+-------------------------------------------------------------+
+| command    | mysql             | description                                                 |
++------------+-------------------+-------------------------------------------------------------+
+| mt.repl()  | SHOW SLAVE STATUS | Replica set members, replication lag (seconds), sync source |
+| mt.oplog() | SHOW BINARY LOGS  | Oplog size and how much time it covers                      |
++------------+-------------------+-------------------------------------------------------------+
+
 All accept t() options such as {cols: ...} or {vertical: true}; mt.config({showCmd: false}) hides the native command
+mt.help('ps') shows the detailed usage, options and output columns of one command
+```
+
+```
+> mt.help('ps')
+mt.ps() — running operations    MySQL: SHOW PROCESSLIST
+
+Usage:
+  mt.ps()                     // longest running first
+  mt.ps({secs: 5})            // only those running for 5+ seconds
+  mt.ps({ns: 'shop.orders'})  // one collection; 'shop' matches the whole database
+  mt.ps({all: true})          // include idle connections and internal threads
+  mt.ps({sort: 'opid'})       // sort: 'desc' (default), 'asc', 'opid', or {ns: 1, secs: -1}
+
+Options:
+  secs  only operations running at least this many seconds
+  ns    database or database.collection
+  all   true: use $all, including idle connections and internal threads
+  sort  'desc' / 'asc' / 'opid' / a sort document on column names
+
+Output:
+  opid          operation ID, used by db.killOp(opid)
+  secs          seconds running
+  op            query / getmore / insert / update / remove / command; idle for idle connections
+  ns            database.collection
+  client / app  client, appName
+  lock          WAIT while waiting for a lock
+  plan          plan summary; COLLSCAN is a full scan
+  command       the command, without driver fields
+
+Notes:
+  - Runs db.adminCommand({currentOp: 1, active: true})
+  - Hidden by default: idle connections, internal threads, drivers' awaitable hello and mt.ps() itself
+
+All take t() options (cols, exclude, limit, vertical, table, tz...); mt.config({showCmd: false}) hides the native command
+See also: mt.locks(), mt.txns(), mt.conns()
 ```
 
 All of them:
