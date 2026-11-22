@@ -351,6 +351,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 | mt.oplog()                   | SHOW BINARY LOGS                 | oplog 大小和能覆盖多长时间                                                                                                      |
 | mt.status({interval})        | SHOW GLOBAL STATUS               | 版本、角色、ops/s、连接、缓存等关键指标                                                                                         |
 | mt.cache('db')               | sys.innodb_buffer_stats_by_table | 各集合占用的 WiredTiger 缓存，多的在前；默认所有库                                                                              |
+| mt.ttl('db')                 | information_schema.EVENTS        | TTL 索引：过期时间、最早一条的时间、超期了多久，以及 TTL 线程的状态；默认所有库                                                 |
 | mt.log({n, grep, sev})       | performance_schema.error_log     | 最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告                                      |
 +------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
 都可以加 t() 的选项，如 {cols: ...}、{vertical: true}；mt.config({showCmd: false}) 不打印原生命令
@@ -954,6 +955,48 @@ dirty: 0 B (0.0%)
 - 要对每个集合执行一次 `$collStats`，集合很多（上千个）时会慢，可以用 `mt.cache('shop')` 只看一个库。
 - 只能连 mongod 执行，mongos 上没有缓存数据。
 - `dirty` 长时间超过上限的 20% 左右，说明写入压力大、来不及写回磁盘。
+
+### mt.ttl()：TTL 索引
+
+相当于查 MySQL 里定时清理数据的 EVENT（`information_schema.EVENTS`）：哪些集合会自动删过期数据，删得跟不跟得上。
+
+```js
+mt.ttl()          // 所有库
+mt.ttl('shop')    // 只看一个库，也可以传 db 对象
+```
+
+上面几行是 TTL 后台线程的状态：`ttlMonitorEnabled` 是否在跑、`ttlMonitorSleepSecs` 每隔几秒扫一遍（默认 60），`passes` 扫了几遍、`deletedDocuments` 一共删了多少条（都是启动以来的累计）。下面每个 TTL 一行：
+
+| 列 | 说明 |
+|---|---|
+| `ns` | 库.集合 |
+| `index` | TTL 索引名；时间序列集合显示 `(timeseries)`，聚簇集合显示 `(clustered)`（这两种的过期时间设在集合上，不在索引上） |
+| `field` | 按哪个日期字段算过期 |
+| `expireAfterSeconds` / `expire` | 过期时间，秒数和换算后的时长 |
+| `oldest` | 这个字段最早的一条（顺着 TTL 索引取，很快） |
+| `overdueSecs` | 最早那条已经超过过期时间多少秒 |
+| `options` | `partial=条件`、`hidden` |
+
+```
+> mt.ttl('shop')
+-- db.getSiblingDB('shop'): getCollectionInfos() + each getIndexes() → expireAfterSeconds; getParameter ttlMonitor*; serverStatus().metrics.ttl
+  ttlMonitorEnabled: false
+ttlMonitorSleepSecs: 60
+             passes: 0
+   deletedDocuments: 0
++---------------+---------------+-----------+--------------------+------------+-------------------------+-------------+---------+
+| ns            | index         | field     | expireAfterSeconds | expire     | oldest                  | overdueSecs | options |
++---------------+---------------+-----------+--------------------+------------+-------------------------+-------------+---------+
+| shop.sessions | lastSeen_1    | lastSeen  |               1800 | 30m 0s     | 2026-11-21 19:55:35.958 |       49742 |         |
+| shop.orders   | ttl_createdAt | createdAt |           31536000 | 365d 0h 0m | 2026-05-06 10:14:35.923 |           0 |         |
+| shop.metrics  | (timeseries)  | ts        |             604800 | 7d 0h 0m   |                         |             |         |
++---------------+---------------+-----------+--------------------+------------+-------------------------+-------------+---------+
+3 rows in set
+```
+
+- `overdueSecs` 正常应该在 TTL 线程的间隔（60 秒）左右或者是 0；明显更大，说明 TTL 删不过来（过期的数据太多）、或者线程没在跑（如上例 `ttlMonitorEnabled: false`）。字段的值不是日期的文档 TTL 不会删，`oldest` 也不算它们。
+- 只有普通 TTL 索引算 `oldest` / `overdueSecs`；带 `partialFilterExpression` 的、时间序列和聚簇集合的留空。
+- 从节点不自己删，过期的文档跟着主节点的删除一起复制过来。
 
 ### mt.log()：最近的日志
 

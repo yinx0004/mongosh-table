@@ -157,6 +157,32 @@ run('mt.log regex', function () { mt.log(/connection ACCEPTED/i, { n: 1, cols: '
 run('mt.log sev', function () { mt.log({ sev: 'E', n: 5, cols: 'sev,msg' }); }, ["-- db.adminCommand({getLog: 'global'})"]);
 run('mt.log startup', function () { mt.log({ startup: true, n: 50, cols: 'msg', maxCol: 0, table: true }); }, ["getLog: 'startupWarnings'", 'Access control']);
 run('mt.log bad sev', function () { mt.log({ sev: 'x' }); }, ["mongotab: mt.log() 的 sev 可以是 'F'"]);
+// mt.ttl：先停掉 TTL 线程，再放一条 2 天前的文档（过期时间 1 小时），它就会一直超期。
+// 放在单独的库里：建时间序列集合会顺带建 system.views，影响 mt.colls('mtest')
+db.adminCommand({ setParameter: 1, ttlMonitorEnabled: false });
+var tt = db.getSiblingDB('mtttl'); tt.dropDatabase();
+var ev = tt.events;
+ev.createIndex({ at: 1 }, { expireAfterSeconds: 3600 });
+ev.insertOne({ at: new Date(Date.now() - 2 * 86400000) });
+var VER = db.version().split('.').map(Number);
+if (VER[0] >= 5) tt.createCollection('ts', { timeseries: { timeField: 't' }, expireAfterSeconds: 86400 });
+if (VER[0] >= 6) tt.createCollection('cl', { clusteredIndex: { key: { _id: 1 }, unique: true }, expireAfterSeconds: 7200 });
+run('mt.ttl', function () { mt.ttl('mtttl', { table: true }); }, [
+  "-- db.getSiblingDB('mtttl'): getCollectionInfos()", 'ttlMonitorEnabled: false', 'ttlMonitorSleepSecs: 60',
+  '| mtttl.events ', '| at_1 ', '| at ', '|               3600 | 1h 0m '
+].concat(VER[0] >= 5 ? ['| mtttl.ts ', '(timeseries)'] : []).concat(VER[0] >= 6 ? ['| mtttl.cl ', '(clustered)'] : []));
+run('mt.ttl overdue', function () {
+  var lines = [], realPrint = G.print;
+  G.print = function () { lines.push(Array.prototype.join.call(arguments, ' ')); };
+  try { mt.ttl(tt, { cols: 'ns,overdueSecs', showCmd: false }); } finally { G.print = realPrint; }
+  var m = /\| mtttl\.events \|\s+(\d+) \|/.exec(lines.join('\n'));
+  var secs = m ? Number(m[1]) : -1;
+  print(secs > 2 * 86400 - 3600 - 600 && secs < 2 * 86400 - 3600 + 600 ? 'overdue ok' : 'overdue bad ' + secs);
+}, ['overdue ok']);
+run('mt.ttl all dbs', function () { mt.ttl({ cols: 'ns,index' }); }, ['| mtttl.events ']);
+db.adminCommand({ setParameter: 1, ttlMonitorEnabled: true });
+tt.dropDatabase();
+run('mt.ttl none', function () { mt.ttl('nottl'); }, ['Empty set', '没有 TTL 索引']);
 run('mt.repl', function () { mt.repl(); }, ['-- rs.status()', 'set: rs0', '| name ', '| PRIMARY ', '| lagSecs |', '1 row in set']);
 run('mt.dbs', function () { mt.dbs(); }, ['| mtest ', '合计 ']);
 run('mt.colls', function () { mt.colls('mtest'); }, ['| orders | ', '| name   | count | size ']);

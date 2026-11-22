@@ -351,6 +351,7 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 | mt.oplog()                   | SHOW BINARY LOGS                 | Oplog size and how much time it covers                                                                                                                                             |
 | mt.status({interval})        | SHOW GLOBAL STATUS               | Version, role, ops/s, connections, cache and other key metrics                                                                                                                     |
 | mt.cache('db')               | sys.innodb_buffer_stats_by_table | WiredTiger cache used by each collection, most first; all databases by default                                                                                                     |
+| mt.ttl('db')                 | information_schema.EVENTS        | TTL indexes: expiry, oldest document, how far past expiry, and the TTL thread; all databases by default                                                                            |
 | mt.log({n, grep, sev})       | performance_schema.error_log     | Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings                                                              |
 +------------------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 All accept t() options such as {cols: ...} or {vertical: true}; mt.config({showCmd: false}) hides the native command
@@ -954,6 +955,48 @@ These collections hold 32.8 MB in the cache, 96.1% of the cache in use
 - It runs `$collStats` once per collection, which is slow with thousands of collections; use `mt.cache('shop')` to look at one database.
 - It must run on a mongod; a mongos has no cache.
 - `dirty` staying above roughly 20% of the maximum means writes are coming in faster than they can be written back.
+
+### mt.ttl(): TTL indexes
+
+Like checking MySQL's scheduled cleanup EVENTs (`information_schema.EVENTS`): which collections delete expired data automatically, and whether the deletes keep up.
+
+```js
+mt.ttl()          // every database
+mt.ttl('shop')    // one database only; a db object works too
+```
+
+The lines on top are the TTL background thread: `ttlMonitorEnabled` whether it runs, `ttlMonitorSleepSecs` how often it scans (60 seconds by default), `passes` how many scans it made and `deletedDocuments` how many documents it deleted (both since startup). Below, one row per TTL:
+
+| Column | Meaning |
+|---|---|
+| `ns` | database.collection |
+| `index` | TTL index name; `(timeseries)` for time series collections and `(clustered)` for clustered collections, whose expiry is set on the collection rather than an index |
+| `field` | The date field expiry is based on |
+| `expireAfterSeconds` / `expire` | Expiry in seconds and as a duration |
+| `oldest` | The oldest value of that field (read along the TTL index, so it is fast) |
+| `overdueSecs` | How many seconds the oldest document is past its expiry |
+| `options` | `partial=filter`, `hidden` |
+
+```
+> mt.ttl('shop')
+-- db.getSiblingDB('shop'): getCollectionInfos() + each getIndexes() → expireAfterSeconds; getParameter ttlMonitor*; serverStatus().metrics.ttl
+  ttlMonitorEnabled: false
+ttlMonitorSleepSecs: 60
+             passes: 0
+   deletedDocuments: 0
++---------------+---------------+-----------+--------------------+------------+-------------------------+-------------+---------+
+| ns            | index         | field     | expireAfterSeconds | expire     | oldest                  | overdueSecs | options |
++---------------+---------------+-----------+--------------------+------------+-------------------------+-------------+---------+
+| shop.sessions | lastSeen_1    | lastSeen  |               1800 | 30m 0s     | 2026-11-21 19:55:49.627 |       49742 |         |
+| shop.orders   | ttl_createdAt | createdAt |           31536000 | 365d 0h 0m | 2026-05-06 10:14:49.538 |           0 |         |
+| shop.metrics  | (timeseries)  | ts        |             604800 | 7d 0h 0m   |                         |             |         |
++---------------+---------------+-----------+--------------------+------------+-------------------------+-------------+---------+
+3 rows in set
+```
+
+- `overdueSecs` should normally be 0 or about the TTL thread interval (60 seconds). Much more means TTL cannot keep up (too much expired data), or the thread is not running (`ttlMonitorEnabled: false` as above). Documents whose field is not a date are never deleted by TTL and are not counted in `oldest`.
+- Only plain TTL indexes get `oldest` / `overdueSecs`; they are left empty for indexes with a `partialFilterExpression`, time series and clustered collections.
+- Secondaries do not delete on their own; the deletes replicate from the primary.
 
 ### mt.log(): recent log lines
 
