@@ -348,6 +348,7 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 | mt.locks({all})              | sys.innodb_lock_waits         | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                              |
 | mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                   |
 | mt.top({interval, ns})       | sys.schema_table_statistics   | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                           |
+| mt.latency('db', {interval}) | sys.statement_analysis        | Average latency (ms) of reads / writes / commands, server-wide and per collection; interval = seconds to sample, 0 = since startup; all user databases by default                                                                      |
 | mt.builds()                  | ALTER TABLE progress          | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                                                |
 +------------------------------+-------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
@@ -1149,6 +1150,50 @@ How it works:
 - Collections with no activity in the interval are left out; rows are sorted by `totalMs`, highest first.
 - `top` records time when an operation **finishes**, all at once. That is why the 1-second sample above shows over 10,000 ms for `shop.orders`: a long query had just finished a batch. Use `mt.ps()` for operations still running.
 - Some operations take neither a read nor a write lock, so `readMs + writeMs` can be less than `totalMs`.
+
+### mt.latency(): read / write latency
+
+`mt.top()` shows how much time each collection took in total; `mt.latency()` shows how slow each operation is on average.
+
+```js
+mt.latency()                // two samples 1 second apart: average latency in that second
+mt.latency('shop')          // one database; every user database by default (admin, local, config skipped)
+mt.latency({interval: 5})   // 5 seconds apart
+mt.latency({interval: 0})   // one sample: averages since startup
+```
+
+The lines on top are server-wide (`serverStatus().opLatencies`): average latency `avgMs` of `reads` / `writes` / `commands` / `transactions`, and operations per second `ops/s` (total `ops` for since-startup). Below, per collection (`latencyStats` from `$collStats`):
+
+| Column | Meaning |
+|---|---|
+| `ns` | database.collection |
+| `readOps` / `readMs` | reads and their average latency (ms) |
+| `writeOps` / `writeMs` | writes and their average latency |
+| `cmdOps` / `cmdMs` | other commands and their average latency |
+| `totalMs` | total time spent in the interval; rows are sorted by it |
+
+```
+> mt.latency()
+-- db.serverStatus().opLatencies; every user db: each collection aggregate([{$collStats: {latencyStats: {}}}]), sampled twice 1s apart; average latency in between (ms)
+       reads.avgMs: 1.37
+       reads.ops/s: 85
+      writes.avgMs: 3.51
+      writes.ops/s: 56
+    commands.ops/s: 0
+transactions.ops/s: 0
++-------------+---------+--------+----------+---------+--------+-------+---------+
+| ns          | readOps | readMs | writeOps | writeMs | cmdOps | cmdMs | totalMs |
++-------------+---------+--------+----------+---------+--------+-------+---------+
+| shop.orders |      59 |   0.51 |       56 |    0.31 |      0 |       |      47 |
+| shop.users  |      28 |   0.16 |        0 |         |      0 |       |       5 |
++-------------+---------+--------+----------+---------+--------+-------+---------+
+2 rows in set
+```
+
+- Latency is mongod's processing time, without the network round trip.
+- Collections with no operations in the interval are hidden.
+- MongoDB also counts the `serverStatus` and `$collStats` calls `mt.latency()` makes; when sampling it first measures what those probes cost and subtracts them, so a quiet instance shows 0 rather than its own probes.
+- It runs `$collStats` a few times per collection, which is slow with many collections; pass a database to narrow it.
 
 ### mt.locks(): lock waits
 
