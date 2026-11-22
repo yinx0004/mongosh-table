@@ -334,30 +334,30 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 
 ```
 > mt.cmds()
-+------------------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                            | description                                                                                                                                                                        |
-+------------------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                 | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                               |
-| mt.slow({ms, ns, sort})      | mysql.slow_log                   | Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first |
-| mt.top({interval, ns})       | sys.schema_table_statistics      | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                       |
-| mt.locks({all})              | sys.innodb_lock_waits            | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                          |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX    | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                               |
-| mt.repl()                    | SHOW SLAVE STATUS                | Replica set members, replication lag (seconds), sync source                                                                                                                        |
-| mt.dbs()                     | SHOW DATABASES                   | Disk space used by each database                                                                                                                                                   |
-| mt.colls('db')               | SHOW TABLE STATUS                | Documents, data and index size per collection, largest first; current db by default                                                                                                |
-| mt.frag('db')                | TABLES.DATA_FREE                 | Disk space each collection can reuse after deletes, most first; current db by default                                                                                              |
-| mt.idx('coll')               | SHOW INDEX FROM t                | Index keys, size, usage count and options                                                                                                                                          |
-| mt.explain(cursor)           | EXPLAIN ANALYZE                  | Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; analyze: false = plan only, no execution                        |
-| mt.builds()                  | ALTER TABLE progress             | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                            |
-| mt.unusedIdx('db')           | sys.schema_unused_indexes        | Indexes never used (ops = 0), largest first; all user databases by default                                                                                                         |
-| mt.dupIdx('db')              | sys.schema_redundant_indexes     | Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default                                                       |
-| mt.conns()                   | PROCESSLIST GROUP BY host        | Connections per client IP                                                                                                                                                          |
-| mt.oplog()                   | SHOW BINARY LOGS                 | Oplog size and how much time it covers                                                                                                                                             |
-| mt.status({interval})        | SHOW GLOBAL STATUS               | Version, role, ops/s, connections, cache and other key metrics                                                                                                                     |
-| mt.cache('db')               | sys.innodb_buffer_stats_by_table | WiredTiger cache used by each collection, most first; all databases by default                                                                                                     |
-| mt.ttl('db')                 | information_schema.EVENTS        | TTL indexes: expiry, oldest document, how far past expiry, and the TTL thread; all databases by default                                                                            |
-| mt.log({n, grep, sev})       | performance_schema.error_log     | Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings                                                              |
-+------------------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+----------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                            | description                                                                                                                                                                                                                                                  |
++------------------------------+----------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                 | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                                         |
+| mt.slow({ms, ns, sort})      | mysql.slow_log                   | Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first                                                                           |
+| mt.top({interval, ns})       | sys.schema_table_statistics      | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                                                 |
+| mt.locks({all})              | sys.innodb_lock_waits            | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                                                    |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX    | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                                         |
+| mt.repl()                    | SHOW SLAVE STATUS                | Replica set members, replication lag (seconds), sync source                                                                                                                                                                                                  |
+| mt.dbs()                     | SHOW DATABASES                   | Disk space used by each database                                                                                                                                                                                                                             |
+| mt.colls('db')               | SHOW TABLE STATUS                | Documents, data and index size per collection, largest first; current db by default                                                                                                                                                                          |
+| mt.frag('db')                | TABLES.DATA_FREE                 | Disk space each collection can reuse after deletes, most first; current db by default                                                                                                                                                                        |
+| mt.idx('coll')               | SHOW INDEX FROM t                | Index keys, size, usage count and options                                                                                                                                                                                                                    |
+| mt.explain(cursor | n)       | EXPLAIN ANALYZE                  | Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; also takes slow-log commands, and mt.explain(n) explains row n of the last mt.slow() / mt.log(); analyze: false = plan only, no execution |
+| mt.builds()                  | ALTER TABLE progress             | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                                                                      |
+| mt.unusedIdx('db')           | sys.schema_unused_indexes        | Indexes never used (ops = 0), largest first; all user databases by default                                                                                                                                                                                   |
+| mt.dupIdx('db')              | sys.schema_redundant_indexes     | Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default                                                                                                                                 |
+| mt.conns()                   | PROCESSLIST GROUP BY host        | Connections per client IP                                                                                                                                                                                                                                    |
+| mt.oplog()                   | SHOW BINARY LOGS                 | Oplog size and how much time it covers                                                                                                                                                                                                                       |
+| mt.status({interval})        | SHOW GLOBAL STATUS               | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                                               |
+| mt.cache('db')               | sys.innodb_buffer_stats_by_table | WiredTiger cache used by each collection, most first; all databases by default                                                                                                                                                                               |
+| mt.ttl('db')                 | information_schema.EVENTS        | TTL indexes: expiry, oldest document, how far past expiry, and the TTL thread; all databases by default                                                                                                                                                      |
+| mt.log({n, grep, sev})       | performance_schema.error_log     | Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings                                                                                                                                        |
++------------------------------+----------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 All accept t() options such as {cols: ...} or {vertical: true}; mt.config({showCmd: false}) hides the native command
 ```
 
@@ -447,6 +447,7 @@ The header shows the profiler settings:
 
 | Column | Meaning |
 |---|---|
+| `#` | Row number, used by `mt.explain(n)` |
 | `ts` | When the operation finished |
 | `ms` | Duration in milliseconds (`millis`) |
 | `op` | `query`, `update`, `command`... |
@@ -464,13 +465,55 @@ The header shows the profiler settings:
      level: 1
     slowms: 20
 sampleRate: 1
-+-------------------------+-----+--------+-------------+-------------------------------------+--------------+--------------+-----------+---------------+------------------------------------------+
-| ts                      | ms  | op     | ns          | plan                                | keysExamined | docsExamined | nreturned | client        | command                                  |
-+-------------------------+-----+--------+-------------+-------------------------------------+--------------+--------------+-----------+---------------+------------------------------------------+
-| 2026-11-22 08:06:12.189 |  46 | update | shop.orders | COLLSCAN                            |            0 |        20000 |           | 192.168.117.5 | {q: {customer.vip: true}, u: {$set: {... |
-| 2026-11-22 08:06:12.140 | 186 | query  | shop.orders | IXSCAN { status: 1, createdAt: -1 } |           80 |           80 |        80 | 192.168.117.5 | {find: orders, filter: {$where: sleep... |
-+-------------------------+-----+--------+-------------+-------------------------------------+--------------+--------------+-----------+---------------+------------------------------------------+
-2 rows in set
+*************************** 1. row ***************************
+           #: 1
+          ts: 2026-11-22 12:51:23.118
+          ms: 30
+          op: command
+          ns: shop.orders
+        plan: COLLSCAN
+keysExamined: 0
+docsExamined: 20000
+   nreturned: 2
+      client: 192.168.107.6
+     command: {aggregate: orders, pipeline: [{$group: {_id: $status, n: {$sum: 1}, total: {$sum: $amount}}}, {$sort: {_id: 1}}], cursor: {}}
+*************************** 2. row ***************************
+           #: 2
+          ts: 2026-11-22 12:51:22.888
+          ms: 10295
+          op: query
+          ns: shop.orders
+        plan: IXSCAN { status: 1, createdAt: -1 }
+keysExamined: 101
+docsExamined: 101
+   nreturned: 101
+      client: 192.168.107.5
+     command: {find: orders, filter: {$where: sleep(100) || true, status: NEW}}
+*************************** 3. row ***************************
+           #: 3
+          ts: 2026-11-22 12:51:11.812
+          ms: 43
+          op: update
+          ns: shop.orders
+        plan: COLLSCAN
+keysExamined: 0
+docsExamined: 20000
+   nreturned: 
+      client: 192.168.107.5
+     command: {q: {customer.vip: true}, u: {$set: {level: gold}}, multi: true, upsert: false}
+*************************** 4. row ***************************
+           #: 4
+          ts: 2026-11-22 12:51:11.764
+          ms: 178
+          op: query
+          ns: shop.orders
+        plan: IXSCAN { status: 1, createdAt: -1 }
+keysExamined: 80
+docsExamined: 80
+   nreturned: 80
+      client: 192.168.107.5
+     command: {find: orders, filter: {$where: sleep(1) || true, status: NEW}, limit: 80}
+4 rows in set
 ```
 
 ```
@@ -481,28 +524,30 @@ sampleRate: 1
     slowms: 20
 sampleRate: 1
 *************************** 1. row ***************************
-          ts: 2026-11-22 08:06:12.140
-          ms: 186
+           #: 1
+          ts: 2026-11-22 12:51:22.888
+          ms: 10295
+          op: query
+          ns: shop.orders
+        plan: IXSCAN { status: 1, createdAt: -1 }
+keysExamined: 101
+docsExamined: 101
+   nreturned: 101
+      client: 192.168.107.5
+     command: {find: orders, filter: {$where: sleep(100) || true, status: NEW}}
+*************************** 2. row ***************************
+           #: 2
+          ts: 2026-11-22 12:51:11.764
+          ms: 178
           op: query
           ns: shop.orders
         plan: IXSCAN { status: 1, createdAt: -1 }
 keysExamined: 80
 docsExamined: 80
    nreturned: 80
-      client: 192.168.117.5
+      client: 192.168.107.5
      command: {find: orders, filter: {$where: sleep(1) || true, status: NEW}, limit: 80}
-*************************** 2. row ***************************
-          ts: 2026-11-22 08:06:12.189
-          ms: 46
-          op: update
-          ns: shop.orders
-        plan: COLLSCAN
-keysExamined: 0
-docsExamined: 20000
-   nreturned: 
-      client: 192.168.117.5
-     command: {q: {customer.vip: true}, u: {$set: {level: gold}}, multi: true, upsert: false}
-2 rows in set
+2 rows in set  (showing the first 2 of 4 rows)
 ```
 
 ```
@@ -520,7 +565,7 @@ How it works:
 
 - It runs `profile: -1` for the header (the same as `db.getProfilingStatus()`), `count` for the number of matching entries, then `find(filter).sort(sort).limit(limit)`. So by default you get the 50 newest, and with `{sort: 'ms'}` the 50 slowest; when there are more than `limit`, the footer gives the total.
 - Reads of `system.profile` itself and `profile` commands are always left out, so at level 2 you do not see `mt.slow()` itself.
-- `docsExamined` far above `nreturned`, or a `COLLSCAN` plan, usually means a missing index.
+- `docsExamined` far above `nreturned`, or a `COLLSCAN` plan, usually means a missing index. Run `mt.explain(n)` on that row to see its plan, see [Explaining commands from a slow log](#explaining-commands-from-a-slow-log).
 - `system.profile` is a 1 MB capped collection that overwrites its oldest entries when full, so it only covers recent activity.
 
 ### mt.explain(): query plans
@@ -532,6 +577,7 @@ mt.explain(db.orders.find({status: 'PAID'}).sort({createdAt: -1}))   // a cursor
 mt.explain(db.orders.find({status: 'PAID'}), {analyze: false})       // plan only, nothing runs (queryPlanner)
 mt.explain(db.orders.explain('executionStats').aggregate([...]))     // aggregation: explain it, then pass the result in
 mt.explain(db.orders.aggregate([...]))                               // in mongosh an aggregation cursor works too
+mt.explain(1)                                                        // row 1 of the last mt.slow() / mt.log(), see below
 ```
 
 Aggregation cursors in the legacy mongo shell have no `explain()`; use the third form above, or `db.orders.aggregate([...], {explain: true})` (plan only, no execution statistics). Any explain result you ran yourself can be passed in as well.
@@ -633,6 +679,71 @@ docsExaminedPerReturned: 1
 - By default (`executionStats`) the query really runs once to collect statistics; mind the time on big queries, and use `{analyze: false}` to see only the plan.
 - With the `sbe` engine only rows returned and time are available per step; scan counts are only in the totals on top.
 - Plans from a sharded cluster (mongos) are shown per shard, but this is not tested yet.
+
+#### Explaining commands from a slow log
+
+No need to rewrite the slow queries listed by `mt.slow()` / `mt.log()` as `find().sort().limit()`:
+
+```js
+mt.slow({sort: 'ms'})   // every row starts with a row number #
+mt.explain(1)           // explain the command of row 1 above; Slow query rows from mt.log() work the same way
+```
+
+You can also pass the command from a slow log directly:
+
+```js
+// a command document from system.profile or a log (fields mongos adds for shards are dropped automatically)
+mt.explain({find: 's02orders', filter: {status: 'shipped', amount: {$gte: 3000}}, sort: {createdAt: -1}, limit: 40,
+            projection: {$sortKey: {$meta: 'sortKey'}}, shardVersion: [...]})
+mt.explain(db.system.profile.find().sort({millis: -1}).limit(1).next())   // a profile document
+mt.explain('{"t":{"$date":...},"msg":"Slow query","attr":{...}}')         // a whole 4.4+ JSON log line, as a string
+```
+
+- Fields added by mongos and drivers are dropped (`shardVersion`, `databaseVersion`, `lsid`, `$clusterTime`, `readConcern`, `$sortKey` in the projection...), then it runs `db.runCommand({explain: command, verbosity: 'executionStats'})`.
+- The database is the command's `$db` or the database part of `ns`; failing that the `{db: 'shop'}` option, and failing that the current database.
+- `find`, `aggregate`, `count`, `distinct`, `update`, `delete` and `findAndModify` are supported. Single update / remove statements from the profiler or the log are wrapped into `update` / `delete` commands; a getMore uses its original command (`originatingCommand`). Explaining a write does not modify any data.
+- `{"$date": ...}`, `{"$oid": ...}`, `{"$numberLong": ...}` and friends in JSON logs are turned back into real types; otherwise the filter would not match.
+- The commands shown in `mt.slow()` / `mt.log()` tables have lost their quotes and types and cannot be pasted back; use the row number, or pass the original command or log line.
+- Logs before 4.4 are plain text without the command structure, so `mt.log()` rows cannot be explained there; `mt.slow()` (which reads the profiler) works on every version.
+
+```
+> mt.slow({sort: 'ms', cols: '#,ms,op,plan,docsExamined,nreturned,command'})
+-- db.getSiblingDB('shop').system.profile.find({}).sort({millis: -1, ts: -1})
+        db: shop
+     level: 1
+    slowms: 20
+sampleRate: 1
++---+----+-------+----------------------+--------------+-----------+------------------------------------------+
+| # | ms | op    | plan                 | docsExamined | nreturned | command                                  |
++---+----+-------+----------------------+--------------+-----------+------------------------------------------+
+| 1 | 53 | query | IXSCAN { status: 1 } |        66667 |        40 | {find: orders, filter: {status: shipp... |
++---+----+-------+----------------------+--------------+-----------+------------------------------------------+
+1 row in set
+```
+
+```
+> mt.explain(1)
+-- db.getSiblingDB('shop').runCommand({explain: {find: orders, filter: {status: shipped, amount: {$gte: 3000}}, sort: {createdAt: -1}, limit: 40}, verbosity: 'executionStats'})
+                     ns: shop.orders
+                 engine: classic
+    executionTimeMillis: 44
+              nReturned: 40
+      totalKeysExamined: 66667
+      totalDocsExamined: 66667
+docsExaminedPerReturned: 1666.7
+          rejectedPlans: 0
++------------+----------+-----------+--------------+--------------+----+-------------------------------+----------------------+
+| stage      | index    | nReturned | keysExamined | docsExamined | ms | detail                        | note                 |
++------------+----------+-----------+--------------+--------------+----+-------------------------------+----------------------+
+| SORT       |          |        40 |              |              |  1 | sort {createdAt: -1}          | in-memory sort       |
+|   FETCH    |          |     26667 |              |        66667 |  1 | filter {amount: {$gte: 3000}} | filtered after fetch |
+|     IXSCAN | status_1 |     66667 |        66667 |              |  0 | status ["shipped", "shipped"] |                      |
++------------+----------+-----------+--------------+--------------+----+-------------------------------+----------------------+
+3 rows in set
+Note: in-memory sort; filtered after fetch
+```
+
+It scanned over 66,000 documents to return 40 (`docsExaminedPerReturned: 1666.7`): `status_1` can only find by `status`, `amount` is filtered after fetching each document, and `createdAt` is sorted in memory. An index on `{status: 1, createdAt: -1, amount: 1}` (equality, then sort, then range fields) returns rows already sorted and filters `amount` inside the index.
 
 ### mt.top(): time per collection
 
@@ -1251,6 +1362,7 @@ It runs `db.adminCommand({getLog: 'global'})` and shows the last `n` lines, olde
 
 | Column | Meaning |
 |---|---|
+| `#` | Row number, used by `mt.explain(n)` (Slow query rows, 4.4+) |
 | `time` | Time, in the `tz` time zone |
 | `sev` | Severity: `F` fatal, `E` error, `W` warning, `I` info, `D1`–`D5` debug |
 | `comp` | Component: `NETWORK`, `COMMAND`, `REPL`, `STORAGE`... |
@@ -1279,26 +1391,27 @@ It runs `db.adminCommand({getLog: 'global'})` and shows the last `n` lines, olde
 > mt.log('COLLSCAN', {n: 1, vertical: true})
 -- db.adminCommand({getLog: 'global'})
 *************************** 1. row ***************************
-time: 2026-11-22 09:50:14.217
+   #: 1
+time: 2026-11-22 12:51:55.234
  sev: I
 comp: WRITE
- ctx: conn79
+ ctx: conn87
   id: 51803
  msg: Slow query
-attr: {type: remove, ns: shop.orders, appName: mongosh 2.14.2, command: {q: {amount: {$lt: {$numberDecimal: 300}}}, limit: 0}, planSummary: COLLSCAN, planningTimeMicros: 129, totalOplogSlotDurationMicros: 7975, keysExamined: 0, docsExamined: 13333, ndeleted: 8000, keysDeleted: 32000, numYields: 13, locks: {ParallelBatchWriterMode: {acquireCount: {r: 14}}, FeatureCompatibilityVersion: {acquireCount: {w: 14}}, ReplicationStateTransition: {acquireCount: {w: 14}}, Global: {acquireCount: {w: 14}}, Database: {acquireCount: {w: 14}}, Collection: {acquireCount: {w: 14}}}, flowControl: {acquireCount: 14}, readConcern: {level: local, provenance: implicitDefault}, storage: {data: {bytesRead: 124878, timeReadingMicros: 124}}, cpuNanos: 57315703, remote: "192.168.117.6:33208", durationMillis: 64}
+attr: {type: remove, ns: shop.orders, appName: mongosh 2.14.2, command: {q: {amount: {$lt: {$numberDecimal: 300}}}, limit: 0}, planSummary: COLLSCAN, planningTimeMicros: 197, totalOplogSlotDurationMicros: 10094, keysExamined: 0, docsExamined: 13333, ndeleted: 8000, keysDeleted: 32000, numYields: 13, locks: {ParallelBatchWriterMode: {acquireCount: {r: 14}}, FeatureCompatibilityVersion: {acquireCount: {w: 14}}, ReplicationStateTransition: {acquireCount: {w: 14}}, Global: {acquireCount: {w: 14}}, Database: {acquireCount: {w: 14}}, Collection: {acquireCount: {w: 14}}}, flowControl: {acquireCount: 14}, readConcern: {level: local, provenance: implicitDefault}, storage: {data: {bytesRead: 124878, timeReadingMicros: 208}}, cpuNanos: 72781484, remote: "192.168.107.6:33382", durationMillis: 76}
 1 row in set
-(showing the last 1 of 4 rows)
+(showing the last 1 of 5 rows)
 ```
 
 ```
 > mt.log({startup: true})
 -- db.adminCommand({getLog: 'startupWarnings'})
-+-------------------------+-----+---------+---------------+-------+------------------------------------------+------------------------------------------+
-| time                    | sev | comp    | ctx           | id    | msg                                      | attr                                     |
-+-------------------------+-----+---------+---------------+-------+------------------------------------------+------------------------------------------+
-| 2026-11-22 09:49:43.633 | W   | CONTROL | initandlisten | 22120 | Access control is not enabled for the... |                                          |
-| 2026-11-22 09:49:43.633 | W   | CONTROL | initandlisten | 22184 | Soft rlimits for open file descriptor... | {currentValue: 20480, recommendedMini... |
-+-------------------------+-----+---------+---------------+-------+------------------------------------------+------------------------------------------+
++---+-------------------------+-----+---------+---------------+-------+------------------------------------------+------------------------------------------+
+| # | time                    | sev | comp    | ctx           | id    | msg                                      | attr                                     |
++---+-------------------------+-----+---------+---------------+-------+------------------------------------------+------------------------------------------+
+| 1 | 2026-11-22 12:51:27.314 | W   | CONTROL | initandlisten | 22120 | Access control is not enabled for the... |                                          |
+| 2 | 2026-11-22 12:51:27.314 | W   | CONTROL | initandlisten | 22184 | Soft rlimits for open file descriptor... | {currentValue: 20480, recommendedMini... |
++---+-------------------------+-----+---------+---------------+-------+------------------------------------------+------------------------------------------+
 2 rows in set
 ```
 
