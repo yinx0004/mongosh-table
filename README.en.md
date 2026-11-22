@@ -334,30 +334,32 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 
 ```
 > mt.cmds()
-+------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                            | description                                                                                                                                                                                                                                                                                             |
-+------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                 | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                                                                                    |
-| mt.slow({ms, ns, sort})      | mysql.slow_log                   | Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first                                                                                                                      |
-| mt.top({interval, ns})       | sys.schema_table_statistics      | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                                                                                            |
-| mt.locks({all})              | sys.innodb_lock_waits            | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                                                                                               |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX    | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                                                                                    |
-| mt.repl()                    | SHOW SLAVE STATUS                | Replica set members, replication lag (seconds), sync source                                                                                                                                                                                                                                             |
-| mt.dbs()                     | SHOW DATABASES                   | Disk space used by each database                                                                                                                                                                                                                                                                        |
-| mt.colls('db')               | SHOW TABLE STATUS                | Documents, data and index size per collection, largest first; current db by default                                                                                                                                                                                                                     |
-| mt.frag('db')                | TABLES.DATA_FREE                 | Disk space each collection can reuse after deletes, most first; current db by default                                                                                                                                                                                                                   |
-| mt.idx('coll')               | SHOW INDEX FROM t                | Index keys, size, usage count and options                                                                                                                                                                                                                                                               |
-| mt.explain(cursor | n)       | EXPLAIN [ANALYZE]                | Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; also takes slow-log commands, and mt.explain(n) explains row n of the last mt.slow() / mt.log(); plan only by default, nothing runs; analyze: true runs it for rows scanned and time |
-| mt.builds()                  | ALTER TABLE progress             | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                                                                                                                 |
-| mt.unusedIdx('db')           | sys.schema_unused_indexes        | Indexes never used (ops = 0), largest first; all user databases by default                                                                                                                                                                                                                              |
-| mt.dupIdx('db')              | sys.schema_redundant_indexes     | Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default                                                                                                                                                                            |
-| mt.conns()                   | PROCESSLIST GROUP BY host        | Connections per client IP                                                                                                                                                                                                                                                                               |
-| mt.oplog()                   | SHOW BINARY LOGS                 | Oplog size and how much time it covers                                                                                                                                                                                                                                                                  |
-| mt.status({interval})        | SHOW GLOBAL STATUS               | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                                                                                          |
-| mt.cache('db')               | sys.innodb_buffer_stats_by_table | WiredTiger cache used by each collection, most first; all databases by default                                                                                                                                                                                                                          |
-| mt.ttl('db')                 | information_schema.EVENTS        | TTL indexes: expiry, oldest document, how far past expiry, and the TTL thread; all databases by default                                                                                                                                                                                                 |
-| mt.log({n, grep, sev})       | performance_schema.error_log     | Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings                                                                                                                                                                                   |
-+------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                            | description                                                                                                                                                                                                   |
++------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                 | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                          |
+| mt.slow({ms, ns, sort})      | mysql.slow_log                   | Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first                            |
+| mt.top({interval, ns})       | sys.schema_table_statistics      | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                  |
+| mt.locks({all})              | sys.innodb_lock_waits            | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                     |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX    | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                          |
+| mt.repl()                    | SHOW SLAVE STATUS                | Replica set members, replication lag (seconds), sync source                                                                                                                                                   |
+| mt.dbs()                     | SHOW DATABASES                   | Disk space used by each database                                                                                                                                                                              |
+| mt.colls('db')               | SHOW TABLE STATUS                | Documents, data and index size per collection, largest first; current db by default                                                                                                                           |
+| mt.frag('db')                | TABLES.DATA_FREE                 | Disk space each collection can reuse after deletes, most first; current db by default                                                                                                                         |
+| mt.idx('coll')               | SHOW INDEX FROM t                | Index keys, size, usage count and options                                                                                                                                                                     |
+| mt.explain(cursor)           | EXPLAIN [ANALYZE]                | Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; plan only by default, nothing runs; analyze: true runs it for rows scanned and time        |
+| mt.explainLog(n | line)      | EXPLAIN on a slow log query      | Explain a query from a slow log: first what the log recorded about the real run, then the current plan, noting if the plan changed; n is a row of mt.slow() / mt.log(), or pass a whole log line or a command |
+| mt.logQuery(n | line)        | slow log → SQL                   | Turn a query from a slow log into a mongosh statement you can run (nothing runs), keeping the types                                                                                                           |
+| mt.builds()                  | ALTER TABLE progress             | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                       |
+| mt.unusedIdx('db')           | sys.schema_unused_indexes        | Indexes never used (ops = 0), largest first; all user databases by default                                                                                                                                    |
+| mt.dupIdx('db')              | sys.schema_redundant_indexes     | Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default                                                                                  |
+| mt.conns()                   | PROCESSLIST GROUP BY host        | Connections per client IP                                                                                                                                                                                     |
+| mt.oplog()                   | SHOW BINARY LOGS                 | Oplog size and how much time it covers                                                                                                                                                                        |
+| mt.status({interval})        | SHOW GLOBAL STATUS               | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                |
+| mt.cache('db')               | sys.innodb_buffer_stats_by_table | WiredTiger cache used by each collection, most first; all databases by default                                                                                                                                |
+| mt.ttl('db')                 | information_schema.EVENTS        | TTL indexes: expiry, oldest document, how far past expiry, and the TTL thread; all databases by default                                                                                                       |
+| mt.log({n, grep, sev})       | performance_schema.error_log     | Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings                                                                                         |
++------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 All accept t() options such as {cols: ...} or {vertical: true}; mt.config({showCmd: false}) hides the native command
 ```
 
@@ -447,7 +449,7 @@ The header shows the profiler settings:
 
 | Column | Meaning |
 |---|---|
-| `#` | Row number, used by `mt.explain(n)` |
+| `#` | Row number, used by `mt.explainLog(n)` / `mt.logQuery(n)` |
 | `ts` | When the operation finished |
 | `ms` | Duration in milliseconds (`millis`) |
 | `op` | `query`, `update`, `command`... |
@@ -565,7 +567,7 @@ How it works:
 
 - It runs `profile: -1` for the header (the same as `db.getProfilingStatus()`), `count` for the number of matching entries, then `find(filter).sort(sort).limit(limit)`. So by default you get the 50 newest, and with `{sort: 'ms'}` the 50 slowest; when there are more than `limit`, the footer gives the total.
 - Reads of `system.profile` itself and `profile` commands are always left out, so at level 2 you do not see `mt.slow()` itself.
-- `docsExamined` far above `nreturned`, or a `COLLSCAN` plan, usually means a missing index. Run `mt.explain(n)` on that row to see its plan, see [Explaining commands from a slow log](#explaining-commands-from-a-slow-log).
+- `docsExamined` far above `nreturned`, or a `COLLSCAN` plan, usually means a missing index. Run `mt.explainLog(n)` on that row to see its plan, see [mt.explainLog()](#mtexplainlog-explain-a-query-from-a-slow-log); `mt.logQuery(n)` turns it into a statement you can run.
 - `system.profile` is a 1 MB capped collection that overwrites its oldest entries when full, so it only covers recent activity.
 
 ### mt.explain(): query plans
@@ -579,8 +581,9 @@ mt.explain(db.orders.find({status: 'PAID'}).sort({createdAt: -1}))   // a cursor
 mt.explain(db.orders.find({status: 'PAID'}), {analyze: true})        // really runs once: rows scanned and returned, time
 mt.explain(db.orders.explain('executionStats').aggregate([...]))     // aggregation: explain it, then pass the result in
 mt.explain(db.orders.aggregate([...]))                               // in mongosh an aggregation cursor works too
-mt.explain(1)                                                        // row 1 of the last mt.slow() / mt.log(), see below
 ```
+
+For queries from a slow log (row numbers from `mt.slow()` / `mt.log()`, whole log lines, commands) use [`mt.explainLog()`](#mtexplainlog-explain-a-query-from-a-slow-log); to turn them into a statement you can run, use [`mt.logQuery()`](#mtlogquery-turn-a-slow-log-query-into-a-statement).
 
 Aggregation cursors in the legacy mongo shell have no `explain()`; use the third form above, or `db.orders.aggregate([...], {explain: true})` (plan only, no execution statistics). Any explain result you ran yourself can be passed in as well.
 
@@ -684,30 +687,49 @@ docsExaminedPerReturned: 1
 - With the `sbe` engine only rows returned and time are available per step; scan counts are only in the totals on top.
 - Plans from a sharded cluster (mongos) are shown per shard, but this is not tested yet.
 
-#### Explaining commands from a slow log
+### mt.explainLog(): explain a query from a slow log
 
-No need to rewrite a slow query as `find().sort().limit()` yourself. Pick the form that matches what you have:
+No need to rewrite a slow query as `find().sort().limit()` yourself. Pick the form that matches what you have (to only turn it into a statement without explaining it, use `mt.logQuery()` in the next section, with the same input):
 
 | What you have | How to write it |
 |---|---|
-| Rows that `mt.slow()` / `mt.log()` just listed | `mt.explain(n)` |
-| A whole line from the log file (4.4+ JSON, or older text) | The whole line in backticks: ``mt.explain(`whole line`)`` |
-| Just the command part of a log line, from `{` | In backticks: ``mt.explain(`{ find: ... }`)`` |
-| An entry in `system.profile` | `mt.explain(db.system.profile.findOne(...))` |
-| A command you write yourself | `mt.explain({find: 'orders', filter: {...}, ...}, {db: 'name'})` |
+| Rows that `mt.slow()` / `mt.log()` just listed | `mt.explainLog(n)` |
+| A whole line from the log file (4.4+ JSON, or older text) | The whole line in backticks: ``mt.explainLog(`whole line`)`` |
+| Just the command part of a log line, from `{` | In backticks: ``mt.explainLog(`{ find: ... }`)`` |
+| An entry in `system.profile` | `mt.explainLog(db.system.profile.findOne(...))` |
+| A command you write yourself | `mt.explainLog({find: 'orders', filter: {...}, ...}, {db: 'name'})` |
+
+**What the slow log recorded**
+
+When the input comes from a slow log (a row number, a whole log line, a profile document), it first lists what the log recorded about **how the query actually ran in production back then**, then shows the current plan. With the default plan-only mode this is the only real execution data:
+
+| Field | Meaning |
+|---|---|
+| `time` / `durationMillis` | When it ran and how many milliseconds it took |
+| `planSummary` | The plan it used, e.g. `COLLSCAN`, `IXSCAN { status: 1 }` |
+| `keysExamined` / `docsExamined` / `nreturned` | Index keys and documents scanned, documents returned |
+| `docsExaminedPerReturned` | Documents scanned per document returned |
+| `hasSortStage` / `usedDisk` | Sorted in memory / spilled to disk |
+| `numYields` / `writeConflicts` | Times it yielded, write conflicts |
+| `nMatched` / `nModified` / `ndeleted` / `ninserted` | Documents matched, modified, deleted, inserted by a write |
+| `reslen` / `bytesRead` / `readMs` | Response size; bytes read from disk and time spent reading (4.4+) |
+| `queryHash` / `planCacheKey` | Query shape and plan cache key, to look up with `getPlanCache` |
+| `appName` / `client` | Application name and client; through mongos, the real client from the command's `$client.mongos.client` |
+
+If the plan back then differs from the current one (e.g. `COLLSCAN` then, an index now), a note at the end says so. A bare command (`{ find: ... }` or a JS object) has no such section.
 
 **1. By row number (easiest)**
 
 ```js
 mt.slow({sort: 'ms'})                       // slow queries from the profiler; every row starts with a row number #
-mt.explain(1)                               // plan of row 1
+mt.explainLog(1)                               // plan of row 1
 
 mt.log('Slow query', {n: 10})               // slow queries from the log (4.4+)
 mt.log('command: find', {n: 10})            // how to find them in text logs before 4.4
-mt.explain(3)                               // plan of row 3
+mt.explainLog(3)                               // plan of row 3
 ```
 
-`mt.explain(n)` uses the rows of the **most recent** `mt.slow()` or `mt.log()`.
+`mt.explainLog(n)` uses the rows of the **most recent** `mt.slow()` or `mt.log()`.
 
 **2. A whole line copied from the log file**
 
@@ -721,7 +743,7 @@ grep 'command: find' /var/log/mongodb/mongod.log | grep orders | tail -1      # 
 Copy the line as is and pass it in mongosh wrapped in **backticks** (no need to touch the single or double quotes inside):
 
 ```js
-mt.explain(`2026-11-21T15:46:55.624+0000 I COMMAND  [conn2166] command shop.orders appName: "order-service" command: find { find: "orders", filter: { userId: 24530, status: { $in: [ "paid", "shipped", "completed" ] } }, projection: { $sortKey: { $meta: "sortKey" } }, sort: { createdAt: -1 }, limit: 20, shardVersion: [ Timestamp(0, 0), ObjectId('000000000000000000000000') ], $clusterTime: { clusterTime: Timestamp(1795276015, 2), signature: { hash: BinData(0, D9414CF6101A9BBBE43BC15ACE884BFEDC177A72), keyId: 7710591826859655200 } }, $db: "shop" } planSummary: COLLSCAN keysExamined:0 docsExamined:1005163 hasSortStage:1 nreturned:1 465ms`)
+mt.explainLog(`2026-11-21T15:46:55.624+0000 I COMMAND  [conn2166] command shop.orders appName: "order-service" command: find { find: "orders", filter: { userId: 24530, status: { $in: [ "paid", "shipped", "completed" ] } }, projection: { $sortKey: { $meta: "sortKey" } }, sort: { createdAt: -1 }, limit: 20, shardVersion: [ Timestamp(0, 0), ObjectId('000000000000000000000000') ], $clusterTime: { clusterTime: Timestamp(1795276015, 2), signature: { hash: BinData(0, D9414CF6101A9BBBE43BC15ACE884BFEDC177A72), keyId: 7710591826859655200 } }, $db: "shop" } planSummary: COLLSCAN keysExamined:0 docsExamined:1005163 hasSortStage:1 nreturned:1 465ms`)
 ```
 
 What actually runs:
@@ -730,14 +752,55 @@ What actually runs:
 db.getSiblingDB('shop').runCommand({explain: {find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}, sort: {createdAt: -1}, limit: 20}, verbosity: 'queryPlanner'})
 ```
 
-To see what it actually scans and how long it takes, add `, {analyze: true}` at the end; `verbosity` is then `'executionStats'`. The database and collection come from the line; `shardVersion`, `$clusterTime`, `$sortKey` and the like are dropped. A 4.4+ JSON log line is passed whole in the same way. The legacy mongo shell has no backticks: use single quotes and write the single quotes inside the line as `\'`.
+The database and collection come from the line; `shardVersion`, `$clusterTime`, `$sortKey` and the like are dropped. A 4.4+ JSON log line is passed whole in the same way. The legacy mongo shell has no backticks: use single quotes and write the single quotes inside the line as `\'`.
+
+A real example on 4.0: the log file recorded a slow full collection scan, and an index on `{userId: 1, createdAt: -1}` was created afterwards. Take this line from the log:
+
+```
+2026-11-22T14:28:03.508+0000 I COMMAND  [conn5] command shop.orders appName: "mongosh 1.10.6" command: find { find: "orders", filter: { userId: 24530, status: { $in: [ "paid", "shipped", "completed" ] } }, sort: { createdAt: -1 }, limit: 20, lsid: { id: UUID("7285e945-26a5-4f7e-9a7f-bd962147c64c") }, $clusterTime: { clusterTime: Timestamp(1795357683, 50000), signature: { hash: BinData(0, 0000000000000000000000000000000000000000), keyId: 0 } }, $db: "shop" } planSummary: COLLSCAN keysExamined:0 docsExamined:200000 hasSortStage:1 cursorExhausted:1 numYields:1562 nreturned:20 reslen:2035 locks:{ Global: { acquireCount: { r: 1563 } }, Database: { acquireCount: { r: 1563 } }, Collection: { acquireCount: { r: 1563 } } } storage:{} protocol:op_msg 41ms
+```
+
+and pass it whole:
+
+```
+> mt.explainLog(`...the whole line above...`)
+Recorded in the slow log (what actually ran):
+                   time: 2026-11-22 14:28:03.508
+         durationMillis: 41
+            planSummary: COLLSCAN
+           keysExamined: 0
+           docsExamined: 200000
+              nreturned: 20
+docsExaminedPerReturned: 10000
+           hasSortStage: true
+              numYields: 1562
+                 reslen: 2035
+                appName: mongosh 1.10.6
+
+-- db.getSiblingDB('shop').runCommand({explain: {find: orders, filter: {userId: 24530, status: {$in: [paid, shipped, completed]}}, sort: {createdAt: -1}, limit: 20}, verbosity: 'queryPlanner'})
+           ns: shop.orders
+       engine: classic
+rejectedPlans: 0
++------------+-----------------------+------------------------------------------+----------------------+
+| stage      | index                 | detail                                   | note                 |
++------------+-----------------------+------------------------------------------+----------------------+
+| LIMIT      |                       | limit 20                                 |                      |
+|   FETCH    |                       | filter {status: {$in: [completed, pai... | filtered after fetch |
+|     IXSCAN | userId_1_createdAt_-1 | userId [24530, 24530], createdAt [Max... |                      |
++------------+-----------------------+------------------------------------------+----------------------+
+3 rows in set
+Note: filtered after fetch
+Note: the slow log used COLLSCAN, the current plan is IXSCAN { userId: 1, createdAt: -1 } (indexes, data distribution or the plan cache may have changed)
+```
+
+Back then it scanned 200,000 documents to return 20 and sorted in memory; now it can use the new index, and the last line points out the difference. Add `{analyze: true}` to see what it scans and how long it takes now.
 
 **3. Just the command part**
 
 Copy from the `{` after `command: find ` to its matching `}` (extra text after it, such as `planSummary: ...`, is fine), again in backticks:
 
 ```js
-mt.explain(`{ find: "orders", filter: { userId: 24530, status: { $in: [ "paid", "shipped", "completed" ] } }, sort: { createdAt: -1 }, limit: 20, $db: "shop" }`)
+mt.explainLog(`{ find: "orders", filter: { userId: 24530, status: { $in: [ "paid", "shipped", "completed" ] } }, sort: { createdAt: -1 }, limit: 20, $db: "shop" }`)
 ```
 
 The database is the command's `$db`; without one, `use` the database first or pass `{db: 'shop'}`.
@@ -747,7 +810,7 @@ The database is the command's `$db`; without one, `use` the database first or pa
 Pick the parts that matter and write them as a JS object (with quoted strings):
 
 ```js
-mt.explain({find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}, sort: {createdAt: -1}, limit: 20}, {db: 'shop'})
+mt.explainLog({find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}, sort: {createdAt: -1}, limit: 20}, {db: 'shop'})
 ```
 
 **Forms that fail**
@@ -763,6 +826,8 @@ How it works:
 - The database is the command's `$db` or the database part of `ns`; failing that the `{db: 'shop'}` option, and failing that the current database.
 - `find`, `aggregate`, `count`, `distinct`, `update`, `delete` and `findAndModify` are supported. Single update / remove statements from the profiler or the log are wrapped into `update` / `delete` commands; a getMore uses its original command (`originatingCommand`). Explaining a write does not modify any data.
 - `{"$date": ...}`, `{"$oid": ...}`, `{"$numberLong": ...}` and friends in JSON logs are turned back into real types; otherwise the filter would not match.
+- The whole line is parsed first: the command is explained, and what follows it (`planSummary`, `keysExamined`, `docsExamined`, `nreturned`, `hasSortStage`, `numYields`, `reslen`, the duration...) becomes "What the slow log recorded" above; 4.4+ JSON lines use `attr`, and profile documents their own fields.
+- On 4.2 and earlier, `getLog` (and so `mt.log()`) keeps only the first 512 characters of each line, so long commands are cut: cut inside the command it cannot be explained, cut after it some fields such as the duration are missing. Lines copied from the log **file** have no such limit.
 - In text logs from before 4.4 the command is in shell syntax: unquoted field names, `ObjectId('...')`, `Timestamp(1, 2)`, `new Date(...)`, hex `BinData(0, D941...)`. These are parsed into the matching types (no `eval`), and integers above 2^53 become `NumberLong`.
 
 ```
@@ -775,17 +840,35 @@ sampleRate: 1
 +---+----+-------+----------------------+--------------+-----------+------------------------------------------+
 | # | ms | op    | plan                 | docsExamined | nreturned | command                                  |
 +---+----+-------+----------------------+--------------+-----------+------------------------------------------+
-| 1 | 53 | query | IXSCAN { status: 1 } |        66667 |        40 | {find: orders, filter: {status: shipp... |
+| 1 | 55 | query | IXSCAN { status: 1 } |        66667 |        40 | {find: orders, filter: {status: shipp... |
 +---+----+-------+----------------------+--------------+-----------+------------------------------------------+
 1 row in set
 ```
 
 ```
-> mt.explain(1, {analyze: true})
+> mt.explainLog(1, {analyze: true})
+Recorded in the slow log (what actually ran):
+                   time: 2026-11-22 14:28:51.180
+         durationMillis: 55
+            planSummary: IXSCAN { status: 1 }
+           keysExamined: 66667
+           docsExamined: 66667
+              nreturned: 40
+docsExaminedPerReturned: 1666.7
+           hasSortStage: true
+              numYields: 66
+                 reslen: 4175
+              bytesRead: 1.2 MB
+                 readMs: 2.5
+              queryHash: 99CCC831
+           planCacheKey: 0C7BC6BB
+                appName: mongosh 2.14.2
+                 client: 127.0.0.1
+
 -- db.getSiblingDB('shop').runCommand({explain: {find: orders, filter: {status: shipped, amount: {$gte: 3000}}, sort: {createdAt: -1}, limit: 40}, verbosity: 'executionStats'})
                      ns: shop.orders
                  engine: classic
-    executionTimeMillis: 44
+    executionTimeMillis: 56
               nReturned: 40
       totalKeysExamined: 66667
       totalDocsExamined: 66667
@@ -794,8 +877,8 @@ docsExaminedPerReturned: 1666.7
 +------------+----------+-----------+--------------+--------------+----+-------------------------------+----------------------+
 | stage      | index    | nReturned | keysExamined | docsExamined | ms | detail                        | note                 |
 +------------+----------+-----------+--------------+--------------+----+-------------------------------+----------------------+
-| SORT       |          |        40 |              |              |  1 | sort {createdAt: -1}          | in-memory sort       |
-|   FETCH    |          |     26667 |              |        66667 |  1 | filter {amount: {$gte: 3000}} | filtered after fetch |
+| SORT       |          |        40 |              |              |  3 | sort {createdAt: -1}          | in-memory sort       |
+|   FETCH    |          |     26667 |              |        66667 |  2 | filter {amount: {$gte: 3000}} | filtered after fetch |
 |     IXSCAN | status_1 |     66667 |        66667 |              |  0 | status ["shipped", "shipped"] |                      |
 +------------+----------+-----------+--------------+--------------+----+-------------------------------+----------------------+
 3 rows in set
@@ -803,6 +886,32 @@ Note: in-memory sort; filtered after fetch
 ```
 
 It scanned over 66,000 documents to return 40 (`docsExaminedPerReturned: 1666.7`): `status_1` can only find by `status`, `amount` is filtered after fetching each document, and `createdAt` is sorted in memory. An index on `{status: 1, createdAt: -1, amount: 1}` (equality, then sort, then range fields) returns rows already sorted and filters `amount` inside the index.
+
+### mt.logQuery(): turn a slow-log query into a statement
+
+Takes the same input as `mt.explainLog()` (a row number, a whole log line, the command part, a profile document, a command object), but explains nothing and runs nothing: it prints the equivalent mongosh statement, ready to run. Handy for changing the filter, adding `.hint()`, rerunning it in a test environment, or passing it to `mt.explain()`.
+
+```js
+mt.slow({sort: 'ms'})
+mt.logQuery(1)                 // row 1 as a statement
+mt.logQuery(`whole log line`)  // a whole line copied from the log file
+```
+
+```
+> mt.logQuery(`...whole line...`)
+// slow log: 2026-11-22 14:28:03.508, 41ms, COLLSCAN, docsExamined 200000, nreturned 20, mongosh 1.10.6
+db.getSiblingDB('shop').orders.find({userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}).sort({createdAt: -1}).limit(20)
+
+> mt.logQuery({update: 'orders', updates: [{q: {status: 'new', createdAt: {$lt: ISODate('2024-01-01T00:00:00Z')}}, u: {$set: {status: 'expired'}}, multi: true}], $db: 'shop'})
+// Note: this is a write; running it changes data
+db.getSiblingDB('shop').orders.updateMany({status: 'new', createdAt: {$lt: ISODate('2024-01-01T00:00:00.000Z')}}, {$set: {status: 'expired'}})
+```
+
+- For input from a slow log, a comment on the first line gives when it ran, how long it took, the plan, documents scanned and returned; copying the whole block still runs.
+- Types are written out as they are: dates as `ISODate('...')`, plus `ObjectId('...')`, `NumberLong('...')`, `NumberDecimal('...')`, `UUID('...')`, regexes and so on; dotted field names are quoted.
+- As with explain, fields added by mongos and drivers are dropped (`shardVersion`, `lsid`, `$clusterTime`, `$sortKey`...).
+- find becomes `.find(filter, projection).sort().skip().limit().hint()...`; aggregate, count and distinct use the matching methods; update / delete become `updateOne` / `updateMany` / `replaceOne` / `deleteOne` / `deleteMany` according to `multi` / `limit`, and findAndModify becomes `findOneAndUpdate` and friends. **Writes get a comment line warning that running them changes data.**
+- When the collection name clashes with a database method (such as `stats`) or is not a valid identifier, it is written as `getCollection('...')`.
 
 ### mt.top(): time per collection
 
@@ -1421,7 +1530,7 @@ It runs `db.adminCommand({getLog: 'global'})` and shows the last `n` lines, olde
 
 | Column | Meaning |
 |---|---|
-| `#` | Row number, used by `mt.explain(n)` (rows with a command, such as slow queries) |
+| `#` | Row number, used by `mt.explainLog(n)` / `mt.logQuery(n)` (rows with a command, such as slow queries) |
 | `time` | Time, in the `tz` time zone |
 | `sev` | Severity: `F` fatal, `E` error, `W` warning, `I` info, `D1`–`D5` debug |
 | `comp` | Component: `NETWORK`, `COMMAND`, `REPL`, `STORAGE`... |

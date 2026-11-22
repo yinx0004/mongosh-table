@@ -94,11 +94,17 @@
       noBuild: '没有正在建的索引',
       buildWaiting: '等待中',
       noDup: '没有冗余索引',
-      needExplain: "mt.explain() 需要游标、explain 的结果、慢日志里的命令或行号，例如 mt.explain(db.orders.find({status: 'PAID'}))、mt.explain({find: 'orders', filter: {...}})、mt.explain(1)",
-      noRow: function (n) { return '没有第 ' + n + ' 行：mt.explain(行号) 用的是上一次 mt.slow() 或 mt.log() 列出的行'; },
+      needExplain: "mt.explain() 需要游标或 explain 的结果，例如 mt.explain(db.orders.find({status: 'PAID'}))；慢日志里的查询用 mt.explainLog(...)",
+      useExplainLog: 'mt.explain() 只接受游标或 explain 的结果；慢日志里的行号、日志行、命令请用 mt.explainLog(...)，想转成查询语句用 mt.logQuery(...)',
+      needLog: "mt.explainLog() / mt.logQuery() 需要慢日志里的东西：mt.slow() / mt.log() 的行号、日志里的整行、命令（从 { 开始）、profile 文档，或命令对象如 {find: 'orders', filter: {...}}",
+      noRow: function (n) { return '没有第 ' + n + ' 行：行号用的是上一次 mt.slow() 或 mt.log() 列出的行'; },
+      recLine: function (parts) { return '// 慢日志：' + parts.join('，'); },
+      writeWarn: '// 注意：这是写操作，执行会修改数据',
       rowNoCmd: function (n) { return '第 ' + n + ' 行没有可以 explain 的命令（或者日志行太长被截断了；可以改用 mt.slow()）'; },
-      notJson: "解析不了这段文字：mt.slow() / mt.log() 表格里显示的命令去掉了引号，不能直接粘贴；请用 mt.explain(行号)，或者传日志里的整行（4.4 起的 JSON 行、之前的文本行都可以）、命令文档",
+      notJson: "解析不了这段文字：mt.slow() / mt.log() 表格里显示的命令去掉了引号，不能直接粘贴；请用行号，或者传日志里的整行（4.4 起的 JSON 行、之前的文本行都可以）、命令文档",
       cantExplain: function (v) { return v + ' 命令不能 explain，支持 find、aggregate、count、distinct、update、delete、findAndModify'; },
+      recTitle: '慢日志里记录的执行情况（当时实际跑的）：',
+      planChanged: function (a, b) { return '注意：慢日志里用的是 ' + a + '，现在的计划是 ' + b + '（索引、数据分布或计划缓存可能变了）'; },
       exNote: { fullScan: '全表扫描', memSort: '内存排序', spilled: '用到了磁盘', postFilter: '取出后再过滤', multikey: '多键索引' },
       exNotes: function (list) { return '注意：' + list.join('；'); },
       cmdDesc: {
@@ -113,7 +119,9 @@
         unusedIdx: '没被用过的索引（ops = 0），大的在前；默认所有用户库',
         dupIdx: '冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库',
         builds: '正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久',
-        explain: '执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；也接受慢日志里的命令，mt.explain(n) 对上次 mt.slow() / mt.log() 的第 n 行；默认只看计划、不执行，analyze: true 执行一遍看扫描数和耗时',
+        explain: '执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；默认只看计划、不执行，analyze: true 执行一遍看扫描数和耗时',
+        explainLog: '对慢日志里的查询做 explain：先列出日志里记下的实际执行情况，再看现在的计划，计划变了会提示；n 是 mt.slow() / mt.log() 的行号，也可以传整行日志、命令',
+        logQuery: '把慢日志里的查询转成可以直接运行的 mongosh 语句（不执行），类型照原样保留',
         log: "最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告",
         repl: '副本集成员状态、复制延迟（秒）、同步源',
         dbs: '各库占用的磁盘空间',
@@ -139,7 +147,7 @@
           helpRow("t(x, {tz: '+08:00'})", '本次用指定时区显示时间'),
           helpRow('mt.csv(x, ...)', '输出 CSV（贴进 Excel）'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'en'})", '改本会话默认值'),
-          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.locks()、mt.txns()、mt.frag()、mt.cache()、mt.ttl()、mt.log()、mt.unusedIdx()、mt.dupIdx()、mt.explain()、mt.builds()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
+          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.locks()、mt.txns()、mt.frag()、mt.cache()、mt.ttl()、mt.log()、mt.unusedIdx()、mt.dupIdx()、mt.explain()、mt.explainLog()、mt.logQuery()、mt.builds()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
           '',
           '  示例：'
         ].concat(HELP_EXAMPLES, ['', '  显示约定：' + (nul || '空白') + ' = 值为 null；空白 = 空字符串 ""；' +
@@ -182,11 +190,17 @@
       noBuild: 'no index builds in progress',
       buildWaiting: 'waiting',
       noDup: 'no redundant indexes',
-      needExplain: "mt.explain() needs a cursor, an explain result, a command from a slow log, or a row number, e.g. mt.explain(db.orders.find({status: 'PAID'})), mt.explain({find: 'orders', filter: {...}}) or mt.explain(1)",
-      noRow: function (n) { return 'there is no row ' + n + ': mt.explain(n) uses the rows of the last mt.slow() or mt.log()'; },
+      needExplain: "mt.explain() needs a cursor or an explain result, e.g. mt.explain(db.orders.find({status: 'PAID'})); for queries from a slow log use mt.explainLog(...)",
+      useExplainLog: 'mt.explain() takes only a cursor or an explain result; for row numbers, log lines and commands from a slow log use mt.explainLog(...), or mt.logQuery(...) to turn them into a query',
+      needLog: "mt.explainLog() / mt.logQuery() need something from a slow log: a row number from mt.slow() / mt.log(), a whole log line, a command (from its {), a profile document, or a command object such as {find: 'orders', filter: {...}}",
+      noRow: function (n) { return 'there is no row ' + n + ': row numbers refer to the last mt.slow() or mt.log()'; },
+      recLine: function (parts) { return '// slow log: ' + parts.join(', '); },
+      writeWarn: '// Note: this is a write; running it changes data',
       rowNoCmd: function (n) { return 'row ' + n + ' has no command that can be explained (or the log line was truncated for being too long; try mt.slow())'; },
-      notJson: "cannot parse this text: the commands shown in mt.slow() / mt.log() tables drop the quotes and cannot be pasted back; use mt.explain(n), or pass a whole log line (a 4.4+ JSON line or an older text line) or a command document",
+      notJson: "cannot parse this text: the commands shown in mt.slow() / mt.log() tables drop the quotes and cannot be pasted back; use the row number, or pass a whole log line (a 4.4+ JSON line or an older text line) or a command document",
       cantExplain: function (v) { return 'a ' + v + ' command cannot be explained; find, aggregate, count, distinct, update, delete and findAndModify can'; },
+      recTitle: 'Recorded in the slow log (what actually ran):',
+      planChanged: function (a, b) { return 'Note: the slow log used ' + a + ', the current plan is ' + b + ' (indexes, data distribution or the plan cache may have changed)'; },
       exNote: { fullScan: 'full scan', memSort: 'in-memory sort', spilled: 'spilled to disk', postFilter: 'filtered after fetch', multikey: 'multikey' },
       exNotes: function (list) { return 'Note: ' + list.join('; '); },
       cmdDesc: {
@@ -201,7 +215,9 @@
         unusedIdx: 'Indexes never used (ops = 0), largest first; all user databases by default',
         dupIdx: 'Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default',
         builds: 'Index builds in progress: collection, index, phase, progress and how long they have run',
-        explain: 'Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; also takes slow-log commands, and mt.explain(n) explains row n of the last mt.slow() / mt.log(); plan only by default, nothing runs; analyze: true runs it for rows scanned and time',
+        explain: 'Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; plan only by default, nothing runs; analyze: true runs it for rows scanned and time',
+        explainLog: 'Explain a query from a slow log: first what the log recorded about the real run, then the current plan, noting if the plan changed; n is a row of mt.slow() / mt.log(), or pass a whole log line or a command',
+        logQuery: 'Turn a query from a slow log into a mongosh statement you can run (nothing runs), keeping the types',
         log: "Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings",
         repl: 'Replica set members, replication lag (seconds), sync source',
         dbs: 'Disk space used by each database',
@@ -227,7 +243,7 @@
           helpRow("t(x, {tz: '+08:00'})", 'Show times in this time zone for this call'),
           helpRow('mt.csv(x, ...)', 'Print CSV (paste into Excel)'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'zh'})", 'Change defaults for this session'),
-          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.locks(), mt.txns(), mt.frag(), mt.cache(), mt.ttl(), mt.log(), mt.unusedIdx(), mt.dupIdx(), mt.explain(), mt.builds(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
+          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.locks(), mt.txns(), mt.frag(), mt.cache(), mt.ttl(), mt.log(), mt.unusedIdx(), mt.dupIdx(), mt.explain(), mt.explainLog(), mt.logQuery(), mt.builds(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
           '',
           '  Examples:'
         ].concat(HELP_EXAMPLES, ['', '  Conventions: ' + (nul || 'blank') + ' = value is null; blank = empty string ""; ' +
@@ -1181,7 +1197,7 @@
       throw e;
     }
     headOut({ db: dn, level: st.was, slowms: st.slowms, sampleRate: st.sampleRate }, Object.assign({}, o, { cols: null, exclude: null }), out);
-    lastRows = docs.map(function (p) { return { op: p.op, ns: p.ns, command: p.command, originatingCommand: p.originatingCommand }; });
+    lastRows = docs.map(function (p) { return { op: p.op, ns: p.ns, command: p.command, originatingCommand: p.originatingCommand, stats: statsFromProfile(p) }; });
     var rows = docs.map(function (p, i) {
       var cc = cleanCmd(p.command || p.query || {});
       return {
@@ -1796,7 +1812,86 @@
     var e = { op: m[1], ns: m[2], command: cmd.v };
     var k = line.indexOf('originatingCommand: {', cmd.pos);
     if (k >= 0) e.originatingCommand = looseParse(line, line.indexOf('{', k)).v;
+    e.stats = statsFromText(line, cmd.pos, e.command);
     return e;
+  }
+  // ─── 慢日志里记录的执行情况：当时实际跑了多久、扫了多少、用的什么计划。三种来源统一成一份
+  function recClient(cmd, dflt) {   // 经 mongos 转发时，真正的客户端在 $client.mongos.client
+    var mc = isDoc(cmd) && isDoc(cmd.$client) && isDoc(cmd.$client.mongos) ? cmd.$client.mongos.client : null;
+    return mc || dflt || '';
+  }
+  function recStats(x) {
+    var num = function (v) { return v == null ? null : toNum(v); };
+    var r = {
+      time: isDate(x.time) ? x.time : null, durationMillis: num(x.ms), planSummary: x.planSummary || null,
+      keysExamined: num(x.keysExamined), docsExamined: num(x.docsExamined), nreturned: num(x.nreturned)
+    };
+    if (r.docsExamined > 0 && r.nreturned != null) r.docsExaminedPerReturned = r.nreturned > 0 ? Math.round(r.docsExamined / r.nreturned * 10) / 10 : 'Infinity';
+    r.hasSortStage = x.hasSortStage && String(x.hasSortStage) !== '0' && String(x.hasSortStage) !== 'false' ? true : null;
+    r.usedDisk = x.usedDisk && String(x.usedDisk) !== '0' && String(x.usedDisk) !== 'false' ? true : null;
+    ['numYields', 'writeConflicts', 'nMatched', 'nModified', 'ndeleted', 'ninserted', 'reslen'].forEach(function (k) { r[k] = num(x[k]); });
+    r.bytesRead = x.bytesRead != null ? sizeText(x.bytesRead) : null;
+    r.readMs = x.readMicros != null ? Math.round(toNum(x.readMicros) / 100) / 10 : null;
+    r.queryHash = x.queryHash || null; r.planCacheKey = x.planCacheKey || null;
+    r.appName = x.appName || null; r.client = x.client || null;
+    return r;
+  }
+  // 4.4 之前的文本行：命令后面是 planSummary: IXSCAN { a: 1 } keysExamined:0 docsExamined:5 ... 465ms
+  function statsFromText(line, from, cmd) {
+    var rest = line.slice(from), kv = {}, m, re = /\s(\w+):([^\s{]+)/g;
+    while ((m = re.exec(rest))) if (!(m[1] in kv)) kv[m[1]] = m[2];
+    var ps = /planSummary: (.*?)(?=\s\w+:\S|\s\d+ms\s*$|$)/.exec(rest);
+    var ms = /\s(\d+)ms\s*$/.exec(rest);
+    var app = /appName: "((?:[^"\\]|\\.)*)"/.exec(line);
+    var t = safe(function () { return logLine(line).time; });
+    return recStats({
+      time: t, ms: ms ? ms[1] : null, planSummary: ps ? ps[1].trim() : null,
+      keysExamined: kv.keysExamined, docsExamined: kv.docsExamined, nreturned: kv.nreturned, hasSortStage: kv.hasSortStage,
+      usedDisk: kv.usedDisk, numYields: kv.numYields, writeConflicts: kv.writeConflicts, nMatched: kv.nMatched, nModified: kv.nModified,
+      ndeleted: kv.ndeleted, ninserted: kv.ninserted, reslen: kv.reslen, queryHash: kv.queryHash, planCacheKey: kv.planCacheKey,
+      appName: app ? app[1] : null, client: recClient(cmd, '')
+    });
+  }
+  // 4.4 起的 JSON 行：attr 里的 durationMillis、planSummary、storage...
+  function statsFromAttr(a, time) {
+    var sd = isDoc(a.storage) && isDoc(a.storage.data) ? a.storage.data : {};
+    return recStats({
+      time: time, ms: a.durationMillis, planSummary: a.planSummary, keysExamined: a.keysExamined, docsExamined: a.docsExamined,
+      nreturned: a.nreturned, hasSortStage: a.hasSortStage, usedDisk: a.usedDisk, numYields: a.numYields, writeConflicts: a.writeConflicts,
+      nMatched: a.nMatched, nModified: a.nModified, ndeleted: a.ndeleted, ninserted: a.ninserted, reslen: a.reslen,
+      bytesRead: sd.bytesRead, readMicros: sd.timeReadingMicros, queryHash: a.queryHash, planCacheKey: a.planCacheKey,
+      appName: a.appName, client: recClient(a.command, a.remote)
+    });
+  }
+  // system.profile 的文档
+  function statsFromProfile(p) {
+    var sd = isDoc(p.storage) && isDoc(p.storage.data) ? p.storage.data : {};
+    return recStats({
+      time: p.ts, ms: p.millis, planSummary: p.planSummary, keysExamined: p.keysExamined, docsExamined: p.docsExamined,
+      nreturned: p.nreturned, hasSortStage: p.hasSortStage, usedDisk: p.usedDisk, numYields: p.numYield, writeConflicts: p.writeConflicts,
+      nMatched: p.nMatched, nModified: p.nModified, ndeleted: p.ndeleted, ninserted: p.ninserted, reslen: p.responseLength,
+      bytesRead: sd.bytesRead, readMicros: sd.timeReadingMicros, queryHash: p.queryHash, planCacheKey: p.planCacheKey,
+      appName: p.appName, client: recClient(p.command, p.client)
+    });
+  }
+  // 计划摘要比较：只看用了哪些扫描（COLLSCAN、IXSCAN { a: 1 } ...），忽略空格和引号
+  function scanSet(summary) {
+    var out = [], m, re = /([A-Z][A-Z_]*SCAN)(\{[^{}]*\})?/g, t = String(summary || '').replace(/[\s"']/g, '');
+    while ((m = re.exec(t))) out.push(m[1] + (m[2] || ''));
+    return out.sort().join(',');
+  }
+  function planSummaryOf(root) {
+    var parts = [];
+    (function walk(n) {
+      if (!isDoc(n)) return;
+      if (n._child) { walk(n._child); return; }
+      if (/SCAN$/.test(String(n.stage))) {
+        var kp = isDoc(n.keyPattern) ? ' { ' + Object.keys(n.keyPattern).map(function (k) { return k + ': ' + valText(n.keyPattern[k], true, {}); }).join(', ') + ' }' : '';
+        parts.push(n.stage + kp);
+      }
+      exChildren(n).forEach(walk);
+    })(root);
+    return parts.join(', ');
   }
   // mongos、驱动、副本集内部加的字段，explain 时去掉
   var EXPLAIN_DROP = ['lsid', 'txnNumber', 'txnRetryCounter', 'autocommit', 'startTransaction', 'readConcern', 'writeConcern',
@@ -1831,40 +1926,184 @@
     var db0 = c.$db || (ns.indexOf('.') > 0 ? ns.slice(0, ns.indexOf('.')) : '') || o.db || curDb().getName();
     return { db: String(db0), cmd: cmd };
   }
-  function explain(x, opts) {
-    var o = dbaOpts(opts, ['nReturned', 'keysExamined', 'docsExamined', 'ms']), out = [];
-    // 默认只取计划（queryPlanner），不执行查询；{analyze: true} 才真的执行一遍拿统计（executionStats）
-    var m = M(), analyze = o.analyze === true, verb = analyze ? 'executionStats' : 'queryPlanner';
-    var ex, entry = null;
+  // 慢日志里的东西 → entry：{op, ns, command, originatingCommand, stats}；认不出来返回 null
+  function logEntry(x, m) {
     if (typeof x === 'number') {
       if (!lastRows || x < 1 || x > lastRows.length || x !== Math.floor(x)) fail(m.noRow(x));
-      entry = lastRows[x - 1];
-      if (!entry) fail(m.rowNoCmd(x));
-    } else if (typeof x === 'string') {
+      if (!lastRows[x - 1]) fail(m.rowNoCmd(x));
+      return lastRows[x - 1];
+    }
+    if (typeof x === 'string') {
       var j = safe(function () { return JSON.parse(x); });
       if (isDoc(j)) {
         j = ejsonFix(j);
-        entry = isDoc(j.attr) && isDoc(j.attr.command) ? { op: j.attr.type, ns: j.attr.ns, command: j.attr.command, originatingCommand: j.attr.originatingCommand }
-          : isDoc(j.command) ? j : { command: j };
-      } else {
-        // 4.4 之前的文本日志行，或者 shell 写法的命令 { find: "c", filter: { ... } }
-        entry = safe(function () { return textLogEntry(x); });
-        if (!entry && /^\s*\{/.test(x)) entry = safe(function () { var c = looseParse(x, x.indexOf('{')).v; return isDoc(c) ? { command: c } : null; });
-        if (!entry) fail(m.notJson);
+        var jt = isDoc(j.t) && isDate(j.t.$date) ? j.t.$date : isDate(j.t) ? j.t : null;
+        if (isDoc(j.attr) && isDoc(j.attr.command)) {
+          return { op: j.attr.type, ns: j.attr.ns, command: j.attr.command, originatingCommand: j.attr.originatingCommand, stats: statsFromAttr(j.attr, jt) };
+        }
+        return isDoc(j.command) ? j : { command: j };
       }
-    } else if (x && typeof x.explain === 'function') {
+      // 4.4 之前的文本日志行，或者 shell 写法的命令 { find: "c", filter: { ... } }
+      var e = safe(function () { return textLogEntry(x); });
+      if (!e && /^\s*\{/.test(x)) e = safe(function () { var c = looseParse(x, x.indexOf('{')).v; return isDoc(c) ? { command: c } : null; });
+      if (!e) fail(m.notJson);
+      return e;
+    }
+    var d0 = unwrap(x);
+    if (!isDoc(d0) || d0.queryPlanner || d0.stages || typeof d0.explain === 'function') return null;
+    if (isDoc(d0.command)) return d0.millis != null && !d0.stats ? Object.assign({}, d0, { stats: statsFromProfile(d0) }) : d0;   // profile 文档
+    return { command: ejsonFix(d0) };   // 命令对象
+  }
+  function looksLikeLog(x) {
+    if (typeof x === 'number' || typeof x === 'string') return true;
+    var d = unwrap(x);
+    return isDoc(d) && !d.queryPlanner && !d.stages && typeof d.explain !== 'function';
+  }
+  function recOf(entry) {
+    var rec = entry && isDoc(entry.stats) ? prune(entry.stats) : null;
+    return rec && Object.keys(rec).length ? rec : null;
+  }
+  // 游标或 explain 的结果
+  function explain(x, opts) {
+    var o = dbaOpts(opts, ['nReturned', 'keysExamined', 'docsExamined', 'ms']), out = [];
+    // 默认只取计划（queryPlanner），不执行查询；{analyze: true} 才真的执行一遍拿统计（executionStats）
+    var m = M(), verb = o.analyze === true ? 'executionStats' : 'queryPlanner', ex;
+    if (x && typeof x.explain === 'function') {
       cmdLine(o, "cursor.explain('" + verb + "')", out);
       ex = unwrap(x.explain(verb));
     } else {
-      var d0 = unwrap(x);
-      if (isDoc(d0) && !d0.queryPlanner && !d0.stages) entry = isDoc(d0.command) ? d0 : { command: ejsonFix(d0) };
-      else ex = d0;
+      if (looksLikeLog(x)) fail(m.useExplainLog);
+      ex = unwrap(x);
     }
-    if (entry) {
-      var ec = explainCmd(entry, o);
-      cmdLine(o, "db.getSiblingDB('" + ec.db + "').runCommand({explain: " + valText(ec.cmd, true, o) + ", verbosity: '" + verb + "'})", out);
-      ex = runCmd(curDb().getSiblingDB(ec.db), { explain: ec.cmd, verbosity: verb });
+    showPlan(ex, o, out, null);
+  }
+  // 慢日志里的查询：先列出日志里记下的执行情况，再看现在的计划
+  function explainLog(x, opts) {
+    var o = dbaOpts(opts, ['nReturned', 'keysExamined', 'docsExamined', 'ms']), out = [];
+    var m = M(), verb = o.analyze === true ? 'executionStats' : 'queryPlanner';
+    var entry = x == null ? null : logEntry(x, m);
+    if (!entry) fail(m.needLog);
+    var rec = recOf(entry);
+    if (rec) {
+      out.push(m.recTitle);
+      headOut(rec, Object.assign({}, o, { cols: null, exclude: null }), out);
+      out.push('');
     }
+    var ec = explainCmd(entry, o);
+    cmdLine(o, "db.getSiblingDB('" + ec.db + "').runCommand({explain: " + valText(ec.cmd, true, o) + ", verbosity: '" + verb + "'})", out);
+    showPlan(runCmd(curDb().getSiblingDB(ec.db), { explain: ec.cmd, verbosity: verb }), o, out, rec);
+  }
+  // ─── 慢日志 → mongosh 语句。值写成 JS 字面量，BSON 类型照原样：ISODate、ObjectId、NumberLong...
+  function jsStr(v) { return "'" + JSON.stringify(String(v)).slice(1, -1).replace(/\\"/g, '"').replace(/'/g, "\\'") + "'"; }
+  function jsKey(k) { return /^[A-Za-z_$][\w$]*$/.test(k) ? k : jsStr(k); }
+  function binParts(v) {
+    var legacy = typeof v.base64 === 'function';
+    return {
+      sub: legacy ? v.subtype() : v.sub_type,
+      hex: safe(function () { return legacy ? v.hex() : v.toString('hex'); }, ''),
+      b64: safe(function () { return legacy ? v.base64() : v.toString('base64'); }, '')
+    };
+  }
+  function jsLit(v) {
+    if (v === undefined) return 'undefined';
+    if (v === null) return 'null';
+    if (typeof v === 'boolean') return String(v);
+    if (typeof v === 'number') return isFinite(v) ? String(v) : isNaN(v) ? 'NaN' : (v > 0 ? 'Infinity' : '-Infinity');
+    if (typeof v === 'string') return jsStr(v);
+    if (typeof v === 'bigint') return "NumberLong('" + String(v) + "')";
+    if (isDate(v)) return isNaN(v.getTime()) ? 'new Date(NaN)' : "ISODate('" + v.toISOString() + "')";
+    if (isRegExp(v)) return String(v);
+    var bt = bsonType(v);
+    switch (bt) {
+      case 'ObjectId': case 'ObjectID': return "ObjectId('" + (typeof v.str === 'string' ? v.str : v.toHexString()) + "')";
+      case 'Long': return "NumberLong('" + numText(v) + "')";
+      case 'Int32': return 'NumberInt(' + numText(v) + ')';
+      case 'Double': return numText(v);
+      case 'Decimal128': return "NumberDecimal('" + numText(v) + "')";
+      case 'Timestamp': { var tp = tsParts(v); return 'Timestamp({t: ' + tp[0] + ', i: ' + tp[1] + '})'; }
+      case 'Binary': {
+        var b = binParts(v);
+        if (b.sub === 4 && b.hex.length === 32) return "UUID('" + b.hex.slice(0, 8) + '-' + b.hex.slice(8, 12) + '-' + b.hex.slice(12, 16) + '-' + b.hex.slice(16, 20) + '-' + b.hex.slice(20) + "')";
+        return 'BinData(' + b.sub + ", '" + b.b64 + "')";
+      }
+      case 'MinKey': return 'MinKey()';
+      case 'MaxKey': return 'MaxKey()';
+      case 'BSONRegExp': return '/' + v.pattern + '/' + v.options;
+    }
+    if (Array.isArray(v)) return '[' + v.map(jsLit).join(', ') + ']';
+    if (isDoc(v)) return '{' + Object.keys(v).map(function (k) { return jsKey(k) + ': ' + jsLit(v[k]); }).join(', ') + '}';
+    return safe(function () { return String(v); }, '');
+  }
+  function pickOpts(c, keys) {
+    var o = {}, n = 0;
+    keys.forEach(function (k) { if (c[k] !== undefined && c[k] !== false) { o[k] = c[k]; n++; } });
+    return n ? o : null;
+  }
+  function hasOperator(u) { return isDoc(u) && Object.keys(u).some(function (k) { return k.charAt(0) === '$'; }); }
+  // explainCmd 清理过的命令 → 一行或几行 mongosh 语句；写操作返回 write: true
+  function shellLines(db0, cmd) {
+    var verb = Object.keys(cmd)[0], coll = String(cmd[verb]);
+    var dbExpr = 'db.getSiblingDB(' + jsStr(db0) + ')';
+    var useDot = /^[A-Za-z_][\w]*$/.test(coll) && !/^system\b/.test(coll) && typeof safe(function () { return curDb()[coll]; }) !== 'function';
+    var c = dbExpr + (useDot ? '.' + coll : '.getCollection(' + jsStr(coll) + ')');
+    var args = function (list) { while (list.length && list[list.length - 1] == null) list.pop(); return list.map(function (a) { return a == null ? '{}' : jsLit(a); }).join(', '); };
+    switch (verb) {
+      case 'find': {
+        var q = c + '.find(' + args([cmd.filter || {}, cmd.projection || null]) + ')';
+        ['sort', 'skip', 'limit', 'hint', 'collation', 'maxTimeMS', 'comment'].forEach(function (k) {
+          if (cmd[k] !== undefined && !(k === 'skip' && !cmd[k]) && !(k === 'limit' && !cmd[k])) q += '.' + k + '(' + jsLit(cmd[k]) + ')';
+        });
+        if (cmd.allowDiskUse) q += '.allowDiskUse()';
+        return { lines: [q] };
+      }
+      case 'aggregate':
+        return { lines: [c + '.aggregate(' + args([cmd.pipeline || [], pickOpts(cmd, ['allowDiskUse', 'collation', 'hint', 'maxTimeMS', 'comment', 'let'])]) + ')'] };
+      case 'count':
+        return { lines: [c + '.count(' + args([cmd.query || {}, pickOpts(cmd, ['limit', 'skip', 'hint', 'collation', 'maxTimeMS'])]) + ')'] };
+      case 'distinct':
+        return { lines: [c + '.distinct(' + args([cmd.key, cmd.query || {}, pickOpts(cmd, ['collation'])]) + ')'] };
+      case 'update':
+        return { write: true, lines: (cmd.updates || []).map(function (st) {
+          var fn = Array.isArray(st.u) || hasOperator(st.u) ? (st.multi ? 'updateMany' : 'updateOne') : 'replaceOne';
+          return c + '.' + fn + '(' + args([st.q || {}, st.u, pickOpts(st, ['upsert', 'arrayFilters', 'hint', 'collation'])]) + ')';
+        }) };
+      case 'delete':
+        return { write: true, lines: (cmd.deletes || []).map(function (st) {
+          return c + '.' + (st.limit === 1 ? 'deleteOne' : 'deleteMany') + '(' + args([st.q || {}, pickOpts(st, ['hint', 'collation'])]) + ')';
+        }) };
+      case 'findAndModify': case 'findandmodify': {
+        var fo = pickOpts(cmd, ['sort', 'collation', 'arrayFilters', 'hint']) || {};
+        if (cmd.fields) fo.projection = cmd.fields;
+        if (cmd.remove) return { write: true, lines: [c + '.findOneAndDelete(' + args([cmd.query || {}, Object.keys(fo).length ? fo : null]) + ')'] };
+        if (cmd.upsert) fo.upsert = true;
+        if (cmd['new']) fo.returnNewDocument = true;
+        var fn2 = Array.isArray(cmd.update) || hasOperator(cmd.update) ? 'findOneAndUpdate' : 'findOneAndReplace';
+        return { write: true, lines: [c + '.' + fn2 + '(' + args([cmd.query || {}, cmd.update, Object.keys(fo).length ? fo : null]) + ')'] };
+      }
+    }
+    return { lines: [dbExpr + '.runCommand(' + jsLit(cmd) + ')'] };
+  }
+  function logQuery(x, opts) {
+    var o = dbaOpts(opts), out = [], m = M();
+    var entry = x == null ? null : logEntry(x, m);
+    if (!entry) fail(m.needLog);
+    var ec = explainCmd(entry, o), q = shellLines(ec.db, ec.cmd), rec = recOf(entry);
+    if (rec) {
+      var parts = [];
+      if (rec.time) parts.push(valText(rec.time, true, o));
+      if (rec.durationMillis != null) parts.push(rec.durationMillis + 'ms');
+      if (rec.planSummary) parts.push(rec.planSummary);
+      if (rec.docsExamined != null) parts.push('docsExamined ' + rec.docsExamined);
+      if (rec.nreturned != null) parts.push('nreturned ' + rec.nreturned);
+      if (rec.appName) parts.push(rec.appName);
+      if (parts.length) out.push(m.recLine(parts));
+    }
+    if (q.write) out.push(m.writeWarn);
+    Array.prototype.push.apply(out, q.lines);
+    emit(out);
+  }
+  function showPlan(ex, o, out, rec) {
+    var m = M();
     if (!isDoc(ex) || !(ex.queryPlanner || ex.stages)) fail(m.needExplain);
     // 聚合：$cursor 之后的阶段在树的上面，倒过来排
     var stages = Array.isArray(ex.stages) ? ex.stages : [];
@@ -1930,6 +2169,10 @@
     var nl = [];
     notes.forEach(function (_, k) { nl.push(m.exNote[k]); });
     if (nl.length) out.push(m.exNotes(nl));
+    if (rec && rec.planSummary) {
+      var now = planSummaryOf(root);
+      if (now && scanSet(now) !== scanSet(rec.planSummary)) out.push(m.planChanged(rec.planSummary, now));
+    }
     emit(out);
   }
 
@@ -2048,7 +2291,10 @@
       r['#'] = i + 1;
       var a = r._attr, raw = r._raw;
       delete r._attr; delete r._raw;
-      if (isDoc(a) && isDoc(a.command)) return { op: a.type, ns: a.ns, command: a.command, originatingCommand: a.originatingCommand };
+      if (isDoc(a) && isDoc(a.command)) {
+        a = ejsonFix(a);
+        return { op: a.type, ns: a.ns, command: a.command, originatingCommand: a.originatingCommand, stats: statsFromAttr(a, isDate(r.time) ? r.time : null) };
+      }
       return raw ? safe(function () { return textLogEntry(raw); }) || null : null;   // 4.4 之前的文本日志
     });
     if (rows.every(function (r) { return r.id === ''; })) rows.forEach(function (r) { delete r.id; });   // 4.4 之前没有 id
@@ -2068,7 +2314,9 @@
     ["mt.colls('db')", 'SHOW TABLE STATUS', 'colls'],
     ["mt.frag('db')", 'TABLES.DATA_FREE', 'frag'],
     ["mt.idx('coll')", 'SHOW INDEX FROM t', 'idx'],
-    ['mt.explain(cursor | n)', 'EXPLAIN [ANALYZE]', 'explain'],
+    ['mt.explain(cursor)', 'EXPLAIN [ANALYZE]', 'explain'],
+    ['mt.explainLog(n | line)', 'EXPLAIN on a slow log query', 'explainLog'],
+    ['mt.logQuery(n | line)', 'slow log → SQL', 'logQuery'],
     ['mt.builds()', 'ALTER TABLE progress', 'builds'],
     ["mt.unusedIdx('db')", 'sys.schema_unused_indexes', 'unusedIdx'],
     ["mt.dupIdx('db')", 'sys.schema_redundant_indexes', 'dupIdx'],
@@ -2092,7 +2340,7 @@
     table: t, vertical: g, csv: csv, config: config, help: help, version: VERSION,
     cmds: cmds, ps: dba(ps), slow: dba(slow), top: dba(top), locks: dba(locks), txns: dba(txns), repl: dba(repl), dbs: dba(dbs), colls: dba(colls), idx: dba(idx),
     conns: dba(conns), oplog: dba(oplog), status: dba(status), frag: dba(frag), cache: dba(cache), ttl: dba(ttl), log: dba(log),
-    unusedIdx: dba(unusedIdx), dupIdx: dba(dupIdx), explain: dba(explain), builds: dba(builds)
+    unusedIdx: dba(unusedIdx), dupIdx: dba(dupIdx), explain: dba(explain), explainLog: dba(explainLog), logQuery: dba(logQuery), builds: dba(builds)
   };
   t[MARK] = g[MARK] = api[MARK] = true;
 
