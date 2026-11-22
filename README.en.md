@@ -682,31 +682,84 @@ docsExaminedPerReturned: 1
 
 #### Explaining commands from a slow log
 
-No need to rewrite the slow queries listed by `mt.slow()` / `mt.log()` as `find().sort().limit()`:
+No need to rewrite a slow query as `find().sort().limit()` yourself. Pick the form that matches what you have:
+
+| What you have | How to write it |
+|---|---|
+| Rows that `mt.slow()` / `mt.log()` just listed | `mt.explain(n)` |
+| A whole line from the log file (4.4+ JSON, or older text) | The whole line in backticks: ``mt.explain(`whole line`)`` |
+| Just the command part of a log line, from `{` | In backticks: ``mt.explain(`{ find: ... }`)`` |
+| An entry in `system.profile` | `mt.explain(db.system.profile.findOne(...))` |
+| A command you write yourself | `mt.explain({find: 'orders', filter: {...}, ...}, {db: 'name'})` |
+
+**1. By row number (easiest)**
 
 ```js
-mt.slow({sort: 'ms'})   // every row starts with a row number #
-mt.explain(1)           // explain the command of row 1 above; Slow query rows from mt.log() work the same way
+mt.slow({sort: 'ms'})                       // slow queries from the profiler; every row starts with a row number #
+mt.explain(1)                               // plan of row 1
+
+mt.log('Slow query', {n: 10})               // slow queries from the log (4.4+)
+mt.log('command: find', {n: 10})            // how to find them in text logs before 4.4
+mt.explain(3)                               // plan of row 3
 ```
 
-You can also pass the command from a slow log directly:
+`mt.explain(n)` uses the rows of the **most recent** `mt.slow()` or `mt.log()`.
+
+**2. A whole line copied from the log file**
+
+Find the line on the server first, for example:
+
+```bash
+grep 'Slow query' /var/log/mongodb/mongod.log | grep orders | tail -1          # 4.4+
+grep 'command: find' /var/log/mongodb/mongod.log | grep orders | tail -1      # before 4.4
+```
+
+Copy the line as is and pass it in mongosh wrapped in **backticks** (no need to touch the single or double quotes inside):
 
 ```js
-// a command document from system.profile or a log (fields mongos adds for shards are dropped automatically)
-mt.explain({find: 's02orders', filter: {status: 'shipped', amount: {$gte: 3000}}, sort: {createdAt: -1}, limit: 40,
-            projection: {$sortKey: {$meta: 'sortKey'}}, shardVersion: [...]})
-mt.explain(db.system.profile.find().sort({millis: -1}).limit(1).next())   // a profile document
-mt.explain('{"t":{"$date":...},"msg":"Slow query","attr":{...}}')         // a whole 4.4+ JSON log line, as a string
-mt.explain(`2026-11-21T15:46:55.624+0000 I COMMAND  [conn2166] command shop.orders ... command: find { ... } planSummary: ...`)   // a whole text log line from before 4.4
+mt.explain(`2026-11-21T15:46:55.624+0000 I COMMAND  [conn2166] command shop.orders appName: "order-service" command: find { find: "orders", filter: { userId: 24530, status: { $in: [ "paid", "shipped", "completed" ] } }, projection: { $sortKey: { $meta: "sortKey" } }, sort: { createdAt: -1 }, limit: 20, shardVersion: [ Timestamp(0, 0), ObjectId('000000000000000000000000') ], $clusterTime: { clusterTime: Timestamp(1795276015, 2), signature: { hash: BinData(0, D9414CF6101A9BBBE43BC15ACE884BFEDC177A72), keyId: 7710591826859655200 } }, $db: "shop" } planSummary: COLLSCAN keysExamined:0 docsExamined:1005163 hasSortStage:1 nreturned:1 465ms`)
 ```
+
+What actually runs:
+
+```js
+db.getSiblingDB('shop').runCommand({explain: {find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}, sort: {createdAt: -1}, limit: 20}, verbosity: 'executionStats'})
+```
+
+The database and collection come from the line; `shardVersion`, `$clusterTime`, `$sortKey` and the like are dropped. A 4.4+ JSON log line is passed whole in the same way. The legacy mongo shell has no backticks: use single quotes and write the single quotes inside the line as `\'`.
+
+**3. Just the command part**
+
+Copy from the `{` after `command: find ` to its matching `}` (extra text after it, such as `planSummary: ...`, is fine), again in backticks:
+
+```js
+mt.explain(`{ find: "orders", filter: { userId: 24530, status: { $in: [ "paid", "shipped", "completed" ] } }, sort: { createdAt: -1 }, limit: 20, $db: "shop" }`)
+```
+
+The database is the command's `$db`; without one, `use` the database first or pass `{db: 'shop'}`.
+
+**4. Writing the command yourself**
+
+Pick the parts that matter and write them as a JS object (with quoted strings):
+
+```js
+mt.explain({find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}, sort: {createdAt: -1}, limit: 20}, {db: 'shop'})
+```
+
+**Forms that fail**
+
+- Copying a command from the `mt.slow()` / `mt.log()` **table**: the table drops quotes and types, so it cannot be restored. Use the row number.
+- Copying from `command: find {` or `find {`: start from the `{`.
+- Pasting the log's command as a JS object **without quotes**: hex in `BinData(0, D941...)` and dotted field names like `customer.name` are not valid JS and give a syntax error. Wrap it in backticks as a string.
+- Log lines over 10 KB are truncated by MongoDB, with `...` in the middle, and cannot be parsed; use `mt.slow()` instead.
+
+How it works:
 
 - Fields added by mongos and drivers are dropped (`shardVersion`, `databaseVersion`, `lsid`, `$clusterTime`, `readConcern`, `$sortKey` in the projection...), then it runs `db.runCommand({explain: command, verbosity: 'executionStats'})`.
 - The database is the command's `$db` or the database part of `ns`; failing that the `{db: 'shop'}` option, and failing that the current database.
 - `find`, `aggregate`, `count`, `distinct`, `update`, `delete` and `findAndModify` are supported. Single update / remove statements from the profiler or the log are wrapped into `update` / `delete` commands; a getMore uses its original command (`originatingCommand`). Explaining a write does not modify any data.
 - `{"$date": ...}`, `{"$oid": ...}`, `{"$numberLong": ...}` and friends in JSON logs are turned back into real types; otherwise the filter would not match.
 - In text logs from before 4.4 the command is in shell syntax: unquoted field names, `ObjectId('...')`, `Timestamp(1, 2)`, `new Date(...)`, hex `BinData(0, D941...)`. These are parsed into the matching types (no `eval`), and integers above 2^53 become `NumberLong`.
-- When passing a whole line: inside single quotes, single quotes in the line (as in `ObjectId('...')`) must be written `\'`; in mongosh, backticks `` `...` `` are easiest. Log lines over 10 KB are truncated and cannot be parsed; use `mt.slow()` instead.
-- The commands shown in `mt.slow()` / `mt.log()` tables have lost their quotes and types and cannot be pasted back; use the row number, or pass the original command or log line.
 
 ```
 > mt.slow({sort: 'ms', cols: '#,ms,op,plan,docsExamined,nreturned,command'})
@@ -1148,7 +1201,7 @@ It runs `db.adminCommand({currentOp: 1, $all: true})` and picks the operations t
 ```
 
 - Since 4.4 indexes are built on a background thread while the client's `createIndexes` waits alongside; the two are shown as one row.
-- A build that has not started yet (waiting for a lock, say) shows as `waiting to start`.
+- A client `createIndexes` with no build thread shows as `waiting`: it either has not started yet (waiting for a lock, say) or has finished building and is waiting to commit (since 4.4 a majority of members must finish first).
 - To stop one: since 4.4 drop it with `db.orders.dropIndex('name')`; on earlier versions use `db.killOp(opid)`.
 - On a replica set, secondaries build the index too (at the same time since 4.4); connect to a secondary to see its progress.
 

@@ -682,31 +682,84 @@ docsExaminedPerReturned: 1
 
 #### 对慢日志里的命令做 explain
 
-`mt.slow()` / `mt.log()` 列出来的慢查询，不用自己改写成 `find().sort().limit()`：
+不用自己把慢查询改写成 `find().sort().limit()`，按手里有的东西选一种写法：
+
+| 手里有的 | 写法 |
+|---|---|
+| `mt.slow()` / `mt.log()` 刚列出来的行 | `mt.explain(行号)` |
+| 日志文件里的一整行（4.4 起的 JSON，或之前的文本） | 整行用反引号包起来：``mt.explain(`整行`)`` |
+| 日志里命令那一段，从 `{` 开始 | 用反引号包起来：``mt.explain(`{ find: ... }`)`` |
+| `system.profile` 里的一条 | `mt.explain(db.system.profile.findOne(...))` |
+| 自己写的命令 | `mt.explain({find: 'orders', filter: {...}, ...}, {db: '库名'})` |
+
+**1. 按行号（最省事）**
 
 ```js
-mt.slow({sort: 'ms'})   // 每行前面有行号 #
-mt.explain(1)           // 对上面第 1 行的命令做 explain；mt.log() 列出的 Slow query 行也一样
+mt.slow({sort: 'ms'})                       // profiler 里的慢查询，每行前面有行号 #
+mt.explain(1)                               // 第 1 行的执行计划
+
+mt.log('Slow query', {n: 10})               // 日志里的慢查询（4.4 起）
+mt.log('command: find', {n: 10})            // 4.4 之前的文本日志这样找
+mt.explain(3)                               // 第 3 行的执行计划
 ```
 
-也可以直接传慢日志里的命令：
+`mt.explain(n)` 用的是**最近一次** `mt.slow()` 或 `mt.log()` 列出的行。
+
+**2. 从日志文件里复制一整行**
+
+先在服务器上找到那一行，比如：
+
+```bash
+grep 'Slow query' /var/log/mongodb/mongod.log | grep orders | tail -1          # 4.4 起
+grep 'command: find' /var/log/mongodb/mongod.log | grep orders | tail -1      # 4.4 之前
+```
+
+整行原样复制，在 mongosh 里用**反引号**包起来传进去（行里的单引号、双引号都不用改）：
 
 ```js
-// system.profile 或日志里的命令文档（mongos 发给分片时加的字段会自动去掉）
-mt.explain({find: 's02orders', filter: {status: 'shipped', amount: {$gte: 3000}}, sort: {createdAt: -1}, limit: 40,
-            projection: {$sortKey: {$meta: 'sortKey'}}, shardVersion: [...]})
-mt.explain(db.system.profile.find().sort({millis: -1}).limit(1).next())   // profile 文档
-mt.explain('{"t":{"$date":...},"msg":"Slow query","attr":{...}}')         // 4.4 起 JSON 日志的整行，作为字符串
-mt.explain(`2026-11-21T15:46:55.624+0000 I COMMAND  [conn2166] command shop.orders ... command: find { ... } planSummary: ...`)   // 4.4 之前的文本日志整行
+mt.explain(`2026-11-21T15:46:55.624+0000 I COMMAND  [conn2166] command shop.orders appName: "order-service" command: find { find: "orders", filter: { userId: 24530, status: { $in: [ "paid", "shipped", "completed" ] } }, projection: { $sortKey: { $meta: "sortKey" } }, sort: { createdAt: -1 }, limit: 20, shardVersion: [ Timestamp(0, 0), ObjectId('000000000000000000000000') ], $clusterTime: { clusterTime: Timestamp(1795276015, 2), signature: { hash: BinData(0, D9414CF6101A9BBBE43BC15ACE884BFEDC177A72), keyId: 7710591826859655200 } }, $db: "shop" } planSummary: COLLSCAN keysExamined:0 docsExamined:1005163 hasSortStage:1 nreturned:1 465ms`)
 ```
+
+实际执行的是：
+
+```js
+db.getSiblingDB('shop').runCommand({explain: {find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}, sort: {createdAt: -1}, limit: 20}, verbosity: 'executionStats'})
+```
+
+库名、集合名都从这一行里取；`shardVersion`、`$clusterTime`、`$sortKey` 这些自动去掉。4.4 起的 JSON 日志行也一样整行传进来。老的 mongo shell 没有反引号，用单引号包起来，行里的单引号要写成 `\'`。
+
+**3. 只复制命令那一段**
+
+从 `command: find ` 后面的 `{` 开始，到对应的 `}` 为止（后面多带了 `planSummary: ...` 也没关系），同样用反引号包起来：
+
+```js
+mt.explain(`{ find: "orders", filter: { userId: 24530, status: { $in: [ "paid", "shipped", "completed" ] } }, sort: { createdAt: -1 }, limit: 20, $db: "shop" }`)
+```
+
+库名取命令里的 `$db`；没有 `$db` 时先 `use 库名`，或者加选项 `{db: 'shop'}`。
+
+**4. 自己写命令**
+
+只挑关键的几项手写，直接写成 JS 对象（字符串加引号）：
+
+```js
+mt.explain({find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}, sort: {createdAt: -1}, limit: 20}, {db: 'shop'})
+```
+
+**会报错的写法**
+
+- 从 `mt.slow()` / `mt.log()` **表格里**复制命令：表格里的命令去掉了引号和类型，没法还原。用行号。
+- 从 `command: find {` 或 `find {` 开始复制：要从 `{` 开始。
+- 把日志里的命令**不加引号**直接当 JS 对象写：`BinData(0, D941...)` 里的十六进制、`customer.name` 这种带点的字段名都不是合法的 JS，会报语法错误。用反引号包成字符串。
+- 日志行超过 10 KB 会被 MongoDB 截断，中间变成 `...`，这种解析不了，改用 `mt.slow()`。
+
+怎么处理的：
 
 - 去掉 mongos、驱动加的字段（`shardVersion`、`databaseVersion`、`lsid`、`$clusterTime`、`readConcern`、投影里的 `$sortKey`...），再用 `db.runCommand({explain: 命令, verbosity: 'executionStats'})` 执行。
 - 在哪个库上执行：命令里的 `$db`，或者 `ns` 的库名；都没有就用 `{db: 'shop'}` 选项，再没有就是当前库。
 - 支持 `find`、`aggregate`、`count`、`distinct`、`update`、`delete`、`findAndModify`。profile 和日志里单条的 update / remove 会自动包成 `update` / `delete` 命令；getMore 用它的原始命令（`originatingCommand`）。explain 写操作不会真的修改数据。
 - JSON 日志里的 `{"$date": ...}`、`{"$oid": ...}`、`{"$numberLong": ...}` 会换回真正的类型，否则条件就对不上了。
 - 4.4 之前的文本日志，命令部分是 shell 写法：字段名不带引号、`ObjectId('...')`、`Timestamp(1, 2)`、`new Date(...)`、十六进制的 `BinData(0, D941...)`。这些都会解析成对应的类型（不用 `eval`），超过 2^53 的整数按 `NumberLong` 处理。
-- 整行传进来时：用单引号包起来的话，行里的单引号（如 `ObjectId('...')`）要写成 `\'`；在 mongosh 里用反引号 `` `...` `` 包起来最省事。日志行超过 10 KB 会被截断，这种行解析不了，改用 `mt.slow()`。
-- `mt.slow()` / `mt.log()` 表格里显示的命令去掉了引号和类型，不能直接粘贴回来；用行号，或者传原始的命令 / 日志行。
 
 ```
 > mt.slow({sort: 'ms', cols: '#,ms,op,plan,docsExamined,nreturned,command'})
@@ -1148,7 +1201,7 @@ mt.builds()
 ```
 
 - 4.4 起索引在后台线程里建，客户端那条 `createIndexes` 在旁边等着；两条合成一行显示。
-- 还没开始（比如在等锁）的建索引显示成 `等待开始`。
+- 只有客户端的 `createIndexes`、找不到建索引线程的，显示成 `等待中`：可能还没开始（比如在等锁），也可能已经建完、在等提交（4.4 起要等多数节点建完）。
 - 想中途停掉：4.4 起用 `db.orders.dropIndex('索引名')`，之前的版本用 `db.killOp(opid)`。
 - 副本集上主节点建完之后，从节点也要各自建一遍（4.4 起是同时建），要连到从节点上看它们的进度。
 
