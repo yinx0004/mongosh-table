@@ -85,12 +85,19 @@
       },
       noLockWait: '没有在等锁的操作',
       noTxn: '没有未提交的事务',
+      badSev: "mt.log() 的 sev 可以是 'F'、'E'、'W'、'I'、'D'：只看这个级别及更严重的",
+      logTail: function (n, total) { return '(共 ' + total + ' 行，只显示最后 ' + n + ' 行)'; },
+      fragTotal: function (all, data, idx) { return '合计可回收 ' + all + '（数据 ' + data + '，索引 ' + idx + '）'; },
+      cacheSum: function (sum, pct) { return '以上集合在缓存里合计 ' + sum + '，占已用缓存的 ' + pct; },
       cmdDesc: {
         ps: "正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'",
         slow: "慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前",
         top: '各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合',
         locks: '谁在等锁、锁被谁占着；all 显示所有被占用的锁',
         txns: "未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'",
+        frag: '各集合删数据后可回收的磁盘空间，多的在前；默认当前库',
+        cache: '各集合占用的 WiredTiger 缓存，多的在前；默认所有库',
+        log: "最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告",
         repl: '副本集成员状态、复制延迟（秒）、同步源',
         dbs: '各库占用的磁盘空间',
         colls: '各集合文档数、数据和索引大小，大的在前；默认当前库',
@@ -115,7 +122,7 @@
           helpRow("t(x, {tz: '+08:00'})", '本次用指定时区显示时间'),
           helpRow('mt.csv(x, ...)', '输出 CSV（贴进 Excel）'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'en'})", '改本会话默认值'),
-          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.locks()、mt.txns()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
+          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.locks()、mt.txns()、mt.frag()、mt.cache()、mt.log()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
           '',
           '  示例：'
         ].concat(HELP_EXAMPLES, ['', '  显示约定：' + (nul || '空白') + ' = 值为 null；空白 = 空字符串 ""；' +
@@ -149,12 +156,19 @@
       },
       noLockWait: 'no operation is waiting for a lock',
       noTxn: 'no open transactions',
+      badSev: "mt.log() sev can be 'F', 'E', 'W', 'I' or 'D': this level and more severe",
+      logTail: function (n, total) { return '(showing the last ' + n + ' of ' + total + ' rows)'; },
+      fragTotal: function (all, data, idx) { return 'Total reusable ' + all + ' (data ' + data + ', indexes ' + idx + ')'; },
+      cacheSum: function (sum, pct) { return 'These collections hold ' + sum + ' in the cache, ' + pct + ' of the cache in use'; },
       cmdDesc: {
         ps: "Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'",
         slow: "Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first",
         top: 'Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection',
         locks: 'Who is waiting for a lock and who holds it; all = every lock that is held',
         txns: "Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'",
+        frag: 'Disk space each collection can reuse after deletes, most first; current db by default',
+        cache: 'WiredTiger cache used by each collection, most first; all databases by default',
+        log: "Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings",
         repl: 'Replica set members, replication lag (seconds), sync source',
         dbs: 'Disk space used by each database',
         colls: 'Documents, data and index size per collection, largest first; current db by default',
@@ -179,7 +193,7 @@
           helpRow("t(x, {tz: '+08:00'})", 'Show times in this time zone for this call'),
           helpRow('mt.csv(x, ...)', 'Print CSV (paste into Excel)'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'zh'})", 'Change defaults for this session'),
-          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.locks(), mt.txns(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
+          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.locks(), mt.txns(), mt.frag(), mt.cache(), mt.log(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
           '',
           '  Examples:'
         ].concat(HELP_EXAMPLES, ['', '  Conventions: ' + (nul || 'blank') + ' = value is null; blank = empty string ""; ' +
@@ -900,6 +914,15 @@
     emit(out);
   }
 
+  // 库里的集合名（跳过视图）
+  function collNames(d) {
+    var infos;
+    try { infos = d.getCollectionInfos(); } catch (e) {
+      if (isAuthErr(e)) fail(M().unauthorized('listCollections'));
+      throw e;
+    }
+    return infos.filter(function (i) { return i.type !== 'view'; }).map(function (i) { return i.name; });
+  }
   function isDbHandle(x) { return !!x && typeof x === 'object' && typeof x.getCollectionInfos === 'function' && typeof x.getSiblingDB === 'function'; }
   function colls(dbName, opts) {
     if (dbName && typeof dbName === 'object' && !isDbHandle(dbName)) { opts = dbName; dbName = null; }
@@ -907,14 +930,9 @@
     var d = isDbHandle(dbName) ? dbName : dbName ? curDb().getSiblingDB(String(dbName)) : curDb();
     var dn = d.getName();
     cmdLine(o, "db.getSiblingDB('" + dn + "').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}])", out);
-    var infos;
-    try { infos = d.getCollectionInfos(); } catch (e) {
-      if (isAuthErr(e)) fail(M().unauthorized('listCollections'));
-      throw e;
-    }
     var rows = [];
-    infos.forEach(function (info) {
-      if (info.type === 'view') return;
+    collNames(d).forEach(function (name) {
+      var info = { name: name };
       var s = collStats(d, info.name);
       rows.push({
         row: {
@@ -1290,6 +1308,136 @@
     emit(out);
   }
 
+  // ─── 磁盘碎片 / 缓存：都来自 $collStats.storageStats.wiredTiger；经 mongos 时每个分片一条，加起来
+  function wtStats(d, name) {
+    var docs = aggArr(d.getCollection(name), [{ $collStats: { storageStats: {} } }]);
+    if (!docs || !docs.length) return null;
+    var reuse = function (w) { return toNum(((w || {})['block-manager'] || {})['file bytes available for reuse']) || 0; };
+    var cached = function (w) { return toNum(((w || {}).cache || {})['bytes currently in the cache']) || 0; };
+    var s = { storage: 0, reuse: 0, idxSize: 0, idxReuse: 0, cache: 0, idxCache: 0 };
+    docs.forEach(function (x) {
+      var st = x.storageStats || {}, ix = st.indexDetails || {};
+      s.storage += toNum(st.storageSize) || 0;
+      s.idxSize += toNum(st.totalIndexSize) || 0;
+      s.reuse += reuse(st.wiredTiger);
+      s.cache += cached(st.wiredTiger);
+      Object.keys(ix).forEach(function (k) { s.idxReuse += reuse(ix[k]); s.idxCache += cached(ix[k]); });
+    });
+    return s;
+  }
+  function pctText(a, b) { return b > 0 ? (a / b * 100).toFixed(1) + '%' : ''; }
+  function dbArg(dbName, opts) {
+    if (dbName && typeof dbName === 'object' && !isDbHandle(dbName)) return { d: null, opts: dbName };
+    return { d: isDbHandle(dbName) ? dbName : dbName ? curDb().getSiblingDB(String(dbName)) : null, opts: opts };
+  }
+
+  // 删数据后 WiredTiger 文件里能复用、但还没还给操作系统的空间（compact 能回收）
+  function frag(dbName, opts) {
+    var x = dbArg(dbName, opts), d = x.d || curDb();
+    var o = dbaOpts(x.opts, ['storage', 'reusable', 'pct', 'indexSize', 'indexReusable']), out = [];
+    var dn = d.getName();
+    cmdLine(o, "db.getSiblingDB('" + dn + "').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}]) → wiredTiger['block-manager']", out);
+    var rows = [], tData = 0, tIdx = 0;
+    collNames(d).forEach(function (name) {
+      var s = wtStats(d, name);
+      if (!s) return;
+      tData += s.reuse; tIdx += s.idxReuse;
+      rows.push({
+        row: {
+          name: name, storage: sizeText(s.storage), reusable: sizeText(s.reuse), pct: pctText(s.reuse, s.storage),
+          indexSize: sizeText(s.idxSize), indexReusable: sizeText(s.idxReuse)
+        },
+        w: s.reuse + s.idxReuse
+      });
+    });
+    rows.sort(function (a, b) { return b.w - a.w || (a.row.name < b.row.name ? -1 : 1); });
+    rowsOut(rows.map(function (r) { return r.row; }), o, out);
+    out.push(M().fragTotal(sizeText(tData + tIdx), sizeText(tData), sizeText(tIdx)));
+    emit(out);
+  }
+
+  // 各集合在 WiredTiger 缓存里占了多少；默认扫所有库
+  function cache(dbName, opts) {
+    var x = dbArg(dbName, opts);
+    var o = dbaOpts(x.opts, ['cached', 'data', 'indexes', 'share']), out = [];
+    var a = admin();
+    notMongos('mt.cache()');
+    var dbsList = x.d ? [x.d] : (runCmd(a, { listDatabases: 1, nameOnly: true }).databases || [])
+      .map(function (i) { return curDb().getSiblingDB(i.name); });
+    cmdLine(o, 'db.serverStatus().wiredTiger.cache; ' + (x.d ? "db.getSiblingDB('" + x.d.getName() + "')" : 'every db') +
+      ': each collection aggregate([{$collStats: {storageStats: {}}}]) → wiredTiger.cache', out);
+    var wc = (runCmd(a, { serverStatus: 1 }).wiredTiger || {}).cache || {};
+    var used = toNum(wc['bytes currently in the cache']) || 0, max = toNum(wc['maximum bytes configured']) || 0;
+    var dirty = toNum(wc['tracked dirty bytes in the cache']) || 0;
+    headOut({ used: sizeText(used) + (max ? ' (' + pctText(used, max) + ')' : ''), max: sizeText(max),
+      dirty: sizeText(dirty) + (max ? ' (' + pctText(dirty, max) + ')' : '') }, Object.assign({}, o, { cols: null, exclude: null }), out);
+    var rows = [], sum = 0;
+    dbsList.forEach(function (d) {
+      collNames(d).forEach(function (name) {
+        var s = wtStats(d, name);
+        if (!s || s.cache + s.idxCache <= 0) return;
+        var c = s.cache + s.idxCache;
+        sum += c;
+        rows.push({ row: { ns: d.getName() + '.' + name, cached: sizeText(c), data: sizeText(s.cache), indexes: sizeText(s.idxCache), share: pctText(c, used) }, w: c });
+      });
+    });
+    rows.sort(function (p, q) { return q.w - p.w || (p.row.ns < q.row.ns ? -1 : 1); });
+    rowsOut(rows.map(function (r) { return r.row; }), o, out);
+    if (rows.length) out.push(M().cacheSum(sizeText(sum), pctText(sum, used)));
+    emit(out);
+  }
+
+  // 日志：getLog 只保留内存里最近的 1024 行。4.4 起每行是 JSON，之前是文本：
+  // 2024-01-01T08:30:00.123+0000 I NETWORK  [listener] connection accepted ...
+  var SEV_RANK = { F: 0, E: 1, W: 2, I: 3, D: 4 };
+  function logLine(line) {
+    line = String(line).replace(/\s+$/, '');
+    if (!line) return null;
+    if (line.charAt(0) === '{') {
+      var j = safe(function () { return JSON.parse(line); });
+      if (j) {
+        var t = j.t && j.t.$date != null ? new Date(j.t.$date) : null;
+        return { time: t && !isNaN(t.getTime()) ? t : '', sev: j.s || '', comp: j.c || '', ctx: j.ctx || '', id: j.id != null ? j.id : '', msg: j.msg || '', attr: j.attr, json: true, raw: line };
+      }
+    }
+    var m = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?)([+-]\d\d):?(\d\d)\s+([A-Z]\d?)\s+(\S+)\s+\[([^\]]*)\]\s?(.*)$/.exec(line);
+    if (!m) return { time: '', sev: '', comp: '', ctx: '', id: '', msg: line, raw: line };
+    var d = new Date(m[1] + m[2] + ':' + m[3]);
+    return { time: isNaN(d.getTime()) ? '' : d, sev: m[4], comp: m[5] === '-' ? '' : m[5], ctx: m[6], id: '', msg: m[7], raw: line };
+  }
+  function log(a, b) {
+    var opts = a;
+    if (typeof a === 'number') opts = Object.assign({}, b, { n: a });
+    else if (typeof a === 'string' || isRegExp(a)) opts = Object.assign({}, b, { grep: a });
+    var grep = opts && opts.grep, sev = opts && opts.sev;
+    var o = dbaOpts(opts && typeof opts === 'object' ? Object.assign({}, opts, { grep: null }) : opts, ['id']), out = [];
+    var n = toNum(o.n) || 20;
+    if (sev != null && !(String(sev).charAt(0).toUpperCase() in SEV_RANK)) fail(M().badSev);
+    var maxRank = sev != null ? SEV_RANK[String(sev).charAt(0).toUpperCase()] : null;
+    var which = o.startup ? 'startupWarnings' : 'global';
+    cmdLine(o, "db.adminCommand({getLog: '" + which + "'})", out);
+    var lines = runCmd(admin(), { getLog: which }).log || [];
+    var re = grep == null || grep === '' ? null : isRegExp(grep) ? grep : null;
+    var needle = re || grep == null ? null : String(grep).toLowerCase();
+    var rows = [];
+    lines.forEach(function (l) {
+      var r = logLine(l);
+      if (!r || (!r.msg && r.attr == null)) return;
+      if (maxRank != null && !(SEV_RANK[String(r.sev).charAt(0)] <= maxRank)) return;
+      if (re && !re.test(r.raw)) return;
+      if (needle && r.raw.toLowerCase().indexOf(needle) < 0) return;
+      var row = { time: r.time, sev: r.sev, comp: r.comp, ctx: r.ctx, id: r.id, msg: r.msg };
+      if (r.json) row.attr = r.attr != null ? valText(r.attr, true, o) : '';
+      rows.push(row);
+    });
+    var total = rows.length;
+    if (rows.length > n) rows = rows.slice(rows.length - n);
+    if (rows.every(function (r) { return r.id === ''; })) rows.forEach(function (r) { delete r.id; });   // 4.4 之前没有 id
+    renderRows(rows, o, out, false, rows.length);
+    if (total > rows.length) out.push(paint(o, DIM, M().logTail(rows.length, total)));
+    emit(out);
+  }
+
   var CMDS = [
     ['mt.ps({secs, ns, all, sort})', 'SHOW PROCESSLIST', 'ps'],
     ['mt.slow({ms, ns, sort})', 'mysql.slow_log', 'slow'],
@@ -1299,10 +1447,13 @@
     ['mt.repl()', 'SHOW SLAVE STATUS', 'repl'],
     ['mt.dbs()', 'SHOW DATABASES', 'dbs'],
     ["mt.colls('db')", 'SHOW TABLE STATUS', 'colls'],
+    ["mt.frag('db')", 'TABLES.DATA_FREE', 'frag'],
     ["mt.idx('coll')", 'SHOW INDEX FROM t', 'idx'],
     ['mt.conns()', 'PROCESSLIST GROUP BY host', 'conns'],
     ['mt.oplog()', 'SHOW BINARY LOGS', 'oplog'],
-    ['mt.status({interval})', 'SHOW GLOBAL STATUS', 'status']
+    ['mt.status({interval})', 'SHOW GLOBAL STATUS', 'status'],
+    ["mt.cache('db')", 'sys.innodb_buffer_stats_by_table', 'cache'],
+    ['mt.log({n, grep, sev})', 'performance_schema.error_log', 'log']
   ];
   function cmds() {
     var m = M(), out = [];
@@ -1316,7 +1467,7 @@
   var api = {
     table: t, vertical: g, csv: csv, config: config, help: help, version: VERSION,
     cmds: cmds, ps: dba(ps), slow: dba(slow), top: dba(top), locks: dba(locks), txns: dba(txns), repl: dba(repl), dbs: dba(dbs), colls: dba(colls), idx: dba(idx),
-    conns: dba(conns), oplog: dba(oplog), status: dba(status)
+    conns: dba(conns), oplog: dba(oplog), status: dba(status), frag: dba(frag), cache: dba(cache), log: dba(log)
   };
   t[MARK] = g[MARK] = api[MARK] = true;
 

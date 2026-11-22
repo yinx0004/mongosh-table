@@ -334,22 +334,25 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 
 ```
 > mt.cmds()
-+------------------------------+-------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                         | description                                                                                                                     |
-+------------------------------+-------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST              | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                 |
-| mt.slow({ms, ns, sort})      | mysql.slow_log                | 慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前 |
-| mt.top({interval, ns})       | sys.schema_table_statistics   | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                      |
-| mt.locks({all})              | sys.innodb_lock_waits         | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                    |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                           |
-| mt.repl()                    | SHOW SLAVE STATUS             | 副本集成员状态、复制延迟（秒）、同步源                                                                                          |
-| mt.dbs()                     | SHOW DATABASES                | 各库占用的磁盘空间                                                                                                              |
-| mt.colls('db')               | SHOW TABLE STATUS             | 各集合文档数、数据和索引大小，大的在前；默认当前库                                                                              |
-| mt.idx('coll')               | SHOW INDEX FROM t             | 索引的键、大小、使用次数和选项                                                                                                  |
-| mt.conns()                   | PROCESSLIST GROUP BY host     | 按客户端 IP 统计连接数                                                                                                          |
-| mt.oplog()                   | SHOW BINARY LOGS              | oplog 大小和能覆盖多长时间                                                                                                      |
-| mt.status({interval})        | SHOW GLOBAL STATUS            | 版本、角色、ops/s、连接、缓存等关键指标                                                                                         |
-+------------------------------+-------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                            | description                                                                                                                     |
++------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                 | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                 |
+| mt.slow({ms, ns, sort})      | mysql.slow_log                   | 慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前 |
+| mt.top({interval, ns})       | sys.schema_table_statistics      | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                      |
+| mt.locks({all})              | sys.innodb_lock_waits            | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                    |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX    | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                           |
+| mt.repl()                    | SHOW SLAVE STATUS                | 副本集成员状态、复制延迟（秒）、同步源                                                                                          |
+| mt.dbs()                     | SHOW DATABASES                   | 各库占用的磁盘空间                                                                                                              |
+| mt.colls('db')               | SHOW TABLE STATUS                | 各集合文档数、数据和索引大小，大的在前；默认当前库                                                                              |
+| mt.frag('db')                | TABLES.DATA_FREE                 | 各集合删数据后可回收的磁盘空间，多的在前；默认当前库                                                                            |
+| mt.idx('coll')               | SHOW INDEX FROM t                | 索引的键、大小、使用次数和选项                                                                                                  |
+| mt.conns()                   | PROCESSLIST GROUP BY host        | 按客户端 IP 统计连接数                                                                                                          |
+| mt.oplog()                   | SHOW BINARY LOGS                 | oplog 大小和能覆盖多长时间                                                                                                      |
+| mt.status({interval})        | SHOW GLOBAL STATUS               | 版本、角色、ops/s、连接、缓存等关键指标                                                                                         |
+| mt.cache('db')               | sys.innodb_buffer_stats_by_table | 各集合占用的 WiredTiger 缓存，多的在前；默认所有库                                                                              |
+| mt.log({n, grep, sev})       | performance_schema.error_log     | 最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告                                      |
++------------------------------+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------+
 都可以加 t() 的选项，如 {cols: ...}、{vertical: true}；mt.config({showCmd: false}) 不打印原生命令
 ```
 
@@ -358,7 +361,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 - **先打印原生命令**：第一行 `-- ...`（终端里是灰色）是它实际执行的 MongoDB 命令，方便复制、核对；`mt.config({showCmd: false})` 关掉。
 - **选项和 `t()` 通用**：`cols`、`exclude`、`limit`、`vertical`、`table`、`tz` 都能用，例如 `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`、`mt.idx('orders', {vertical: true})`。
 - **只读**：不会改任何设置，`mt.slow()` 也不会打开 profiler。
-- **权限**：需要监控类权限，如 `clusterMonitor` 角色。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()`、在 mongos 上执行 `mt.slow()` / `mt.top()` 时，只打印一行说明，不抛异常。
+- **权限**：需要监控类权限，如 `clusterMonitor` 角色。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()`、在 mongos 上执行 `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` 时，只打印一行说明，不抛异常。
 - **版本**：老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过；分片集群（mongos）还没测过。
 
 ### mt.ps()：正在执行的操作
@@ -739,6 +742,41 @@ mt.colls('shop')    // 指定库，也可以传 db 对象
 3 rows in set
 ```
 
+### mt.frag()：可回收的磁盘空间
+
+相当于 MySQL `information_schema.TABLES` 的 `DATA_FREE`：删了大量数据之后，哪些集合的文件里有空间可以回收。
+
+```js
+mt.frag()          // 当前库
+mt.frag('shop')    // 指定库，也可以传 db 对象
+```
+
+WiredTiger 删掉的数据不会把文件变小，空出来的块留在文件里给以后的写入复用。对每个集合执行 `$collStats`，读 `wiredTiger['block-manager']['file bytes available for reuse']`，索引的也一起算；按数据加索引可回收的总量从大到小排，最后一行是合计。
+
+| 列 | 说明 |
+|---|---|
+| `storage` | 数据文件大小 |
+| `reusable` | 其中可复用的空间 |
+| `pct` | 可复用占数据文件的比例 |
+| `indexSize` / `indexReusable` | 索引文件大小、其中可复用的空间 |
+
+```
+> mt.frag('shop')
+-- db.getSiblingDB('shop').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}]) → wiredTiger['block-manager']
++----------------+---------+----------+-------+-----------+---------------+
+| name           | storage | reusable | pct   | indexSize | indexReusable |
++----------------+---------+----------+-------+-----------+---------------+
+| orders         |  2.0 MB | 952.0 KB | 45.9% |    3.6 MB |        1.2 MB |
+| system.profile | 20.0 KB |      0 B |  0.0% |       0 B |           0 B |
+| users          | 20.0 KB |      0 B |  0.0% |   20.0 KB |           0 B |
++----------------+---------+----------+-------+-----------+---------------+
+3 rows in set
+合计可回收 2.1 MB（数据 952.0 KB，索引 1.2 MB）
+```
+
+- 可复用的空间新写入的数据会先用掉；想把它还给操作系统，要对集合执行 `compact`（4.4 起不再阻塞读写，但仍会占用 I/O），或者对从节点做一次全量同步。
+- 数字是 WiredTiger 上次 checkpoint（默认每 60 秒）时的值，刚删完的数据要等一会才会体现出来。
+
 ### mt.idx()：索引
 
 相当于 `SHOW INDEX FROM t`。
@@ -872,6 +910,131 @@ activeClients.writers: 0
             cache.max: 7.3 GB
           cache.dirty: 11.0 MB
 ```
+
+### mt.cache()：谁占着缓存
+
+相当于 MySQL 的 `sys.innodb_buffer_stats_by_table`：WiredTiger 缓存被哪些集合占着。
+
+```js
+mt.cache()          // 所有库
+mt.cache('shop')    // 只看一个库，也可以传 db 对象
+```
+
+上面几行来自 `serverStatus().wiredTiger.cache`：`used` 已用（括号里是占上限的比例），`max` 上限（默认是内存减 1 GB 后的一半，至少 256 MB），`dirty` 还没写回磁盘的数据。表格对每个集合执行 `$collStats`，读 `wiredTiger.cache['bytes currently in the cache']`。
+
+| 列 | 说明 |
+|---|---|
+| `ns` | 库.集合 |
+| `cached` | 数据加索引在缓存里占了多少 |
+| `data` / `indexes` | 其中数据、索引各占多少 |
+| `share` | 占已用缓存的比例 |
+
+```
+> mt.cache({limit: 6})
+-- db.serverStatus().wiredTiger.cache; every db: each collection aggregate([{$collStats: {storageStats: {}}}]) → wiredTiger.cache
+ used: 34.1 MB (0.5%)
+  max: 7.3 GB
+dirty: 0 B (0.0%)
++---------------------------+---------+---------+---------+-------+
+| ns                        | cached  | data    | indexes | share |
++---------------------------+---------+---------+---------+-------+
+| shop.orders               | 18.2 MB |  7.6 MB | 10.6 MB | 53.3% |
+| local.oplog.rs            | 14.5 MB | 14.5 MB |     0 B | 42.4% |
+| config.transactions       | 77.4 KB | 75.8 KB |  1.6 KB |  0.2% |
+| shop.system.profile       | 11.7 KB | 11.7 KB |     0 B |  0.0% |
+| config.system.indexBuilds |  6.2 KB |  4.5 KB |  1.7 KB |  0.0% |
+| local.startup_log         |  4.7 KB |  3.5 KB |  1.2 KB |  0.0% |
++---------------------------+---------+---------+---------+-------+
+6 rows in set  (共 25 行，只显示前 6 行)
+以上集合在缓存里合计 32.8 MB，占已用缓存的 96.1%
+```
+
+- 缓存里放的是解压后的数据，所以一个集合占的缓存可能比它的磁盘文件还大。
+- 各集合加起来会比 `used` 少一点，差的是 WiredTiger 自己的元数据等。
+- 要对每个集合执行一次 `$collStats`，集合很多（上千个）时会慢，可以用 `mt.cache('shop')` 只看一个库。
+- 只能连 mongod 执行，mongos 上没有缓存数据。
+- `dirty` 长时间超过上限的 20% 左右，说明写入压力大、来不及写回磁盘。
+
+### mt.log()：最近的日志
+
+相当于 MySQL 的 `performance_schema.error_log`：不用登录服务器看日志文件，直接在 shell 里看最近的日志。
+
+```js
+mt.log()                        // 最近 20 行
+mt.log(100)                     // 最近 100 行
+mt.log('Slow query')            // 只看包含这段文字的（不分大小写）
+mt.log(/COLLSCAN|IXSCAN/)       // 正则
+mt.log({sev: 'W'})              // 只看警告（W）、错误（E）、致命（F）
+mt.log({startup: true})         // 启动时的警告，如没开认证、文件句柄数太低
+mt.log('Slow query', {n: 5, vertical: true})   // 选项和 t() 通用
+```
+
+执行的是 `db.adminCommand({getLog: 'global'})`，按时间正序显示最后 `n` 行。
+
+| 选项 | 说明 |
+|---|---|
+| `n` | 显示最后几行，默认 20 |
+| `grep` | 文字（不分大小写）或正则；第一个参数是字符串或正则时就是 `grep` |
+| `sev` | `'F'`、`'E'`、`'W'`、`'I'`、`'D'`：只看这个级别及更严重的 |
+| `startup` | `true` 时看启动警告（`getLog: 'startupWarnings'`） |
+
+| 列 | 说明 |
+|---|---|
+| `time` | 时间，按 `tz` 显示 |
+| `sev` | 级别：`F` 致命、`E` 错误、`W` 警告、`I` 信息、`D1`~`D5` 调试 |
+| `comp` | 组件：`NETWORK`、`COMMAND`、`REPL`、`STORAGE`... |
+| `ctx` | 线程，如 `conn89`、`listener` |
+| `id` / `attr` | 4.4 起的日志才有：消息编号、详细内容 |
+| `msg` | 消息 |
+
+```
+> mt.log({n: 6, cols: 'time,sev,comp,ctx,msg'})
+-- db.adminCommand({getLog: 'global'})
++-------------------------+-----+---------+----------+------------------------------------------+
+| time                    | sev | comp    | ctx      | msg                                      |
++-------------------------+-----+---------+----------+------------------------------------------+
+| 2026-11-22 09:49:40.018 | I   | NETWORK | listener | Connection accepted                      |
+| 2026-11-22 09:49:40.019 | I   | NETWORK | conn87   | client metadata                          |
+| 2026-11-22 09:49:40.019 | I   | ACCESS  | conn87   | Connection not authenticating            |
+| 2026-11-22 09:49:40.020 | I   | NETWORK | conn88   | client metadata                          |
+| 2026-11-22 09:49:40.020 | I   | ACCESS  | conn88   | Connection not authenticating            |
+| 2026-11-22 09:49:40.022 | I   | NETWORK | conn88   | Received first command on ingress con... |
++-------------------------+-----+---------+----------+------------------------------------------+
+6 rows in set
+(共 759 行，只显示最后 6 行)
+```
+
+```
+> mt.log('COLLSCAN', {n: 1, vertical: true})
+-- db.adminCommand({getLog: 'global'})
+*************************** 1. row ***************************
+time: 2026-11-22 09:49:36.704
+ sev: I
+comp: WRITE
+ ctx: conn84
+  id: 51803
+ msg: Slow query
+attr: {type: remove, ns: shop.orders, appName: mongosh 2.14.2, command: {q: {amount: {$lt: {$numberDecimal: 300}}}, limit: 0}, planSummary: COLLSCAN, planningTimeMicros: 194, totalOplogSlotDurationMicros: 10563, keysExamined: 0, docsExamined: 13333, ndeleted: 8000, keysDeleted: 32000, numYields: 13, locks: {ParallelBatchWriterMode: {acquireCount: {r: 14}}, FeatureCompatibilityVersion: {acquireCount: {w: 14}}, ReplicationStateTransition: {acquireCount: {w: 14}}, Global: {acquireCount: {w: 14}}, Database: {acquireCount: {w: 14}}, Collection: {acquireCount: {w: 14}}}, flowControl: {acquireCount: 14}, readConcern: {level: local, provenance: implicitDefault}, storage: {data: {bytesRead: 124878, timeReadingMicros: 104}}, cpuNanos: 67359156, remote: "192.168.117.6:56476", durationMillis: 73}
+1 row in set
+(共 4 行，只显示最后 1 行)
+```
+
+```
+> mt.log({startup: true})
+-- db.adminCommand({getLog: 'startupWarnings'})
++-------------------------+-----+---------+---------------+-------+------------------------------------------+------------------------------------------+
+| time                    | sev | comp    | ctx           | id    | msg                                      | attr                                     |
++-------------------------+-----+---------+---------------+-------+------------------------------------------+------------------------------------------+
+| 2026-11-22 09:49:06.852 | W   | CONTROL | initandlisten | 22120 | Access control is not enabled for the... |                                          |
+| 2026-11-22 09:49:06.853 | W   | CONTROL | initandlisten | 22184 | Soft rlimits for open file descriptor... | {currentValue: 20480, recommendedMini... |
++-------------------------+-----+---------+---------------+-------+------------------------------------------+------------------------------------------+
+2 rows in set
+```
+
+- `getLog` 只保留内存里最近的 1024 行，更早的要看日志文件。
+- 4.4 起日志是 JSON，`msg` 是固定的模板（如 `Slow query`），具体内容在 `attr` 里，表格里会截断，用 `{vertical: true}` 或 `{maxCol: 0}` 看全；4.4 之前是一行文本，全在 `msg` 里，没有 `id` / `attr` 列。
+- 过滤（`grep`、`sev`）先做，再取最后 `n` 行；页脚会显示一共匹配了多少行。
+- 4.2 及之前的启动警告是 `I` 级别的多行文本（`** WARNING: ...`），用 `{sev: 'W'}` 会过滤掉，直接用 `mt.log({startup: true})` 看。
 
 ### 也可以直接套原生命令
 
