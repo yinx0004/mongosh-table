@@ -127,7 +127,7 @@ mt.help()
 
 ### For DBAs
 
-Since v0.3.0, `mt` comes with a set of read-only shortcuts for the usual MySQL `SHOW ...` commands (`mt.slow()` and `mt.top()` since v0.4.0):
+Since v0.3.0, `mt` comes with a set of read-only shortcuts for the usual MySQL `SHOW ...` commands:
 
 ```js
 mt.cmds()                     // list all commands
@@ -181,6 +181,22 @@ date: 2026-11-22 05:02:46.493
 - `mt.slow()` and `mt.top()` must run on a mongod; a mongos has no such data.
 - They need monitoring privileges (such as the `clusterMonitor` role). Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, they print a one-line explanation instead of throwing.
 - They work in both the legacy mongo shell and mongosh and are tested in CI on a replica set for every version; sharded clusters (mongos) are not tested yet.
+
+#### How mt.slow() works
+
+It reads what the profiler writes to the `system.profile` collection of the current database, roughly:
+
+```js
+db.getProfilingStatus()                        // level / slowms / sampleRate in the header
+db.system.profile.find({...}).sort({ts: -1})   // newest first
+```
+
+- The profiler is set per database: `level` 0 is off, 1 records operations slower than `slowms`, 2 records everything; `sampleRate` is the fraction sampled. `mt.slow()` only reads; it never changes these settings.
+- Filters: `ms` becomes `{millis: {$gte: ms}}`; `ns` takes a collection name (`'orders'`) or a full `'db.collection'`. Reads of `system.profile` itself and `profile` commands are always left out, so at level 2 you do not see `mt.slow()` itself.
+- It first runs `count` for the total, then takes the newest `limit` entries by `ts` (50 by default); when there are more, the footer says "showing the first 50 of N rows".
+- Per row: `ts` time, `ms` duration (`millis`), `op`, `ns`, `plan` (`planSummary`, e.g. `COLLSCAN` or `IXSCAN {...}`), `keysExamined` / `docsExamined` index keys and documents scanned, `nreturned` documents returned, `client`, `user`, and `command` (without driver fields such as `lsid` and `$clusterTime`). Without authentication `user` is always empty, so that column is hidden.
+- `docsExamined` far above `nreturned`, or a `COLLSCAN` plan, usually means a missing index.
+- `system.profile` is a 1 MB capped collection that overwrites its oldest entries when full, so it only covers recent activity.
 
 #### How mt.top() works
 

@@ -127,7 +127,7 @@ mt.help()
 
 ### DBA 常用命令
 
-从 v0.3.0 起，`mt` 下面带了一组只读的快捷命令，对应 MySQL 的 `SHOW ...`（`mt.slow()`、`mt.top()` 从 v0.4.0 起）：
+从 v0.3.0 起，`mt` 下面带了一组只读的快捷命令，对应 MySQL 的 `SHOW ...`：
 
 ```js
 mt.cmds()                     // 列出全部命令
@@ -181,6 +181,22 @@ date: 2026-11-22 05:02:46.493
 - `mt.slow()`、`mt.top()` 要连到 mongod 上执行，mongos 上没有这些数据。
 - 这些命令需要监控类权限（如 `clusterMonitor` 角色）。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()` 时，只打印一行说明，不抛异常。
 - 老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过；分片集群（mongos）还没测过。
+
+#### mt.slow() 怎么查的
+
+读的是 profiler 写进当前库 `system.profile` 集合的记录，相当于：
+
+```js
+db.getProfilingStatus()                        // 表头的 level / slowms / sampleRate
+db.system.profile.find({...}).sort({ts: -1})   // 新的在前
+```
+
+- profiler 按库开关：`level` 0 关闭，1 只记超过 `slowms` 的操作，2 全记；`sampleRate` 是抽样比例。`mt.slow()` 只读，不改这些设置。
+- 过滤条件：`ms` 变成 `{millis: {$gte: ms}}`；`ns` 写集合名（`'orders'`）或完整的 `'库.集合'`。另外总会排除读 `system.profile` 自己的操作和 `profile` 命令，否则在 level 2 下会看到 `mt.slow()` 自己。
+- 先用 `count` 数出总共有多少条，再按 `ts` 倒序取前 `limit` 条（默认 50），超出时页脚显示“共 N 行，只显示前 50 行”。
+- 每行：`ts` 时间、`ms` 耗时（`millis`）、`op`、`ns`、`plan`（`planSummary`，如 `COLLSCAN`、`IXSCAN {...}`）、`keysExamined` / `docsExamined` 扫描的索引键和文档数、`nreturned` 返回条数、`client`、`user`、`command`（去掉 `lsid`、`$clusterTime` 这类驱动加的字段）。没开认证时 `user` 全空，这一列不显示。
+- `docsExamined` 远大于 `nreturned`、`plan` 是 `COLLSCAN` 的，通常就是缺索引。
+- `system.profile` 是个 1 MB 的 capped 集合，满了会覆盖最早的记录，所以只能看到最近一段时间的。
 
 #### mt.top() 怎么算的
 
