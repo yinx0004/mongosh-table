@@ -114,7 +114,9 @@ t(db.orders.find(), {tz: '+08:00'})              // 本次按东八区显示时�
 mt.csv(db.orders.find(), 'orderNo,amount')      // 输出 CSV，贴进 Excel
 mt.config({tz: 'Asia/Shanghai', maxCol: 60})    // 改本会话默认值
 mt.ps() / mt.slow() / mt.colls() ...            // DBA 常用命令，见下一节
-mt.help()                                       // 帮助；t() / g() 不带参数也是帮助
+mt.help()                                       // 帮助：用法、选项（显示当前值）、会话设置；t() / g() 不带参数也是帮助
+mt.cmds()                                       // 按类别列出全部 DBA 命令
+mt.help('ps')                                   // 某个命令的详细用法、选项和输出的每一列
 ```
 
 下面的示例都来自一个 3 节点副本集（`db1` / `db2` / `db3`），`shop.orders` 里有 2 万条订单，输出是真实跑出来的。
@@ -330,37 +332,93 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 
 ## DBA 常用命令
 
-`mt` 下面带了一组只读的快捷命令，对应 MySQL 的 `SHOW ...`。`mt.cmds()` 列出全部：
+`mt` 下面带了一组只读的快捷命令，对应 MySQL 的 `SHOW ...`。`mt.cmds()` 按类别列出全部（运行状态、慢查询和执行计划、存储和索引、复制），每条都有对应的 MySQL 命令和说明；`mt.help('ps')`（也可以写 `mt.cmds('ps')`、`mt.help('mt.ps()')`）看某个命令的详细用法、选项、输出的每一列和注意事项：
 
 ```
 > mt.cmds()
-+------------------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                            | description                                                                                                                                          |
-+------------------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                 | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                      |
-| mt.slow({ms, ns, sort})      | mysql.slow_log                   | 慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前                      |
-| mt.top({interval, ns})       | sys.schema_table_statistics      | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                           |
-| mt.locks({all})              | sys.innodb_lock_waits            | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                         |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX    | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                |
-| mt.repl()                    | SHOW SLAVE STATUS                | 副本集成员状态、复制延迟（秒）、同步源                                                                                                               |
-| mt.dbs()                     | SHOW DATABASES                   | 各库占用的磁盘空间                                                                                                                                   |
-| mt.colls('db')               | SHOW TABLE STATUS                | 各集合文档数、数据和索引大小，大的在前；默认当前库                                                                                                   |
-| mt.frag('db')                | TABLES.DATA_FREE                 | 各集合删数据后可回收的磁盘空间，多的在前；默认当前库                                                                                                 |
-| mt.idx('coll')               | SHOW INDEX FROM t                | 索引的键、大小、使用次数和选项                                                                                                                       |
-| mt.explain(cursor)           | EXPLAIN [ANALYZE]                | 执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；默认只看计划、不执行，analyze: true 执行一遍看扫描数和耗时             |
-| mt.explainLog(n | line)      | EXPLAIN on a slow log query      | 对慢日志里的查询做 explain：先列出日志里记下的实际执行情况，再看现在的计划，计划变了会提示；n 是 mt.slow() / mt.log() 的行号，也可以传整行日志、命令 |
-| mt.logQuery(n | line)        | slow log → SQL                   | 把慢日志里的查询转成可以直接运行的 mongosh 语句（不执行），类型照原样保留                                                                            |
-| mt.builds()                  | ALTER TABLE progress             | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                                                     |
-| mt.unusedIdx('db')           | sys.schema_unused_indexes        | 没被用过的索引（ops = 0），大的在前；默认所有用户库                                                                                                  |
-| mt.dupIdx('db')              | sys.schema_redundant_indexes     | 冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库                                                                       |
-| mt.conns()                   | PROCESSLIST GROUP BY host        | 按客户端 IP 统计连接数                                                                                                                               |
-| mt.oplog()                   | SHOW BINARY LOGS                 | oplog 大小和能覆盖多长时间                                                                                                                           |
-| mt.status({interval})        | SHOW GLOBAL STATUS               | 版本、角色、ops/s、连接、缓存等关键指标                                                                                                              |
-| mt.cache('db')               | sys.innodb_buffer_stats_by_table | 各集合占用的 WiredTiger 缓存，多的在前；默认所有库                                                                                                   |
-| mt.ttl('db')                 | information_schema.EVENTS        | TTL 索引：过期时间、最早一条的时间、超期了多久，以及 TTL 线程的状态；默认所有库                                                                      |
-| mt.log({n, grep, sev})       | performance_schema.error_log     | 最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告                                                           |
-+------------------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
+── 运行状态 ──
++------------------------------+-------------------------------+-----------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                         | description                                                                                                     |
++------------------------------+-------------------------------+-----------------------------------------------------------------------------------------------------------------+
+| mt.status({interval})        | SHOW GLOBAL STATUS            | 版本、角色、ops/s、连接、缓存等关键指标                                                                         |
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST              | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid' |
+| mt.conns()                   | PROCESSLIST GROUP BY host     | 按客户端 IP 统计连接数                                                                                          |
+| mt.locks({all})              | sys.innodb_lock_waits         | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                    |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                           |
+| mt.top({interval, ns})       | sys.schema_table_statistics   | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                      |
+| mt.builds()                  | ALTER TABLE progress          | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                |
++------------------------------+-------------------------------+-----------------------------------------------------------------------------------------------------------------+
+
+── 慢查询和执行计划 ──
++-------------------------+------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                 | mysql                        | description                                                                                                                                          |
++-------------------------+------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.slow({ms, ns, sort}) | mysql.slow_log               | 慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前                      |
+| mt.log({n, grep, sev})  | performance_schema.error_log | 最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告                                                           |
+| mt.explain(cursor)      | EXPLAIN [ANALYZE]            | 执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；默认只看计划、不执行，analyze: true 执行一遍看扫描数和耗时             |
+| mt.explainLog(n | line) | EXPLAIN on a slow log query  | 对慢日志里的查询做 explain：先列出日志里记下的实际执行情况，再看现在的计划，计划变了会提示；n 是 mt.slow() / mt.log() 的行号，也可以传整行日志、命令 |
+| mt.logQuery(n | line)   | slow log → SQL               | 把慢日志里的查询转成可以直接运行的 mongosh 语句（不执行），类型照原样保留                                                                            |
++-------------------------+------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+── 存储和索引 ──
++--------------------+----------------------------------+---------------------------------------------------------------------------------+
+| command            | mysql                            | description                                                                     |
++--------------------+----------------------------------+---------------------------------------------------------------------------------+
+| mt.dbs()           | SHOW DATABASES                   | 各库占用的磁盘空间                                                              |
+| mt.colls('db')     | SHOW TABLE STATUS                | 各集合文档数、数据和索引大小，大的在前；默认当前库                              |
+| mt.frag('db')      | TABLES.DATA_FREE                 | 各集合删数据后可回收的磁盘空间，多的在前；默认当前库                            |
+| mt.cache('db')     | sys.innodb_buffer_stats_by_table | 各集合占用的 WiredTiger 缓存，多的在前；默认所有库                              |
+| mt.idx('coll')     | SHOW INDEX FROM t                | 索引的键、大小、使用次数和选项                                                  |
+| mt.unusedIdx('db') | sys.schema_unused_indexes        | 没被用过的索引（ops = 0），大的在前；默认所有用户库                             |
+| mt.dupIdx('db')    | sys.schema_redundant_indexes     | 冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库  |
+| mt.ttl('db')       | information_schema.EVENTS        | TTL 索引：过期时间、最早一条的时间、超期了多久，以及 TTL 线程的状态；默认所有库 |
++--------------------+----------------------------------+---------------------------------------------------------------------------------+
+
+── 复制 ──
++------------+-------------------+----------------------------------------+
+| command    | mysql             | description                            |
++------------+-------------------+----------------------------------------+
+| mt.repl()  | SHOW SLAVE STATUS | 副本集成员状态、复制延迟（秒）、同步源 |
+| mt.oplog() | SHOW BINARY LOGS  | oplog 大小和能覆盖多长时间             |
++------------+-------------------+----------------------------------------+
+
 都可以加 t() 的选项，如 {cols: ...}、{vertical: true}；mt.config({showCmd: false}) 不打印原生命令
+mt.help('ps') 看某个命令的详细用法、选项和输出的每一列
+```
+
+```
+> mt.help('ps')
+mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
+
+用法：
+  mt.ps()                     // 运行最久的在前
+  mt.ps({secs: 5})            // 只看运行超过 5 秒的
+  mt.ps({ns: 'shop.orders'})  // 只看某个集合；'shop' 匹配整个库
+  mt.ps({all: true})          // 包括空闲连接和内部线程
+  mt.ps({sort: 'opid'})       // 排序：'desc'（默认）、'asc'、'opid'，或 {ns: 1, secs: -1}
+
+选项：
+  secs  只看运行超过这么多秒的
+  ns    库或 库.集合
+  all   true：用 $all，包括空闲连接和内部线程
+  sort  'desc' / 'asc' / 'opid' / 按列名的排序文档
+
+输出：
+  opid          操作 ID，db.killOp(opid) 用它
+  secs          已经运行的秒数
+  op            query / getmore / insert / update / remove / command；空闲连接是 idle
+  ns            库.集合
+  client / app  客户端、appName
+  lock          在等锁时显示 WAIT
+  plan          计划摘要，COLLSCAN 是全表扫描
+  command       命令，去掉了驱动加的字段
+
+说明：
+  - 执行的是 db.adminCommand({currentOp: 1, active: true})
+  - 默认不显示空闲连接、内部线程、驱动的心跳长轮询和 mt.ps() 自己
+
+都可以加 t() 的选项（cols、exclude、limit、vertical、table、tz...）；mt.config({showCmd: false}) 不打印原生命令
+另见：mt.locks()、mt.txns()、mt.conns()
 ```
 
 所有命令的共同点：

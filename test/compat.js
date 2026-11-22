@@ -80,9 +80,29 @@ run('lang en', function () { mt.config({ lang: 'en' }); t(c.find(), { cols: 'ord
 ]);
 run('missingText', function () { t(c.find(), { cols: 'orderNo,qty', missingText: '-' }); }, ['| SO2     |   - |']);
 run('config', function () { mt.config(); }, ['"limit":50']);
-run('help', function () { mt.help(); }, ['mt.csv(x, ...)']);
+run('help', function () { mt.help(); }, ['mt.csv(x, ...)', '  选项（每次调用时传', "tz ('UTC')", 'limit (50)', 'showCmd (true)', "mt.help('ps')", '显示约定：']);
 // ── DBA 命令 ──
-run('mt.cmds', function () { mt.cmds(); }, ['| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})']);
+run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '── 慢查询和执行计划 ──', '── 存储和索引 ──', '── 复制 ──',
+  '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
+// 每个命令都有中英文的详细帮助
+var ALL_CMDS = ['ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
+  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log'];
+run('mt.help each command', function () {
+  var bad = [];
+  ['zh', 'en'].forEach(function (lang) {
+    mt.config({ lang: lang });
+    ALL_CMDS.forEach(function (k) {
+      var o = capOut(function () { mt.help(k); });
+      if (o.indexOf('mt.' + k + '() — ') !== 0 || o.indexOf('MySQL: ') < 0 || !/(用法：|Usage:)\n  mt\./.test(o)) bad.push(lang + ':' + k);
+      if (typeof mt[k] !== 'function') bad.push('no mt.' + k);
+    });
+  });
+  mt.config({ lang: 'zh' });
+  print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
+}, ['all 22 ok']);
+run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
+  'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
+run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'ps'、'slow'"]);
 run('mt.ps', function () { mt.ps(); }, ['-- db.adminCommand({currentOp: 1, active: true})']);
 run('mt.ps slow query', function () {
   for (var i = 0; i < 20 && !db.currentOp({ ns: 'mtslow.slow' }).inprog.length; i++) sleep(500);

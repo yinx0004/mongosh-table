@@ -48,7 +48,7 @@
     if (!v) v = safe(function () { return Intl.DateTimeFormat().resolvedOptions().locale; }, '');
     return normLang(v);
   }
-  function helpRow(label, desc) { return '  ' + (label.length < 29 ? label + ' '.repeat(29 - label.length) : label + '   ') + desc; }
+  function helpRow(label, desc) { var w = dw(label); return '  ' + (w < 29 ? label + ' '.repeat(29 - w) : label + '   ') + desc; }   // 按显示宽度对齐（中文占 2 列）
   var HELP_EXAMPLES = [
     "    t(db.orders.find({status: 'PAID'}).sort({_id: -1}))",
     "    t(rs.status().members, 'name,stateStr,health,optimeDate,syncSourceHost')",
@@ -132,26 +132,55 @@
         status: '版本、角色、ops/s、连接、缓存等关键指标'
       },
       cmdsNote: '都可以加 t() 的选项，如 {cols: ...}、{vertical: true}；mt.config({showCmd: false}) 不打印原生命令',
+      cmdsMore: "mt.help('ps') 看某个命令的详细用法、选项和输出的每一列",
+      groups: { run: '运行状态', query: '慢查询和执行计划', store: '存储和索引', repl: '复制' },
+      hd: { usage: '用法：', opts: '选项：', out: '输出：', notes: '说明：', see: '另见：', common: '都可以加 t() 的选项（cols、exclude、limit、vertical、table、tz...）；mt.config({showCmd: false}) 不打印原生命令' },
+      noHelp: function (name, names) { return '没有叫 ' + name + ' 的命令。可以看：' + names.join('、'); },
       loaded: function (v, tz) { return 'MongoTab ' + v + ' 已加载：t(x) 表格 / g(x) 竖排 / mt.help()   时区 ' + tz; },
       skipped: function (names) {
         return '  注意：' + names.join('、') + ' 已被占用，未覆盖；请用 mongotab.table / mongotab.vertical / mongotab.help()';
       },
-      help: function (limit, nul, miss) {
+      help: function (v) {
         return [
-          helpRow('t(x)', '表格；太宽自动改竖排。x 可以是游标、数组、文档'),
-          helpRow('g(x)', '竖排（MySQL \\G）'),
-          helpRow("t(x, 'a,b,c.*')", '只看这些列；支持 * 通配，写 a 等于 a.* 全部'),
-          helpRow("t(x, {exclude: 'big,raw.*'})", '排除列'),
-          helpRow('t(x, {limit: 200})', '游标/数组最多显示行数（默认 ' + limit + '，0 = 不限）'),
-          helpRow('t(x, {table: true})', '强制表格，不自动改竖排'),
-          helpRow("t(x, {tz: '+08:00'})", '本次用指定时区显示时间'),
-          helpRow('mt.csv(x, ...)', '输出 CSV（贴进 Excel）'),
-          helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'en'})", '改本会话默认值'),
-          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.locks()、mt.txns()、mt.frag()、mt.cache()、mt.ttl()、mt.log()、mt.unusedIdx()、mt.dupIdx()、mt.explain()、mt.explainLog()、mt.logQuery()、mt.builds()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
+          '  表格和竖排：',
+          helpRow('t(x)', '表格；太宽自动改竖排。x 可以是游标、数组、单个文档'),
+          helpRow('g(x)', '竖排（MySQL \\G），参数和 t() 一样'),
+          helpRow('mt.csv(x, ...)', '输出 CSV（贴进 Excel），参数和 t() 一样'),
+          '',
+          '  选列：',
+          helpRow("t(x, 'a,b,c')", "只看这些列，按写的顺序；也可以写数组 ['a', 'b']"),
+          helpRow("t(x, 'customer')", '等于 customer 加上 customer.* 全部子字段'),
+          helpRow("t(x, '*.name,item?')", '通配：* 任意多个字符，? 一个字符'),
+          helpRow("t(x, {exclude: 'big,raw.*'})", '排除列；可以和 cols 一起用'),
+          helpRow("t(rs.status(), 'set,members.name')", '单个文档里也能选子表的列'),
+          '',
+          '  选项（每次调用时传，或者用 mt.config() 改本会话默认值；括号里是当前值）：',
+          helpRow('cols / exclude', '选列 / 排除列'),
+          helpRow('limit (' + v.limit + ')', '游标、数组最多显示几行，0 = 不限'),
+          helpRow('table (false)', '强制表格，不自动改竖排'),
+          helpRow('vertical (false)', '强制竖排，g() 就是 vertical: true'),
+          helpRow("tz ('" + v.tz + "')", "时区：'UTC'、'local'、'+08:00'、'Asia/Shanghai'"),
+          helpRow('maxCol (' + v.maxCol + ')', '表格每格最多显示几个字符宽，0 = 不截断'),
+          helpRow('width (' + (v.width || '自动') + ')', '终端宽度，表格超过就改竖排'),
+          helpRow('depth (' + (v.depth == null ? '全部' : v.depth) + ')', '嵌套文档展开几层'),
+          helpRow('color (' + (v.color == null ? '自动' : v.color) + ')', 'true / false：表头加粗、(无字段) 变暗等'),
+          helpRow("nullText ('" + v.nullText + "')", '值为 null 时显示什么'),
+          helpRow("missingText ('" + v.missingText + "')", '没有这个字段时显示什么'),
+          helpRow("lang ('" + v.lang + "')", "提示和帮助的语言：'zh' / 'en'"),
+          helpRow('showCmd (' + v.showCmd + ')', 'DBA 命令先打印等价的原生命令'),
+          '',
+          '  会话设置：',
+          helpRow('mt.config()', '查看当前设置'),
+          helpRow("mt.config({tz: '+08:00', limit: 100})", '修改，只影响本会话；重新 load() 会恢复默认'),
+          helpRow('MONGOTAB_TZ / MONGOTAB_LANG', '环境变量：启动前设，每次都生效，如 MONGOTAB_TZ=+08:00'),
+          '',
+          '  DBA 常用命令：',
+          helpRow('mt.cmds()', '按类别列出全部命令、对应的 MySQL 命令和说明'),
+          helpRow("mt.help('ps')", '某个命令的详细用法、选项和输出的每一列，也可以写 mt.cmds("ps")'),
           '',
           '  示例：'
-        ].concat(HELP_EXAMPLES, ['', '  显示约定：' + (nul || '空白') + ' = 值为 null；空白 = 空字符串 ""；' +
-          (miss || '空白') + ' = 该文档没有这个字段（竖排里直接不显示）。CSV 相同']);
+        ].concat(HELP_EXAMPLES, ['', '  显示约定：' + (v.nullText || '空白') + ' = 值为 null；空白 = 空字符串 ""；' +
+          (v.missingText || '空白') + ' = 该文档没有这个字段（竖排里直接不显示）。CSV 相同']);
       }
     },
     en: {
@@ -228,26 +257,55 @@
         status: 'Version, role, ops/s, connections, cache and other key metrics'
       },
       cmdsNote: 'All accept t() options such as {cols: ...} or {vertical: true}; mt.config({showCmd: false}) hides the native command',
+      cmdsMore: "mt.help('ps') shows the detailed usage, options and output columns of one command",
+      groups: { run: 'Server activity', query: 'Slow queries and plans', store: 'Storage and indexes', repl: 'Replication' },
+      hd: { usage: 'Usage:', opts: 'Options:', out: 'Output:', notes: 'Notes:', see: 'See also:', common: 'All take t() options (cols, exclude, limit, vertical, table, tz...); mt.config({showCmd: false}) hides the native command' },
+      noHelp: function (name, names) { return 'No command named ' + name + '. Available: ' + names.join(', '); },
       loaded: function (v, tz) { return 'MongoTab ' + v + ' loaded: t(x) table / g(x) vertical / mt.help()   time zone ' + tz; },
       skipped: function (names) {
         return '  Note: ' + names.join(', ') + ' already defined, left untouched; use mongotab.table / mongotab.vertical / mongotab.help()';
       },
-      help: function (limit, nul, miss) {
+      help: function (v) {
         return [
-          helpRow('t(x)', 'Table; switches to vertical when too wide. x: cursor, array or document'),
-          helpRow('g(x)', 'Vertical (like MySQL \\G)'),
-          helpRow("t(x, 'a,b,c.*')", 'Only these columns; * wildcards allowed, a means all of a.*'),
-          helpRow("t(x, {exclude: 'big,raw.*'})", 'Exclude columns'),
-          helpRow('t(x, {limit: 200})', 'Max rows for cursors/arrays (default ' + limit + ', 0 = no limit)'),
-          helpRow('t(x, {table: true})', 'Always a table, never switch to vertical'),
-          helpRow("t(x, {tz: '+08:00'})", 'Show times in this time zone for this call'),
-          helpRow('mt.csv(x, ...)', 'Print CSV (paste into Excel)'),
-          helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'zh'})", 'Change defaults for this session'),
-          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.locks(), mt.txns(), mt.frag(), mt.cache(), mt.ttl(), mt.log(), mt.unusedIdx(), mt.dupIdx(), mt.explain(), mt.explainLog(), mt.logQuery(), mt.builds(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
+          '  Tables and vertical output:',
+          helpRow('t(x)', 'Table; switches to vertical when too wide. x: cursor, array or a single document'),
+          helpRow('g(x)', 'Vertical (like MySQL \\G); same arguments as t()'),
+          helpRow('mt.csv(x, ...)', 'Print CSV (paste into Excel); same arguments as t()'),
+          '',
+          '  Columns:',
+          helpRow("t(x, 'a,b,c')", "Only these columns, in this order; an array ['a', 'b'] works too"),
+          helpRow("t(x, 'customer')", 'Means customer plus all of customer.*'),
+          helpRow("t(x, '*.name,item?')", 'Wildcards: * any characters, ? one character'),
+          helpRow("t(x, {exclude: 'big,raw.*'})", 'Exclude columns; works together with cols'),
+          helpRow("t(rs.status(), 'set,members.name')", 'Columns of sub-tables in a single document'),
+          '',
+          '  Options (pass them per call, or change the session defaults with mt.config(); current values in parentheses):',
+          helpRow('cols / exclude', 'Pick / exclude columns'),
+          helpRow('limit (' + v.limit + ')', 'Max rows for cursors and arrays; 0 = no limit'),
+          helpRow('table (false)', 'Always a table, never switch to vertical'),
+          helpRow('vertical (false)', 'Always vertical; g() is vertical: true'),
+          helpRow("tz ('" + v.tz + "')", "Time zone: 'UTC', 'local', '+08:00', 'Asia/Shanghai'"),
+          helpRow('maxCol (' + v.maxCol + ')', 'Max width of a table cell; 0 = never cut'),
+          helpRow('width (' + (v.width || 'auto') + ')', 'Terminal width; wider tables switch to vertical'),
+          helpRow('depth (' + (v.depth == null ? 'all' : v.depth) + ')', 'How many levels of nested documents to expand'),
+          helpRow('color (' + (v.color == null ? 'auto' : v.color) + ')', 'true / false: bold headers, dimmed (missing) and so on'),
+          helpRow("nullText ('" + v.nullText + "')", 'What a null value shows as'),
+          helpRow("missingText ('" + v.missingText + "')", 'What a missing field shows as'),
+          helpRow("lang ('" + v.lang + "')", "Language of messages and help: 'en' / 'zh'"),
+          helpRow('showCmd (' + v.showCmd + ')', 'DBA commands print the native command first'),
+          '',
+          '  Session settings:',
+          helpRow('mt.config()', 'Show the current settings'),
+          helpRow("mt.config({tz: '+08:00', limit: 100})", 'Change them for this session; load() again resets them'),
+          helpRow('MONGOTAB_TZ / MONGOTAB_LANG', 'Environment variables read at load time, e.g. MONGOTAB_TZ=+08:00'),
+          '',
+          '  DBA commands:',
+          helpRow('mt.cmds()', 'All commands by category, with the matching MySQL command and a description'),
+          helpRow("mt.help('ps')", 'Detailed usage, options and output columns of one command; mt.cmds("ps") works too'),
           '',
           '  Examples:'
-        ].concat(HELP_EXAMPLES, ['', '  Conventions: ' + (nul || 'blank') + ' = value is null; blank = empty string ""; ' +
-          (miss || 'blank') + ' = the document has no such field (omitted in vertical output). Same in CSV']);
+        ].concat(HELP_EXAMPLES, ['', '  Conventions: ' + (v.nullText || 'blank') + ' = value is null; blank = empty string ""; ' +
+          (v.missingText || 'blank') + ' = the document has no such field (omitted in vertical output). Same in CSV']);
       }
     }
   };
@@ -740,8 +798,12 @@
     Object.keys(cfg).forEach(function (k) { if (k[0] !== '_') shown[k] = cfg[k]; });
     emit([JSON.stringify(shown)]);
   }
-  function help() {
-    emit(['MongoTab ' + VERSION + ' — Make mongosh readable', ''].concat(L(cfg.lang).help(cfg.limit, String(cfg.nullText), missingText(cfg))));
+  function help(name) {
+    if (name != null && name !== '') return cmdHelp(name);
+    emit(['MongoTab ' + VERSION + ' — Make mongosh readable', ''].concat(L(cfg.lang).help({
+      limit: cfg.limit, tz: cfg.tz, maxCol: cfg.maxCol, width: cfg.width, depth: cfg.depth, color: cfg.color,
+      nullText: String(cfg.nullText), missingText: missingText(cfg), lang: cfg.lang, showCmd: cfg.showCmd !== false
+    })));
   }
 
   // ───────────────────────── DBA 常用命令 ─────────────────────────
@@ -2303,6 +2365,9 @@
     emit(out);
   }
 
+  // 每个命令的详细帮助（mt.help('ps')）：t 标题，u 用法，o 选项，c 输出，n 说明，s 相关命令
+  var HELP_DOC = {"ps": {"mysql": "SHOW PROCESSLIST", "zh": {"t": "正在执行的操作", "u": [["mt.ps()", "运行最久的在前"], ["mt.ps({secs: 5})", "只看运行超过 5 秒的"], ["mt.ps({ns: 'shop.orders'})", "只看某个集合；'shop' 匹配整个库"], ["mt.ps({all: true})", "包括空闲连接和内部线程"], ["mt.ps({sort: 'opid'})", "排序：'desc'（默认）、'asc'、'opid'，或 {ns: 1, secs: -1}"]], "o": [["secs", "只看运行超过这么多秒的"], ["ns", "库或 库.集合"], ["all", "true：用 $all，包括空闲连接和内部线程"], ["sort", "'desc' / 'asc' / 'opid' / 按列名的排序文档"]], "c": [["opid", "操作 ID，db.killOp(opid) 用它"], ["secs", "已经运行的秒数"], ["op", "query / getmore / insert / update / remove / command；空闲连接是 idle"], ["ns", "库.集合"], ["client / app", "客户端、appName"], ["lock", "在等锁时显示 WAIT"], ["plan", "计划摘要，COLLSCAN 是全表扫描"], ["command", "命令，去掉了驱动加的字段"]], "n": ["执行的是 db.adminCommand({currentOp: 1, active: true})", "默认不显示空闲连接、内部线程、驱动的心跳长轮询和 mt.ps() 自己"], "s": ["locks", "txns", "conns"]}, "en": {"t": "running operations", "u": [["mt.ps()", "longest running first"], ["mt.ps({secs: 5})", "only those running for 5+ seconds"], ["mt.ps({ns: 'shop.orders'})", "one collection; 'shop' matches the whole database"], ["mt.ps({all: true})", "include idle connections and internal threads"], ["mt.ps({sort: 'opid'})", "sort: 'desc' (default), 'asc', 'opid', or {ns: 1, secs: -1}"]], "o": [["secs", "only operations running at least this many seconds"], ["ns", "database or database.collection"], ["all", "true: use $all, including idle connections and internal threads"], ["sort", "'desc' / 'asc' / 'opid' / a sort document on column names"]], "c": [["opid", "operation ID, used by db.killOp(opid)"], ["secs", "seconds running"], ["op", "query / getmore / insert / update / remove / command; idle for idle connections"], ["ns", "database.collection"], ["client / app", "client, appName"], ["lock", "WAIT while waiting for a lock"], ["plan", "plan summary; COLLSCAN is a full scan"], ["command", "the command, without driver fields"]], "n": ["Runs db.adminCommand({currentOp: 1, active: true})", "Hidden by default: idle connections, internal threads, drivers' awaitable hello and mt.ps() itself"], "s": ["locks", "txns", "conns"]}}, "slow": {"mysql": "mysql.slow_log", "zh": {"t": "慢查询（profiler）", "u": [["mt.slow()", "当前库，最新的在前"], ["mt.slow('shop')", "指定库，也可以传 db 对象"], ["mt.slow({ms: 500, ns: 'orders'})", "超过 500 毫秒的、orders 集合的"], ["mt.slow({sort: 'ms'})", "最慢的在前；'asc' 最早的在前，或排序文档"], ["mt.explainLog(1)", "对第 1 行做 explain；mt.logQuery(1) 转成查询语句"]], "o": [["ms", "只看耗时不少于这么多毫秒的"], ["ns", "集合名或 库.集合"], ["sort", "'desc'（默认，最新的在前）/ 'asc' / 'ms'（最慢的在前）/ 排序文档"]], "c": [["#", "行号，mt.explainLog(n) / mt.logQuery(n) 用它"], ["ts / ms", "结束时间、耗时（毫秒）"], ["op / ns / plan", "操作类型、库.集合、计划摘要"], ["keysExamined / docsExamined", "扫了多少索引键、多少文档"], ["nreturned", "返回多少条"], ["client / user", "客户端、用户（没开认证时不显示 user）"], ["command", "命令"]], "n": ["读的是 system.profile，不改 profiler 设置", "profiler 默认关闭，每个库单独打开：db.setProfilingLevel(1, {slowms: 100})", "system.profile 是 1 MB 的 capped 集合，只有最近一段时间的"], "s": ["explainLog", "logQuery", "log"]}, "en": {"t": "slow queries (profiler)", "u": [["mt.slow()", "current database, newest first"], ["mt.slow('shop')", "another database; a db object works too"], ["mt.slow({ms: 500, ns: 'orders'})", "500 ms or more, orders collection only"], ["mt.slow({sort: 'ms'})", "slowest first; 'asc' oldest first, or a sort document"], ["mt.explainLog(1)", "explain row 1; mt.logQuery(1) turns it into a statement"]], "o": [["ms", "only operations that took at least this many milliseconds"], ["ns", "collection name or database.collection"], ["sort", "'desc' (default, newest first) / 'asc' / 'ms' (slowest first) / a sort document"]], "c": [["#", "row number, used by mt.explainLog(n) / mt.logQuery(n)"], ["ts / ms", "when it finished, duration (ms)"], ["op / ns / plan", "operation, database.collection, plan summary"], ["keysExamined / docsExamined", "index keys and documents scanned"], ["nreturned", "documents returned"], ["client / user", "client, user (user hidden without authentication)"], ["command", "the command"]], "n": ["Reads system.profile; never changes profiler settings", "The profiler is off by default; turn it on per database: db.setProfilingLevel(1, {slowms: 100})", "system.profile is a 1 MB capped collection, so it only covers recent activity"], "s": ["explainLog", "logQuery", "log"]}}, "top": {"mysql": "sys.schema_table_statistics", "zh": {"t": "各集合读写耗时（类似 mongotop）", "u": [["mt.top()", "间隔 1 秒采样两次，看这 1 秒内的耗时"], ["mt.top({interval: 5})", "间隔 5 秒"], ["mt.top({interval: 0})", "只取一次，看启动以来的累计值"], ["mt.top({ns: 'shop'})", "只看一个库；'shop.orders' 只看一个集合"]], "o": [["interval", "采样间隔秒数，默认 1；0 = 启动以来累计"], ["ns", "库或 库.集合"]], "c": [["ns", "库.集合"], ["totalMs", "这段时间里所有操作的耗时（毫秒）"], ["readMs / writeMs", "其中读锁、写锁的耗时"], ["ops", "操作次数"]], "n": ["执行的是 db.adminCommand({top: 1})，两次相减", "操作结束时才记时间，还在跑的长查询看 mt.ps()", "只能连 mongod"], "s": ["ps", "status"]}, "en": {"t": "time per collection (like mongotop)", "u": [["mt.top()", "two samples 1 second apart: time spent in that second"], ["mt.top({interval: 5})", "5 seconds apart"], ["mt.top({interval: 0})", "one sample: totals since startup"], ["mt.top({ns: 'shop'})", "one database; 'shop.orders' for one collection"]], "o": [["interval", "seconds between samples, 1 by default; 0 = totals since startup"], ["ns", "database or database.collection"]], "c": [["ns", "database.collection"], ["totalMs", "time spent by all operations in the interval (ms)"], ["readMs / writeMs", "of which under read / write locks"], ["ops", "number of operations"]], "n": ["Runs db.adminCommand({top: 1}) and subtracts two samples", "Time is recorded when an operation finishes; use mt.ps() for long ones still running", "Must run on a mongod"], "s": ["ps", "status"]}}, "locks": {"mysql": "sys.innodb_lock_waits", "zh": {"t": "谁在等锁、锁被谁占着", "u": [["mt.locks()", "有人排队的锁，以及挡住它们的持有者"], ["mt.locks({all: true})", "所有被占用的锁，包括没人排队的"]], "o": [["all", "true：列出所有被占用的锁"]], "c": [["resource", "锁资源，如 Collection shop.orders；全局锁显示 Global 3 这样的编号"], ["mode", "IS / IX 意向共享 / 意向排他，S 共享，X 排他"], ["state", "HOLD 占着，WAIT 在排队"], ["opid / secs", "操作 ID、已运行秒数"], ["client / desc", "客户端、连接名或内部线程名"], ["op / ns / command", "操作类型、库.集合、命令"]], "n": ["用 lockInfo 拿持有者和排队者，按 opid 关联 currentOp", "默认只列和排队者冲突的持有者", "普通读写之间的冲突是 WriteConflict 重试，不是等锁", "只能连 mongod"], "s": ["ps", "txns"]}, "en": {"t": "lock waits", "u": [["mt.locks()", "locks with waiters, and the holders blocking them"], ["mt.locks({all: true})", "every lock that is held, waiters or not"]], "o": [["all", "true: every lock that is held"]], "c": [["resource", "lock resource, e.g. Collection shop.orders; global locks show as a number such as Global 3"], ["mode", "IS / IX intent shared / intent exclusive, S shared, X exclusive"], ["state", "HOLD holds it, WAIT is queued"], ["opid / secs", "operation ID, seconds running"], ["client / desc", "client, connection or internal thread name"], ["op / ns / command", "operation, database.collection, command"]], "n": ["Uses lockInfo for holders and waiters, joined with currentOp by opid", "By default only holders that conflict with a waiter are listed", "Conflicts between ordinary reads and writes are retried (WriteConflict), not lock waits", "Must run on a mongod"], "s": ["ps", "txns"]}}, "txns": {"mysql": "INFORMATION_SCHEMA.INNODB_TRX", "zh": {"t": "未提交的事务", "u": [["mt.txns()", "开得最久的在前"], ["mt.txns({secs: 10})", "只看开了 10 秒以上的"], ["mt.txns({sort: 'asc'})", "最短的在前；也可以给排序文档"]], "o": [["secs", "只看开了这么多秒以上的"], ["sort", "'desc'（默认）/ 'asc' / 排序文档"]], "c": [["lsid / txnNumber", "会话 ID、会话里的事务编号"], ["state", "active 正在执行语句，idle 两条语句之间空闲"], ["openSecs", "已经开了多久"], ["activeSecs / idleSecs", "其中执行、空闲的时间"], ["start", "开始时间"], ["expiresIn", "再过多少秒自动中止（默认 60 秒）"], ["opid / ns", "执行中时的操作 ID、库.集合"], ["client / app", "客户端、appName"]], "n": ["4.0 起才有事务", "立刻结束一个事务：db.adminCommand({killSessions: [{id: UUID('<lsid>')}]})", "idleSecs 很大的，通常是应用忘了 commit / abort"], "s": ["ps", "locks"]}, "en": {"t": "open transactions", "u": [["mt.txns()", "open longest first"], ["mt.txns({secs: 10})", "only those open for 10+ seconds"], ["mt.txns({sort: 'asc'})", "shortest first; or a sort document"]], "o": [["secs", "only transactions open at least this many seconds"], ["sort", "'desc' (default) / 'asc' / a sort document"]], "c": [["lsid / txnNumber", "session ID, transaction number in the session"], ["state", "active running a statement, idle between statements"], ["openSecs", "how long it has been open"], ["activeSecs / idleSecs", "of which running / idle"], ["start", "when it started"], ["expiresIn", "seconds until it is aborted automatically (60 by default)"], ["opid / ns", "operation ID and database.collection while running"], ["client / app", "client, appName"]], "n": ["Transactions exist since 4.0", "To end one now: db.adminCommand({killSessions: [{id: UUID('<lsid>')}]})", "A large idleSecs usually means the application forgot to commit or abort"], "s": ["ps", "locks"]}}, "repl": {"mysql": "SHOW SLAVE STATUS", "zh": {"t": "副本集状态", "u": [["mt.repl()", "成员状态、复制延迟、同步源"]], "o": [], "c": [["name / state / health", "成员地址、PRIMARY / SECONDARY...、1 正常 0 连不上"], ["lagSecs", "复制延迟（秒），和主节点的 optime 比"], ["optime", "最后应用的操作时间"], ["syncSource", "从哪个成员同步"], ["pingMs / lastHeartbeat", "心跳往返时间、最后一次心跳"], ["self", "* 是当前连接的成员"]], "n": ["执行的是 rs.status()", "只能在副本集成员上执行"], "s": ["oplog", "status"]}, "en": {"t": "replica set status", "u": [["mt.repl()", "member state, replication lag, sync source"]], "o": [], "c": [["name / state / health", "member address, PRIMARY / SECONDARY..., 1 up 0 unreachable"], ["lagSecs", "replication lag in seconds, against the primary's optime"], ["optime", "time of the last operation applied"], ["syncSource", "the member it syncs from"], ["pingMs / lastHeartbeat", "heartbeat round trip, last heartbeat"], ["self", "* marks the member you are connected to"]], "n": ["Runs rs.status()", "Only works on a replica set member"], "s": ["oplog", "status"]}}, "dbs": {"mysql": "SHOW DATABASES", "zh": {"t": "各库大小", "u": [["mt.dbs()", "按库名排序，最后一行是合计"]], "o": [], "c": [["name", "库名"], ["disk", "磁盘占用（sizeOnDisk）"], ["empty", "是否为空"]], "n": ["执行的是 listDatabases"], "s": ["colls", "frag"]}, "en": {"t": "database sizes", "u": [["mt.dbs()", "sorted by name, total on the last line"]], "o": [], "c": [["name", "database name"], ["disk", "disk usage (sizeOnDisk)"], ["empty", "whether it is empty"]], "n": ["Runs listDatabases"], "s": ["colls", "frag"]}}, "colls": {"mysql": "SHOW TABLE STATUS", "zh": {"t": "各集合大小", "u": [["mt.colls()", "当前库，大的在前"], ["mt.colls('shop')", "指定库，也可以传 db 对象"]], "o": [], "c": [["count", "文档数"], ["logical", "数据的逻辑大小（未压缩）"], ["disk", "数据的磁盘占用（压缩后）"], ["indexes / indexDisk", "索引个数、索引的磁盘占用"]], "n": ["对每个集合执行 $collStats，视图跳过", "按 disk + indexDisk 从大到小排"], "s": ["frag", "idx", "cache"]}, "en": {"t": "collection sizes", "u": [["mt.colls()", "current database, largest first"], ["mt.colls('shop')", "another database; a db object works too"]], "o": [], "c": [["count", "documents"], ["logical", "logical data size (uncompressed)"], ["disk", "disk space used by the data (compressed)"], ["indexes / indexDisk", "number of indexes, disk space used by them"]], "n": ["Runs $collStats on each collection; views are skipped", "Sorted by disk + indexDisk, largest first"], "s": ["frag", "idx", "cache"]}}, "frag": {"mysql": "TABLES.DATA_FREE", "zh": {"t": "删数据后可回收的磁盘空间", "u": [["mt.frag()", "当前库"], ["mt.frag('shop')", "指定库，也可以传 db 对象"]], "o": [], "c": [["disk", "数据文件大小"], ["reusable / pct", "其中可复用的空间、占比"], ["indexDisk / indexReusable", "索引文件大小、其中可复用的空间"]], "n": ["读 $collStats 的 wiredTiger['block-manager']['file bytes available for reuse']", "要还给操作系统：对集合执行 compact，或者从节点全量同步", "数字是上次 checkpoint（默认 60 秒）时的值"], "s": ["colls", "dbs"]}, "en": {"t": "disk space reusable after deletes", "u": [["mt.frag()", "current database"], ["mt.frag('shop')", "another database; a db object works too"]], "o": [], "c": [["disk", "data file size"], ["reusable / pct", "reusable space in it, and its share"], ["indexDisk / indexReusable", "index file size, reusable space in it"]], "n": ["Reads wiredTiger['block-manager']['file bytes available for reuse'] from $collStats", "To give it back to the OS: run compact on the collection, or resync a secondary", "Numbers are as of the last checkpoint (every 60 seconds by default)"], "s": ["colls", "dbs"]}}, "idx": {"mysql": "SHOW INDEX FROM t", "zh": {"t": "索引", "u": [["mt.idx('orders')", "当前库的 orders"], ["mt.idx('shop.orders')", "指定库"], ["mt.idx(db.orders)", "集合对象"]], "o": [], "c": [["name / key", "索引名、索引键"], ["disk", "磁盘占用"], ["ops / since", "自 since 以来被用到的次数（重启后清零）"], ["options", "unique、sparse、ttl=秒、partial=条件、hidden、collation=语言"]], "n": ["getIndexes() + $indexStats + $collStats"], "s": ["unusedIdx", "dupIdx", "builds"]}, "en": {"t": "indexes", "u": [["mt.idx('orders')", "orders in the current database"], ["mt.idx('shop.orders')", "another database"], ["mt.idx(db.orders)", "a collection object"]], "o": [], "c": [["name / key", "index name, index key"], ["disk", "disk usage"], ["ops / since", "times used since `since` (reset on restart)"], ["options", "unique, sparse, ttl=seconds, partial=filter, hidden, collation=locale"]], "n": ["getIndexes() + $indexStats + $collStats"], "s": ["unusedIdx", "dupIdx", "builds"]}}, "unusedIdx": {"mysql": "sys.schema_unused_indexes", "zh": {"t": "没被用过的索引", "u": [["mt.unusedIdx()", "所有用户库（跳过 admin、local、config）"], ["mt.unusedIdx('shop')", "只看一个库"]], "o": [], "c": [["ns / index / key", "库.集合、索引名、索引键"], ["disk", "删掉能省下的磁盘空间"], ["since", "开始计数的时间"], ["options", "unique、ttl 等"]], "n": ["列出 $indexStats 的 accesses.ops 为 0 的索引，_id_ 不列", "计数在重启、索引重建后清零；表头 uptime 太短时不准", "计数是每个节点自己的，每个成员都要看", "unique、ttl 索引即使没被查询用过也在干活", "删之前可以先 db.c.hideIndex('名字') 观察"], "s": ["dupIdx", "idx"]}, "en": {"t": "unused indexes", "u": [["mt.unusedIdx()", "every user database (admin, local, config skipped)"], ["mt.unusedIdx('shop')", "one database"]], "o": [], "c": [["ns / index / key", "database.collection, index name, index key"], ["disk", "disk space dropping it would save"], ["since", "when counting started"], ["options", "unique, ttl and so on"]], "n": ["Lists indexes whose $indexStats accesses.ops is 0; _id_ is not listed", "Counts reset on restart and index rebuild; unreliable if uptime is short", "Counts are per node; check every member", "unique and ttl indexes do work even if no query uses them", "Hide one first with db.c.hideIndex('name') and watch"], "s": ["dupIdx", "idx"]}}, "dupIdx": {"mysql": "sys.schema_redundant_indexes", "zh": {"t": "冗余索引", "u": [["mt.dupIdx()", "所有用户库"], ["mt.dupIdx('shop')", "只看一个库"]], "o": [], "c": [["ns / index / key", "冗余的那个索引"], ["disk", "它占的磁盘空间"], ["coveredBy / coveredKey", "能代替它的索引（取键最短的）"]], "n": ["键是另一个索引键的前缀（字段和方向都一样）就算冗余，如 {a: 1} 被 {a: 1, b: 1} 覆盖", "这些不算：前缀索引是 unique / ttl / partial / sparse / hidden；长的是 partial / sparse；collation 不同；text、hashed 等特殊索引；方向不同"], "s": ["unusedIdx", "idx"]}, "en": {"t": "redundant indexes", "u": [["mt.dupIdx()", "every user database"], ["mt.dupIdx('shop')", "one database"]], "o": [], "c": [["ns / index / key", "the redundant index"], ["disk", "disk space it takes"], ["coveredBy / coveredKey", "the index that can replace it (shortest key)"]], "n": ["Redundant when its key is a prefix of another index's key (same fields and directions), e.g. {a: 1} covered by {a: 1, b: 1}", "Never reported: unique / ttl / partial / sparse / hidden prefix; partial / sparse longer index; different collation; text, hashed and other special indexes; different directions"], "s": ["unusedIdx", "idx"]}}, "builds": {"mysql": "ALTER TABLE progress", "zh": {"t": "正在建的索引", "u": [["mt.builds()", "每个正在建的索引一行"]], "o": [], "c": [["ns / index / key", "库.集合、索引名、索引键"], ["phase", "scanning collection、inserting keys from external sorter into index、draining writes...；等待中 = 还没开始或在等提交"], ["done / total / pct", "当前阶段的进度"], ["secs", "已经跑了多少秒"], ["opid / client", "操作 ID、发起的客户端"]], "n": ["来自 currentOp 的 $all: true", "停掉：4.4 起 db.c.dropIndex('名字')，之前 db.killOp(opid)", "只显示当前连接的节点；从节点的进度要连上去看"], "s": ["idx", "ps"]}, "en": {"t": "index builds in progress", "u": [["mt.builds()", "one row per index build"]], "o": [], "c": [["ns / index / key", "database.collection, index name, index key"], ["phase", "scanning collection, inserting keys from external sorter into index, draining writes...; waiting = not started yet or waiting to commit"], ["done / total / pct", "progress of the current phase"], ["secs", "seconds running"], ["opid / client", "operation ID, client that started it"]], "n": ["From currentOp with $all: true", "To stop one: db.c.dropIndex('name') since 4.4, db.killOp(opid) before", "Shows the node you are connected to; connect to a secondary for its progress"], "s": ["idx", "ps"]}}, "explain": {"mysql": "EXPLAIN [ANALYZE]", "zh": {"t": "执行计划", "u": [["mt.explain(db.orders.find({status: 'PAID'}).sort({createdAt: -1}))", "只看计划，不执行"], ["mt.explain(db.orders.find({...}), {analyze: true})", "真的执行一遍，看扫描数和耗时"], ["mt.explain(db.orders.explain('executionStats').aggregate([...]))", "聚合：传 explain 的结果"], ["mt.explain(db.orders.aggregate([...]))", "mongosh 里聚合游标也可以"]], "o": [["analyze", "true：explain('executionStats')，会执行查询；默认 queryPlanner，不执行"]], "c": [["表头", "ns、engine（classic / sbe）、rejectedPlans；analyze 时还有总耗时、扫描数、docsExaminedPerReturned"], ["stage", "IXSCAN / FETCH / COLLSCAN / SORT / LIMIT... 从上往下是从结果到数据源"], ["index / detail", "用的索引；索引范围、过滤条件、排序字段等"], ["nReturned / keysExamined / docsExamined / ms", "每一步的统计（analyze 时）"], ["note", "全表扫描、内存排序、用到了磁盘、取出后再过滤、多键索引"]], "n": ["慢日志里的查询用 mt.explainLog()"], "s": ["explainLog", "logQuery", "slow"]}, "en": {"t": "query plans", "u": [["mt.explain(db.orders.find({status: 'PAID'}).sort({createdAt: -1}))", "plan only, nothing runs"], ["mt.explain(db.orders.find({...}), {analyze: true})", "really runs it: rows scanned, time"], ["mt.explain(db.orders.explain('executionStats').aggregate([...]))", "aggregation: pass the explain result"], ["mt.explain(db.orders.aggregate([...]))", "an aggregation cursor works in mongosh"]], "o": [["analyze", "true: explain('executionStats'), runs the query; default queryPlanner, nothing runs"]], "c": [["header", "ns, engine (classic / sbe), rejectedPlans; with analyze also total time, rows scanned, docsExaminedPerReturned"], ["stage", "IXSCAN / FETCH / COLLSCAN / SORT / LIMIT...; top to bottom is result to data"], ["index / detail", "index used; index bounds, filter, sort fields and so on"], ["nReturned / keysExamined / docsExamined / ms", "per-step statistics (with analyze)"], ["note", "full scan, in-memory sort, spilled to disk, filtered after fetch, multikey"]], "n": ["For queries from a slow log use mt.explainLog()"], "s": ["explainLog", "logQuery", "slow"]}}, "explainLog": {"mysql": "EXPLAIN on a slow log query", "zh": {"t": "对慢日志里的查询做 explain", "u": [["mt.slow({sort: 'ms'}); mt.explainLog(1)", "profiler 里最慢的那条"], ["mt.log('Slow query'); mt.explainLog(2)", "日志里的第 2 条（4.4 之前找 'command: find'）"], ["mt.explainLog(`整行日志`)", "日志文件里复制的整行，用反引号包起来"], ["mt.explainLog(`{ find: \"orders\", ... }`)", "只复制命令那一段，从 { 开始"], ["mt.explainLog({find: 'orders', filter: {...}}, {db: 'shop'})", "自己写的命令"], ["mt.explainLog(1, {analyze: true})", "真的执行一遍"]], "o": [["analyze", "true：执行一遍拿统计；默认只看计划"], ["db", "命令里没有 $db、也没有 ns 时用哪个库"]], "c": [["慢日志里记录的执行情况", "time、durationMillis、planSummary、keysExamined、docsExamined、nreturned、hasSortStage、numYields、reslen、appName、client..."], ["之后", "和 mt.explain() 一样的计划；计划和慢日志里的不一样时会提示"]], "n": ["去掉 shardVersion、lsid、$clusterTime、$sortKey 等 mongos / 驱动加的字段", "库名取命令的 $db 或日志里的 ns", "4.2 及之前 mt.log() 每行只有前 512 个字符，长命令会被截断；从日志文件复制没有这个问题", "表格里显示的命令去掉了引号，不能粘贴回来，用行号"], "s": ["logQuery", "slow", "log", "explain"]}, "en": {"t": "explain a query from a slow log", "u": [["mt.slow({sort: 'ms'}); mt.explainLog(1)", "the slowest one in the profiler"], ["mt.log('Slow query'); mt.explainLog(2)", "row 2 of the log (before 4.4 search 'command: find')"], ["mt.explainLog(`whole log line`)", "a whole line copied from the log file, in backticks"], ["mt.explainLog(`{ find: \"orders\", ... }`)", "just the command, from its {"], ["mt.explainLog({find: 'orders', filter: {...}}, {db: 'shop'})", "a command you write yourself"], ["mt.explainLog(1, {analyze: true})", "really run it"]], "o": [["analyze", "true: run it for statistics; plan only by default"], ["db", "database to use when the command has no $db and there is no ns"]], "c": [["What the slow log recorded", "time, durationMillis, planSummary, keysExamined, docsExamined, nreturned, hasSortStage, numYields, reslen, appName, client..."], ["Then", "the plan, as in mt.explain(); a note if it differs from the logged plan"]], "n": ["Drops shardVersion, lsid, $clusterTime, $sortKey and other fields added by mongos and drivers", "The database comes from the command's $db or the log's ns", "On 4.2 and earlier mt.log() keeps only the first 512 characters of a line; lines copied from the log file are complete", "Commands shown in tables lost their quotes and cannot be pasted back; use the row number"], "s": ["logQuery", "slow", "log", "explain"]}}, "logQuery": {"mysql": "slow log → SQL", "zh": {"t": "把慢日志转成查询语句", "u": [["mt.logQuery(1)", "上一次 mt.slow() / mt.log() 的第 1 行"], ["mt.logQuery(`整行日志`)", "日志文件里复制的整行"], ["mt.logQuery({find: 'orders', filter: {...}}, {db: 'shop'})", "命令对象"]], "o": [["db", "命令里没有 $db、也没有 ns 时用哪个库"]], "c": [["// 慢日志：...", "来自慢日志时，当时的时间、耗时、计划、扫描数、返回数"], ["db.getSiblingDB(...)....", "可以直接运行的语句"]], "n": ["只打印，不执行", "类型照原样：ISODate、ObjectId、NumberLong、NumberDecimal、UUID、正则...", "update / delete 写成 updateOne / updateMany / deleteOne...，前面有一行注释提醒会修改数据", "输入和 mt.explainLog() 一样"], "s": ["explainLog", "slow", "log"]}, "en": {"t": "turn a slow-log query into a statement", "u": [["mt.logQuery(1)", "row 1 of the last mt.slow() / mt.log()"], ["mt.logQuery(`whole log line`)", "a whole line copied from the log file"], ["mt.logQuery({find: 'orders', filter: {...}}, {db: 'shop'})", "a command object"]], "o": [["db", "database to use when the command has no $db and there is no ns"]], "c": [["// slow log: ...", "for slow-log input: when it ran, duration, plan, rows scanned and returned"], ["db.getSiblingDB(...)....", "a statement you can run"]], "n": ["Prints only; nothing runs", "Types are kept: ISODate, ObjectId, NumberLong, NumberDecimal, UUID, regexes...", "update / delete become updateOne / updateMany / deleteOne..., with a comment line warning they change data", "Takes the same input as mt.explainLog()"], "s": ["explainLog", "slow", "log"]}}, "conns": {"mysql": "PROCESSLIST GROUP BY host", "zh": {"t": "连接来源", "u": [["mt.conns()", "按客户端 IP 统计连接数"]], "o": [], "c": [["表头", "current 当前连接数、available 还能建多少、totalCreated 启动以来一共建过多少"], ["client", "客户端 IP"], ["conns / active", "连接数、其中正在执行操作的"], ["apps", "这些连接的 appName"]], "n": ["serverStatus().connections + currentOp 的 $all: true"], "s": ["ps", "status"]}, "en": {"t": "where connections come from", "u": [["mt.conns()", "connections per client IP"]], "o": [], "c": [["header", "current open connections, available how many more, totalCreated since startup"], ["client", "client IP"], ["conns / active", "connections, of which running an operation"], ["apps", "their appNames"]], "n": ["serverStatus().connections + currentOp with $all: true"], "s": ["ps", "status"]}}, "oplog": {"mysql": "SHOW BINARY LOGS", "zh": {"t": "oplog 窗口", "u": [["mt.oplog()", "oplog 能覆盖多长时间"]], "o": [], "c": [["maxLogical / usedLogical", "上限、已用（逻辑大小，即 --oplogSize）"], ["disk", "磁盘上占的空间"], ["firstEvent / lastEvent", "最早、最晚一条的时间"], ["window", "两者之差"], ["now", "当前时间"]], "n": ["从节点停机或延迟超过 window，就要全量重新同步", "只能在副本集成员上执行"], "s": ["repl"]}, "en": {"t": "oplog window", "u": [["mt.oplog()", "how much time the oplog covers"]], "o": [], "c": [["maxLogical / usedLogical", "limit, used (logical size, i.e. --oplogSize)"], ["disk", "disk space it takes"], ["firstEvent / lastEvent", "times of the oldest and newest entries"], ["window", "the difference"], ["now", "current time"]], "n": ["A secondary down or behind for longer than the window needs a full resync", "Only works on a replica set member"], "s": ["repl"]}}, "status": {"mysql": "SHOW GLOBAL STATUS", "zh": {"t": "关键指标", "u": [["mt.status()", "间隔 1 秒采样两次，ops/s 是每秒的量"], ["mt.status({interval: 5})", "间隔 5 秒"], ["mt.status({interval: 0})", "只取一次，显示 opcounters 累计值"]], "o": [["interval", "采样间隔秒数，默认 1；0 = 只取一次"]], "c": [["host / version / role / uptime", "主机、版本、角色、运行时长"], ["ops/s.*", "每秒 insert / query / update / delete / getmore / command"], ["connections.* / activeClients.*", "连接数、正在读写的客户端"], ["queue.*", "排队等锁的读写，持续不为 0 说明有压力"], ["network/s.* / mem.*", "每秒流量、内存"], ["cache.*", "WiredTiger 缓存已用、上限、脏数据"]], "n": ["从 serverStatus 里挑出常看的指标"], "s": ["cache", "top", "conns"]}, "en": {"t": "key metrics", "u": [["mt.status()", "two samples 1 second apart; ops/s per second"], ["mt.status({interval: 5})", "5 seconds apart"], ["mt.status({interval: 0})", "one sample, opcounters totals"]], "o": [["interval", "seconds between samples, 1 by default; 0 = one sample"]], "c": [["host / version / role / uptime", "host, version, role, uptime"], ["ops/s.*", "insert / query / update / delete / getmore / command per second"], ["connections.* / activeClients.*", "connections, clients reading / writing now"], ["queue.*", "reads / writes waiting for a lock; staying above 0 means pressure"], ["network/s.* / mem.*", "traffic per second, memory"], ["cache.*", "WiredTiger cache used, maximum, dirty"]], "n": ["The serverStatus metrics people look at most"], "s": ["cache", "top", "conns"]}}, "cache": {"mysql": "sys.innodb_buffer_stats_by_table", "zh": {"t": "谁占着 WiredTiger 缓存", "u": [["mt.cache()", "所有库"], ["mt.cache('shop')", "只看一个库"]], "o": [], "c": [["表头", "used 已用、max 上限、dirty 脏数据"], ["ns", "库.集合"], ["cached", "数据加索引在缓存里占了多少"], ["dataCached / indexCached", "其中数据、索引各占多少"], ["share", "占已用缓存的比例"]], "n": ["缓存里是解压后的数据，可能比磁盘文件还大", "每个集合一次 $collStats，集合很多时慢", "只能连 mongod"], "s": ["status", "colls"]}, "en": {"t": "what is in the WiredTiger cache", "u": [["mt.cache()", "every database"], ["mt.cache('shop')", "one database"]], "o": [], "c": [["header", "used, max, dirty"], ["ns", "database.collection"], ["cached", "data plus indexes in the cache"], ["dataCached / indexCached", "of which data / indexes"], ["share", "share of the cache in use"]], "n": ["The cache holds uncompressed data, so it can exceed the file size", "One $collStats per collection; slow with thousands of collections", "Must run on a mongod"], "s": ["status", "colls"]}}, "ttl": {"mysql": "information_schema.EVENTS", "zh": {"t": "TTL 索引", "u": [["mt.ttl()", "所有库"], ["mt.ttl('shop')", "只看一个库"]], "o": [], "c": [["表头", "ttlMonitorEnabled、ttlMonitorSleepSecs、passes、deletedDocuments"], ["ns / index / field", "库.集合、TTL 索引名（或 (timeseries) / (clustered)）、日期字段"], ["expireAfterSeconds / expire", "过期时间"], ["oldest / overdueSecs", "最早一条的时间、超期了多少秒"], ["options", "partial、hidden"]], "n": ["overdueSecs 正常是 0 或 60 秒左右；明显更大说明删不过来或 TTL 线程没在跑", "从节点不自己删，跟着主节点复制"], "s": ["idx"]}, "en": {"t": "TTL indexes", "u": [["mt.ttl()", "every database"], ["mt.ttl('shop')", "one database"]], "o": [], "c": [["header", "ttlMonitorEnabled, ttlMonitorSleepSecs, passes, deletedDocuments"], ["ns / index / field", "database.collection, TTL index (or (timeseries) / (clustered)), date field"], ["expireAfterSeconds / expire", "expiry"], ["oldest / overdueSecs", "oldest document, seconds past expiry"], ["options", "partial, hidden"]], "n": ["overdueSecs is normally 0 or about 60; much more means deletes cannot keep up or the TTL thread is off", "Secondaries do not delete on their own; deletes replicate"], "s": ["idx"]}}, "log": {"mysql": "performance_schema.error_log", "zh": {"t": "最近的日志", "u": [["mt.log()", "最近 20 行"], ["mt.log(100)", "最近 100 行"], ["mt.log('Slow query')", "包含这段文字的（不分大小写）"], ["mt.log(/COLLSCAN|IXSCAN/)", "正则"], ["mt.log({sev: 'W'})", "只看警告、错误、致命"], ["mt.log({startup: true})", "启动警告"]], "o": [["n", "显示最后几行，默认 20"], ["grep", "文字或正则；第一个参数是字符串或正则时就是 grep"], ["sev", "'F' / 'E' / 'W' / 'I' / 'D'：这个级别及更严重的"], ["startup", "true：看启动警告"]], "c": [["#", "行号，mt.explainLog(n) / mt.logQuery(n) 用它"], ["time / sev / comp / ctx", "时间、级别、组件、线程"], ["id / attr", "4.4 起才有：消息编号、详细内容"], ["msg", "消息"]], "n": ["执行的是 getLog，只保留内存里最近 1024 行", "4.2 及之前每行最多 512 个字符", "attr 在表格里会截断，用 {vertical: true} 看全"], "s": ["slow", "explainLog"]}, "en": {"t": "recent log lines", "u": [["mt.log()", "last 20 lines"], ["mt.log(100)", "last 100 lines"], ["mt.log('Slow query')", "lines containing this text (case-insensitive)"], ["mt.log(/COLLSCAN|IXSCAN/)", "a regex"], ["mt.log({sev: 'W'})", "warnings, errors and fatal only"], ["mt.log({startup: true})", "startup warnings"]], "o": [["n", "how many of the last lines, 20 by default"], ["grep", "text or regex; a string or regex first argument is grep"], ["sev", "'F' / 'E' / 'W' / 'I' / 'D': this level and more severe"], ["startup", "true: startup warnings"]], "c": [["#", "row number, used by mt.explainLog(n) / mt.logQuery(n)"], ["time / sev / comp / ctx", "time, severity, component, thread"], ["id / attr", "4.4+ only: message ID, details"], ["msg", "message"]], "n": ["Runs getLog, which keeps only the last 1024 lines in memory", "On 4.2 and earlier each line holds at most 512 characters", "attr is cut in tables; use {vertical: true} to see it all"], "s": ["slow", "explainLog"]}}};
+
   var CMDS = [
     ['mt.ps({secs, ns, all, sort})', 'SHOW PROCESSLIST', 'ps'],
     ['mt.slow({ms, ns, sort})', 'mysql.slow_log', 'slow'],
@@ -2327,12 +2392,51 @@
     ["mt.ttl('db')", 'information_schema.EVENTS', 'ttl'],
     ['mt.log({n, grep, sev})', 'performance_schema.error_log', 'log']
   ];
-  function cmds() {
-    var m = M(), out = [];
-    var rows = CMDS.map(function (c) { return { command: c[0], mysql: c[1], description: m.cmdDesc[c[2]] }; });
-    renderRows(rows, makeOpts({ table: true, maxCol: 0 }), out, false, rows.length);
-    out.pop();   // 去掉 "N rows in set"
-    out.push(m.cmdsNote);
+  // mt.cmds()：按类别分组；mt.cmds('ps') 和 mt.help('ps') 一样，看一个命令的详细帮助
+  var CMD_GROUPS = [
+    ['run', ['status', 'ps', 'conns', 'locks', 'txns', 'top', 'builds']],
+    ['query', ['slow', 'log', 'explain', 'explainLog', 'logQuery']],
+    ['store', ['dbs', 'colls', 'frag', 'cache', 'idx', 'unusedIdx', 'dupIdx', 'ttl']],
+    ['repl', ['repl', 'oplog']]
+  ];
+  function cmds(name) {
+    if (name != null && name !== '') return cmdHelp(name);
+    var m = M(), out = [], o = makeOpts({ table: true, maxCol: 0 });
+    var sig = {};
+    CMDS.forEach(function (c) { sig[c[2]] = c; });
+    CMD_GROUPS.forEach(function (g, gi) {
+      if (gi) out.push('');
+      out.push(paint(o, CYAN, '── ' + m.groups[g[0]] + ' ──'));
+      var rows = g[1].map(function (k) { return { command: sig[k][0], mysql: sig[k][1], description: m.cmdDesc[k] }; });
+      renderRows(rows, o, out, false, rows.length);
+      out.pop();   // 去掉 "N rows in set"
+    });
+    out.push('', m.cmdsNote, m.cmdsMore);
+    emit(out);
+  }
+  function cmdHelp(name) {
+    var m = M(), lang = normLang(cfg.lang), o = makeOpts({});
+    var key = String(name).replace(/^\s*(mongotab|mt)\./, '').replace(/\(.*$/, '').trim();
+    var names = Object.keys(HELP_DOC);
+    var hit = names.filter(function (k) { return k.toLowerCase() === key.toLowerCase(); })[0];
+    if (!hit) { emit([m.noHelp(String(name), names.map(function (k) { return "'" + k + "'"; }))]); return; }
+    var d = HELP_DOC[hit], h = d[lang], out = [];
+    var pad = function (rows, sep) {
+      var w = 0;
+      rows.forEach(function (r) { if (dw(r[0]) <= 46) w = Math.max(w, dw(r[0])); });
+      rows.forEach(function (r) {
+        if (dw(r[0]) > 46) { out.push('  ' + r[0]); out.push('  ' + ' '.repeat(w) + '  ' + sep + r[1]); }
+        else out.push('  ' + padR(r[0], w) + '  ' + sep + r[1]);
+      });
+    };
+    out.push(paint(o, BOLD, 'mt.' + hit + '() — ' + h.t) + '    MySQL: ' + d.mysql, '');
+    out.push(paint(o, CYAN, m.hd.usage));
+    pad(h.u, '// ');
+    if (h.o.length) { out.push('', paint(o, CYAN, m.hd.opts)); pad(h.o, ''); }
+    if (h.c.length) { out.push('', paint(o, CYAN, m.hd.out)); pad(h.c, ''); }
+    if (h.n.length) { out.push('', paint(o, CYAN, m.hd.notes)); h.n.forEach(function (x) { out.push('  - ' + x); }); }
+    out.push('', m.hd.common);
+    if (h.s.length) out.push(m.hd.see + (lang === 'zh' ? '' : ' ') + h.s.map(function (k) { return 'mt.' + k + '()'; }).join(lang === 'zh' ? '、' : ', '));
     emit(out);
   }
 
