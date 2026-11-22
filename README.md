@@ -135,8 +135,10 @@ mt.ps()                       // SHOW PROCESSLIST：正在执行的操作，耗�
 mt.ps({secs: 5})              // 只看运行超过 5 秒的
 mt.ps({ns: 'shop.orders'})    // 只看某个库或集合
 mt.ps({all: true})            // 含空闲连接和内部线程
+mt.ps({sort: 'asc'})          // 运行最短的在前；'opid' 按 opid，也可以给排序文档如 {ns: 1, secs: -1}
 mt.slow()                     // 慢查询日志：读 system.profile，新的在前；默认当前库，也可以 mt.slow('shop')
 mt.slow({ms: 500, ns: 'orders'})  // 只看超过 500 毫秒的、某个集合的
+mt.slow({sort: 'ms'})         // 最慢的在前；'asc' 最早的在前，也可以给排序文档如 {docsExamined: -1}
 mt.top()                      // 各集合读写耗时（毫秒），间隔 1 秒采样，忙的在前；类似 mongotop
 mt.top({interval: 0})         // 启动以来累计
 mt.repl()                     // SHOW SLAVE STATUS：成员状态、复制延迟（秒）、同步源
@@ -176,7 +178,7 @@ date: 2026-11-22 05:02:46.493
 
 - 每条命令先打印对应的原生命令（`-- ...` 那一行，终端里是灰色），方便复制、核对。不想看用 `mt.config({showCmd: false})` 关掉。
 - 选项和 `t()` 通用，例如 `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`、`mt.colls('shop', {limit: 200})`、`mt.idx('orders', {vertical: true})`。
-- `mt.ps()` 默认不显示空闲连接、内部线程、驱动的心跳长轮询（awaitable hello）和这条查询自己。
+- `mt.ps()` 默认不显示空闲连接、内部线程、驱动的心跳长轮询（awaitable hello）和这条查询自己。`sort` 是在 shell 里对过滤后的结果排序，排序文档里写的是输出的列名（`opid`、`secs`、`op`、`ns`、`client`、`app`...），相同时再按运行时间从长到短。
 - `mt.slow()` 只读 `system.profile`，不会改 profiler 设置。profiler 默认是关的，没开时会提示用 `db.setProfilingLevel(1, {slowms: 100})` 打开（每个库单独设置）。
 - `mt.slow()`、`mt.top()` 要连到 mongod 上执行，mongos 上没有这些数据。
 - 这些命令需要监控类权限（如 `clusterMonitor` 角色）。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()` 时，只打印一行说明，不抛异常。
@@ -188,12 +190,13 @@ date: 2026-11-22 05:02:46.493
 
 ```js
 db.getProfilingStatus()                        // 表头的 level / slowms / sampleRate
-db.system.profile.find({...}).sort({ts: -1})   // 新的在前
+db.system.profile.find({...}).sort({ts: -1})   // 默认新的在前，sort 选项可改
 ```
 
 - profiler 按库开关：`level` 0 关闭，1 只记超过 `slowms` 的操作，2 全记；`sampleRate` 是抽样比例。`mt.slow()` 只读，不改这些设置。
 - 过滤条件：`ms` 变成 `{millis: {$gte: ms}}`；`ns` 写集合名（`'orders'`）或完整的 `'库.集合'`。另外总会排除读 `system.profile` 自己的操作和 `profile` 命令，否则在 level 2 下会看到 `mt.slow()` 自己。
-- 先用 `count` 数出总共有多少条，再按 `ts` 倒序取前 `limit` 条（默认 50），超出时页脚显示“共 N 行，只显示前 50 行”。
+- 排序 `sort`：默认 `'desc'` 即 `{ts: -1}`，最新的在前；`'asc'` 即 `{ts: 1}`，最早的在前；`'ms'` 即 `{millis: -1, ts: -1}`，最慢的在前；也可以直接给排序文档，如 `{docsExamined: -1}`。
+- 先用 `count` 数出总共有多少条，再按 `sort` 排好取前 `limit` 条（默认 50，`{limit: 0}` 不限），超出时页脚显示“共 N 行，只显示前 50 行”。所以默认拿到的是最近的 50 条，`{sort: 'ms'}` 拿到的是最慢的 50 条。
 - 每行：`ts` 时间、`ms` 耗时（`millis`）、`op`、`ns`、`plan`（`planSummary`，如 `COLLSCAN`、`IXSCAN {...}`）、`keysExamined` / `docsExamined` 扫描的索引键和文档数、`nreturned` 返回条数、`client`、`user`、`command`（去掉 `lsid`、`$clusterTime` 这类驱动加的字段）。没开认证时 `user` 全空，这一列不显示。
 - `docsExamined` 远大于 `nreturned`、`plan` 是 `COLLSCAN` 的，通常就是缺索引。
 - `system.profile` 是个 1 MB 的 capped 集合，满了会覆盖最早的记录，所以只能看到最近一段时间的。

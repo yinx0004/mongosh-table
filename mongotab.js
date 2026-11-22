@@ -77,9 +77,14 @@
       topSampled: function (n) { return '，间隔 ' + n + ' 秒采样两次，显示这段时间内的耗时（毫秒）'; },
       topTotals: '，启动以来累计（毫秒）',
       profOff: '没有开 profiler（level 0），可用 db.setProfilingLevel(1, {slowms: 100}) 打开',
+      badSort: function (fn, ch, ex) { return fn + ' 的 sort 可以是 ' + ch + '，或排序文档如 ' + ex; },
+      sortChoices: {
+        slow: "'desc'（默认，最新的在前）、'asc'（最早的在前）、'ms'（最慢的在前）",
+        ps: "'desc'（默认，运行最久的在前）、'asc'（最短的在前）、'opid'"
+      },
       cmdDesc: {
-        ps: '正在执行的操作，耗时长的在前；secs 最短秒数，ns 库或集合，all 含空闲连接',
-        slow: "慢查询（system.profile），新的在前；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合",
+        ps: "正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'",
+        slow: "慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前",
         top: '各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合',
         repl: '副本集成员状态、复制延迟（秒）、同步源',
         dbs: '各库占用的磁盘空间',
@@ -131,9 +136,14 @@
       topSampled: function (n) { return ', sampled twice ' + n + 's apart; time spent in between (ms)'; },
       topTotals: ', totals since startup (ms)',
       profOff: 'the profiler is off (level 0); turn it on with db.setProfilingLevel(1, {slowms: 100})',
+      badSort: function (fn, ch, ex) { return fn + ' sort can be ' + ch + ' or a sort document such as ' + ex; },
+      sortChoices: {
+        slow: "'desc' (default, newest first), 'asc' (oldest first), 'ms' (slowest first)",
+        ps: "'desc' (default, longest running first), 'asc' (shortest first), 'opid'"
+      },
       cmdDesc: {
-        ps: 'Running operations, longest first; secs = minimum seconds, ns = db or collection, all = include idle',
-        slow: "Slow operations from system.profile, newest first; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection",
+        ps: "Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'",
+        slow: "Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first",
         top: 'Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection',
         repl: 'Replica set members, replication lag (seconds), sync source',
         dbs: 'Disk space used by each database',
@@ -785,8 +795,30 @@
     Object.keys(c).forEach(function (k) { if (k[0] !== '$' && k !== 'lsid' && k !== 'txnNumber') out[k] = c[k]; });
     return out;
   }
+  // 按排序文档比较两行：{ns: 1, secs: -1}；数字按大小，其余按字符串
+  function rowCmp(spec) {
+    var ks = Object.keys(spec);
+    return function (a, b) {
+      for (var i = 0; i < ks.length; i++) {
+        var x = a[ks[i]], y = b[ks[i]], d;
+        if (typeof x === 'number' && typeof y === 'number') d = x - y;
+        else { x = x == null ? '' : String(x); y = y == null ? '' : String(y); d = x < y ? -1 : x > y ? 1 : 0; }
+        if (d) return toNum(spec[ks[i]]) < 0 ? -d : d;
+      }
+      return 0;
+    };
+  }
+  // sort：'desc'（默认）/ 'asc' / 'opid'，或排序文档
+  function psSort(s) {
+    if (s == null || s === '' || s === 'desc') return null;
+    if (s === 'asc') return { secs: 1 };
+    if (s === 'opid') return { opid: 1 };
+    if (isDoc(s) && Object.keys(s).length) return s;
+    fail(M().badSort('mt.ps()', M().sortChoices.ps, '{ns: 1, secs: -1}'));
+  }
   function ps(opts) {
     var o = dbaOpts(opts, ['opid', 'secs']), out = [];
+    var spec = psSort(o.sort);
     var all = !!o.all;
     cmdLine(o, 'db.adminCommand({currentOp: 1, ' + (all ? '$all: true' : 'active: true') + '})', out);
     var ops = runCmd(admin(), all ? { currentOp: 1, $all: true } : { currentOp: 1, active: true }).inprog || [];
@@ -810,10 +842,12 @@
         command: Object.keys(cc).length ? valText(cc, true, o) : (op.desc || '')
       } });
     });
-    // 耗时长的在前；同耗时时有客户端的连接排在内部线程前面
-    rows.sort(function (a, b) {
+    // 默认耗时长的在前；同耗时时有客户端的连接排在内部线程前面
+    var byDefault = function (a, b) {
       return b.row.secs - a.row.secs || (a.row.client ? 0 : 1) - (b.row.client ? 0 : 1) || a.i - b.i;
-    });
+    };
+    var cmp = spec ? rowCmp(spec) : null;
+    rows.sort(function (a, b) { return (cmp ? cmp(a.row, b.row) : 0) || byDefault(a, b); });
     rowsOut(rows.map(function (x) { return x.row; }), o, out);
     emit(out);
   }
@@ -1039,6 +1073,14 @@
   function notMongos(name) { if (helloDoc(admin()).msg === 'isdbgrid') fail(M().onMongos(name)); }
   function nsMatch(x, ns) { return !ns || x === ns || String(x || '').indexOf(ns + '.') === 0; }
 
+  // sort：'desc'（默认）/ 'asc' / 'ms'，或直接给排序文档
+  function slowSort(s) {
+    if (s == null || s === '' || s === 'desc') return { ts: -1 };
+    if (s === 'asc') return { ts: 1 };
+    if (s === 'ms') return { millis: -1, ts: -1 };
+    if (isDoc(s) && Object.keys(s).length) return s;
+    fail(M().badSort('mt.slow()', M().sortChoices.slow, '{millis: -1}'));
+  }
   // 慢查询：读 system.profile，不改 profiler 设置
   function slow(dbName, opts) {
     if (dbName && typeof dbName === 'object' && !isDbHandle(dbName)) { opts = dbName; dbName = null; }
@@ -1055,12 +1097,13 @@
       user.ns = ns.indexOf(dn + '.') === 0 ? ns : dn + '.' + ns;
     }
     var q = Object.keys(user).length ? { $and: [filter, user] } : filter;
-    cmdLine(o, "db.getSiblingDB('" + dn + "').system.profile.find(" + valText(user, true, o) + ').sort({ts: -1})', out);
+    var sort = slowSort(o.sort);
+    cmdLine(o, "db.getSiblingDB('" + dn + "').system.profile.find(" + valText(user, true, o) + ').sort(' + valText(sort, true, o) + ')', out);
     var st = runCmd(d, { profile: -1 });
     var total = toNum(runCmd(d, { count: 'system.profile', query: q }).n) || 0;
     var lim = limitOf(o), docs;
     try {
-      var cur = d.getCollection('system.profile').find(q).sort({ ts: -1 });
+      var cur = d.getCollection('system.profile').find(q).sort(sort);
       docs = (lim < Infinity ? cur.limit(lim) : cur).toArray();
     } catch (e) {
       if (isAuthErr(e)) fail(M().unauthorized('find ' + dn + '.system.profile'));
@@ -1119,8 +1162,8 @@
   }
 
   var CMDS = [
-    ['mt.ps({secs, ns, all})', 'SHOW PROCESSLIST', 'ps'],
-    ['mt.slow({ms, ns})', 'mysql.slow_log', 'slow'],
+    ['mt.ps({secs, ns, all, sort})', 'SHOW PROCESSLIST', 'ps'],
+    ['mt.slow({ms, ns, sort})', 'mysql.slow_log', 'slow'],
     ['mt.top({interval, ns})', 'sys.schema_table_statistics', 'top'],
     ['mt.repl()', 'SHOW SLAVE STATUS', 'repl'],
     ['mt.dbs()', 'SHOW DATABASES', 'dbs'],
