@@ -210,7 +210,7 @@ mongosh --nodb test/format.js
 MongoDB 4.0 要用 **mongosh 1.x** 来连：
 
 - mongosh 2.x 最低要求 MongoDB 4.2，连 4.0 会报 `requires at least 8 (MongoDB 4.2)`。
-- MongoDB 4.x 自带的老 `mongo` 命令（提示符像 `rs0:PRIMARY>`）不是 mongosh，MongoTab 不支持，`load()` 会报错。
+- MongoDB 5.0 及更早版本自带的老 `mongo` 命令（提示符像 `rs0:PRIMARY>`）不是 mongosh，MongoTab 不支持。从 v0.1.1 起，在老 `mongo` 里 `load()` 会直接提示改用 mongosh，不再报 `root is undefined`；CI 用 3.6、4.0、4.2、4.4、5.0 的老 `mongo` 检查这一点。
 
 mongosh 1.x 解压就能用，不需要 root，也不影响机器上原来的 `mongo`。以 Linux x64 为例（1.10.6 是 1.x 的最后一版）：
 

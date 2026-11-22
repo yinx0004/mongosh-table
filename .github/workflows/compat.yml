@@ -69,15 +69,30 @@ jobs:
       - name: Run test/format.js
         run: mongosh --nodb --quiet test/format.js
 
+  # The legacy mongo shell is not supported; loading there must print a clear
+  # message instead of throwing.
+  legacy:
+    name: legacy mongo shell ${{ matrix.mongodb }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mongodb: ['3.6', '4.0', '4.2', '4.4', '5.0']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run test/legacy.sh
+        run: test/legacy.sh mongo:${{ matrix.mongodb }}
+
   # One stable check name for branch protection, so the jobs above can change
   # without editing the required checks.
   compat:
     name: compat
     if: always()
-    needs: [test, format]
+    needs: [test, format, legacy]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs passed
         run: |
           test "${{ needs.test.result }}" = success
           test "${{ needs.format.result }}" = success
+          test "${{ needs.legacy.result }}" = success
