@@ -347,6 +347,8 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 | mt.colls('db')               | SHOW TABLE STATUS                | Documents, data and index size per collection, largest first; current db by default                                                                                                |
 | mt.frag('db')                | TABLES.DATA_FREE                 | Disk space each collection can reuse after deletes, most first; current db by default                                                                                              |
 | mt.idx('coll')               | SHOW INDEX FROM t                | Index keys, size, usage count and options                                                                                                                                          |
+| mt.unusedIdx('db')           | sys.schema_unused_indexes        | Indexes never used (ops = 0), largest first; all user databases by default                                                                                                         |
+| mt.dupIdx('db')              | sys.schema_redundant_indexes     | Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default                                                       |
 | mt.conns()                   | PROCESSLIST GROUP BY host        | Connections per client IP                                                                                                                                                          |
 | mt.oplog()                   | SHOW BINARY LOGS                 | Oplog size and how much time it covers                                                                                                                                             |
 | mt.status({interval})        | SHOW GLOBAL STATUS               | Version, role, ops/s, connections, cache and other key metrics                                                                                                                     |
@@ -813,6 +815,82 @@ It uses `getIndexes()` for the definitions, `$indexStats` for usage and `$collSt
 +-----------------------+----------------------------+----------+-----+-------------------------+----------------+
 4 rows in set
 ```
+
+### mt.unusedIdx(): unused indexes
+
+Like MySQL's `sys.schema_unused_indexes`: indexes that no query has used, candidates for dropping to save disk, cache and write time.
+
+```js
+mt.unusedIdx()          // every user database (admin, local and config are skipped)
+mt.unusedIdx('shop')    // one database only; a db object works too
+```
+
+It runs `$indexStats` for each collection and lists indexes whose `accesses.ops` is 0, largest on disk first. The `uptime` line on top is how long mongod has been running.
+
+| Column | Meaning |
+|---|---|
+| `ns` / `index` / `key` | database.collection, index name, index key |
+| `disk` | Disk space the index takes, i.e. what dropping it would save |
+| `since` | When counting started (mongod startup or when the index was built) |
+| `options` | `unique`, `ttl=seconds`, `partial=filter`, `sparse`, `hidden`, `collation=locale` |
+
+```
+> mt.unusedIdx()
+-- every user db: each collection getIndexes() + aggregate([{$indexStats: {}}]) → accesses.ops = 0
+uptime: 14s
++-------------+-----------------+---------------------+----------+-------------------------+----------------+
+| ns          | index           | key                 | disk     | since                   | options        |
++-------------+-----------------+---------------------+----------+-------------------------+----------------+
+| shop.orders | ttl_createdAt   | {createdAt: 1}      | 232.0 KB | 2026-11-22 11:07:23.899 | ttl=315360000s |
+| shop.orders | customer.name_1 | {customer.name: 1}  | 168.0 KB | 2026-11-22 11:07:23.777 |                |
+| shop.orders | status_1        | {status: 1}         | 116.0 KB | 2026-11-22 11:07:23.519 |                |
+| shop.users  | email_1_name_1  | {email: 1, name: 1} |  20.0 KB | 2026-11-22 11:07:24.179 |                |
++-------------+-----------------+---------------------+----------+-------------------------+----------------+
+4 rows in set
+```
+
+Before dropping one, check:
+
+- **Has it been counting long enough?** Counts reset when mongod restarts or the index is rebuilt. If `uptime` or `since` is only a few days, monthly or yearly reports may not have run yet.
+- **Check every member.** Counts are per node; with reads on secondaries, those queries are counted only there, so run it on each member.
+- **`unique` indexes** enforce uniqueness even if no query uses them, and **`ttl` indexes** drive expiry; do not drop those.
+- When unsure, hide it first with `db.orders.hideIndex('status_1')` (4.4+) and watch for a while; `unhideIndex` brings it back if queries slow down. That is safer than dropping it.
+- The `_id_` index cannot be dropped and is not listed.
+
+### mt.dupIdx(): redundant indexes
+
+Like MySQL's `sys.schema_redundant_indexes`: an index whose key is a leading prefix of another index's key (same fields, same directions). Whatever `{status: 1}` can do, `{status: 1, createdAt: -1}` can do too, so the former is redundant.
+
+```js
+mt.dupIdx()          // every user database (admin, local and config are skipped)
+mt.dupIdx('shop')    // one database only; a db object works too
+```
+
+| Column | Meaning |
+|---|---|
+| `ns` / `index` / `key` | The redundant index |
+| `disk` | Disk space it takes |
+| `coveredBy` / `coveredKey` | The index that can replace it; the one with the shortest key if there are several |
+
+```
+> mt.dupIdx()
+-- every user db: each collection getIndexes() → key is a prefix of another index
++-------------+----------+-------------+----------+-----------------------+----------------------------+
+| ns          | index    | key         | disk     | coveredBy             | coveredKey                 |
++-------------+----------+-------------+----------+-----------------------+----------------------------+
+| shop.orders | status_1 | {status: 1} | 116.0 KB | status_1_createdAt_-1 | {status: 1, createdAt: -1} |
++-------------+----------+-------------+----------+-----------------------+----------------------------+
+1 row in set
+```
+
+To avoid false alarms, these are never reported:
+
+- The prefix index is `unique`, `ttl`, `partial`, `sparse` or `hidden`: it does something extra, or is not in use anyway.
+- The longer index is `partial` or `sparse`: it does not cover every document, so it cannot replace the other.
+- The two indexes have different collations, or one is a special index such as `text`, `2dsphere` or `hashed`.
+- Directions differ, e.g. `{d: -1}` and `{d: 1, e: 1}`.
+
+Hiding a redundant index with `hideIndex` before dropping it is a good idea here too.
 
 ### mt.conns(): where connections come from
 

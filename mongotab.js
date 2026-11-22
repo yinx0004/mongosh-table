@@ -90,6 +90,8 @@
       fragTotal: function (all, data, idx) { return '合计可回收 ' + all + '（数据 ' + data + '，索引 ' + idx + '）'; },
       cacheSum: function (sum, pct) { return '以上集合在缓存里合计 ' + sum + '，占已用缓存的 ' + pct; },
       noTtl: '没有 TTL 索引',
+      noUnused: '没有没被用过的索引',
+      noDup: '没有冗余索引',
       cmdDesc: {
         ps: "正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'",
         slow: "慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前",
@@ -99,6 +101,8 @@
         frag: '各集合删数据后可回收的磁盘空间，多的在前；默认当前库',
         cache: '各集合占用的 WiredTiger 缓存，多的在前；默认所有库',
         ttl: 'TTL 索引：过期时间、最早一条的时间、超期了多久，以及 TTL 线程的状态；默认所有库',
+        unusedIdx: '没被用过的索引（ops = 0），大的在前；默认所有用户库',
+        dupIdx: '冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库',
         log: "最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告",
         repl: '副本集成员状态、复制延迟（秒）、同步源',
         dbs: '各库占用的磁盘空间',
@@ -124,7 +128,7 @@
           helpRow("t(x, {tz: '+08:00'})", '本次用指定时区显示时间'),
           helpRow('mt.csv(x, ...)', '输出 CSV（贴进 Excel）'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'en'})", '改本会话默认值'),
-          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.locks()、mt.txns()、mt.frag()、mt.cache()、mt.ttl()、mt.log()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
+          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.locks()、mt.txns()、mt.frag()、mt.cache()、mt.ttl()、mt.log()、mt.unusedIdx()、mt.dupIdx()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
           '',
           '  示例：'
         ].concat(HELP_EXAMPLES, ['', '  显示约定：' + (nul || '空白') + ' = 值为 null；空白 = 空字符串 ""；' +
@@ -163,6 +167,8 @@
       fragTotal: function (all, data, idx) { return 'Total reusable ' + all + ' (data ' + data + ', indexes ' + idx + ')'; },
       cacheSum: function (sum, pct) { return 'These collections hold ' + sum + ' in the cache, ' + pct + ' of the cache in use'; },
       noTtl: 'no TTL indexes',
+      noUnused: 'no unused indexes',
+      noDup: 'no redundant indexes',
       cmdDesc: {
         ps: "Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'",
         slow: "Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first",
@@ -172,6 +178,8 @@
         frag: 'Disk space each collection can reuse after deletes, most first; current db by default',
         cache: 'WiredTiger cache used by each collection, most first; all databases by default',
         ttl: 'TTL indexes: expiry, oldest document, how far past expiry, and the TTL thread; all databases by default',
+        unusedIdx: 'Indexes never used (ops = 0), largest first; all user databases by default',
+        dupIdx: 'Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default',
         log: "Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings",
         repl: 'Replica set members, replication lag (seconds), sync source',
         dbs: 'Disk space used by each database',
@@ -197,7 +205,7 @@
           helpRow("t(x, {tz: '+08:00'})", 'Show times in this time zone for this call'),
           helpRow('mt.csv(x, ...)', 'Print CSV (paste into Excel)'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'zh'})", 'Change defaults for this session'),
-          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.locks(), mt.txns(), mt.frag(), mt.cache(), mt.ttl(), mt.log(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
+          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.locks(), mt.txns(), mt.frag(), mt.cache(), mt.ttl(), mt.log(), mt.unusedIdx(), mt.dupIdx(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
           '',
           '  Examples:'
         ].concat(HELP_EXAMPLES, ['', '  Conventions: ' + (nul || 'blank') + ' = value is null; blank = empty string ""; ' +
@@ -968,11 +976,8 @@
     }
     fail(M().noColl(cur.getName() + '.' + x));
   }
-  function idx(coll, opts) {
-    var o = dbaOpts(opts, ['disk']), out = [];
-    var c = resolveColl(coll), d = c.getDB(), cn = c.getName();
-    cmdLine(o, "db.getSiblingDB('" + d.getName() + "').getCollection('" + cn + "').getIndexes(); aggregate([{$indexStats: {}}])", out);
-    var ixs = c.getIndexes();
+  // $indexStats：每个索引自 since 以来被用了几次；经 mongos 时每个分片一条，加起来
+  function indexUsage(c) {
     var usage = {};
     (aggArr(c, [{ $indexStats: {} }]) || []).forEach(function (x) {
       var u = usage[x.name] || (usage[x.name] = { ops: 0, since: null });
@@ -980,19 +985,30 @@
       var since = x.accesses && x.accesses.since;
       if (isDate(since) && (!u.since || since < u.since)) u.since = since;
     });
+    return usage;
+  }
+  function indexFlags(ix, o) {
+    var flags = [];
+    if (ix.unique) flags.push('unique');
+    if (ix.sparse) flags.push('sparse');
+    if (ix.expireAfterSeconds != null) flags.push('ttl=' + toNum(ix.expireAfterSeconds) + 's');
+    if (ix.partialFilterExpression) flags.push('partial=' + valText(ix.partialFilterExpression, true, o));
+    if (ix.hidden) flags.push('hidden');
+    if (ix.collation && ix.collation.locale) flags.push('collation=' + ix.collation.locale);
+    return flags.join(', ');
+  }
+  function idx(coll, opts) {
+    var o = dbaOpts(opts, ['disk']), out = [];
+    var c = resolveColl(coll), d = c.getDB(), cn = c.getName();
+    cmdLine(o, "db.getSiblingDB('" + d.getName() + "').getCollection('" + cn + "').getIndexes(); aggregate([{$indexStats: {}}])", out);
+    var ixs = c.getIndexes();
+    var usage = indexUsage(c);
     var cs = collStats(d, cn);
     var rows = ixs.map(function (ix) {
-      var flags = [];
-      if (ix.unique) flags.push('unique');
-      if (ix.sparse) flags.push('sparse');
-      if (ix.expireAfterSeconds != null) flags.push('ttl=' + toNum(ix.expireAfterSeconds) + 's');
-      if (ix.partialFilterExpression) flags.push('partial=' + valText(ix.partialFilterExpression, true, o));
-      if (ix.hidden) flags.push('hidden');
-      if (ix.collation && ix.collation.locale) flags.push('collation=' + ix.collation.locale);
       var u = usage[ix.name];
       return {
         name: ix.name, key: valText(ix.key, true, o), disk: cs ? sizeText(cs.indexSizes[ix.name]) : '',
-        ops: u ? u.ops : '', since: u && u.since ? u.since : '', options: flags.join(', ')
+        ops: u ? u.ops : '', since: u && u.since ? u.since : '', options: indexFlags(ix, o)
       };
     });
     rowsOut(rows, o, out);
@@ -1464,6 +1480,93 @@
     emit(out);
   }
 
+  // ─── 索引体检。默认扫所有用户库（跳过 admin / local / config），也可以只给一个库
+  function userDbs(x) {
+    if (x.d) return [x.d];
+    return (runCmd(admin(), { listDatabases: 1, nameOnly: true }).databases || [])
+      .map(function (i) { return i.name; })
+      .filter(function (n) { return n !== 'admin' && n !== 'local' && n !== 'config'; })
+      .sort()
+      .map(function (n) { return curDb().getSiblingDB(n); });
+  }
+  function eachColl(dbsList, fn) {
+    dbsList.forEach(function (d) {
+      collNames(d).forEach(function (name) {
+        if (/^system\./.test(name)) return;
+        fn(d, name, d.getCollection(name));
+      });
+    });
+  }
+
+  // 没被用过的索引：$indexStats 的 accesses.ops 为 0。_id_ 删不掉，跳过；
+  // unique / ttl 即使没被查询用过也在干活（唯一约束、过期删除），在 options 里标出来
+  function unusedIdx(dbName, opts) {
+    var x = dbArg(dbName, opts);
+    var o = dbaOpts(x.opts, ['disk']), out = [];
+    var dbsList = userDbs(x);
+    cmdLine(o, (x.d ? "db.getSiblingDB('" + x.d.getName() + "')" : 'every user db') +
+      ': each collection getIndexes() + aggregate([{$indexStats: {}}]) → accesses.ops = 0', out);
+    var st = safe(function () { return unwrap(admin().runCommand({ serverStatus: 1 })); }) || {};
+    headOut({ uptime: st.uptime != null ? durText(st.uptime) : null }, Object.assign({}, o, { cols: null, exclude: null }), out);
+    var rows = [];
+    eachColl(dbsList, function (d, name, c) {
+      var usage = indexUsage(c), cs = null, got = false;
+      (safe(function () { return c.getIndexes(); }) || []).forEach(function (ix) {
+        var u = usage[ix.name];
+        if (ix.name === '_id_' || !u || u.ops > 0) return;
+        if (!got) { cs = collStats(d, name); got = true; }
+        var bytes = cs ? toNum(cs.indexSizes[ix.name]) || 0 : 0;
+        rows.push({ row: { ns: d.getName() + '.' + name, index: ix.name, key: valText(ix.key, true, o), disk: cs ? sizeText(bytes) : '',
+          since: u.since || '', options: indexFlags(ix, o) }, w: bytes });
+      });
+    });
+    rows.sort(function (p, q) { return q.w - p.w || (p.row.ns < q.row.ns ? -1 : p.row.ns > q.row.ns ? 1 : 0); });
+    rowsOut(rows.map(function (r) { return r.row; }), o, out);
+    if (!rows.length) out.push(M().noUnused);
+    emit(out);
+  }
+
+  // 冗余索引：A 的键是 B 的键的前缀（字段和方向都一样）。保守起见，A 是 unique / ttl / partial / sparse /
+  // hidden 的不算（它们有额外作用），B 是 partial / sparse 的不算（覆盖不了全部文档），collation 要一样，
+  // 特殊索引（text、2dsphere、hashed...）不算
+  function plainKey(k) { return Object.keys(k).every(function (f) { var v = toNum(k[f]); return v === 1 || v === -1; }); }
+  function keyPrefix(a, b) {
+    var ka = Object.keys(a), kb = Object.keys(b);
+    if (ka.length >= kb.length) return false;
+    for (var i = 0; i < ka.length; i++) if (ka[i] !== kb[i] || toNum(a[ka[i]]) !== toNum(b[kb[i]])) return false;
+    return true;
+  }
+  function sameCollation(a, b) { return JSON.stringify(a.collation || null) === JSON.stringify(b.collation || null); }
+  function dupIdx(dbName, opts) {
+    var x = dbArg(dbName, opts);
+    var o = dbaOpts(x.opts, ['disk']), out = [];
+    var dbsList = userDbs(x);
+    cmdLine(o, (x.d ? "db.getSiblingDB('" + x.d.getName() + "')" : 'every user db') +
+      ': each collection getIndexes() → key is a prefix of another index', out);
+    var rows = [];
+    eachColl(dbsList, function (d, name, c) {
+      var ixs = (safe(function () { return c.getIndexes(); }) || []).filter(function (ix) { return ix.key && plainKey(ix.key); });
+      var cs = null, got = false;
+      ixs.forEach(function (a) {
+        if (a.name === '_id_' || a.unique || a.expireAfterSeconds != null || a.partialFilterExpression || a.sparse || a.hidden) return;
+        var cover = null;
+        ixs.forEach(function (b) {
+          if (b === a || b.partialFilterExpression || b.sparse || b.hidden || !sameCollation(a, b) || !keyPrefix(a.key, b.key)) return;
+          if (!cover || Object.keys(b.key).length < Object.keys(cover.key).length) cover = b;   // 取最短的那个
+        });
+        if (!cover) return;
+        if (!got) { cs = collStats(d, name); got = true; }
+        var bytes = cs ? toNum(cs.indexSizes[a.name]) || 0 : 0;
+        rows.push({ row: { ns: d.getName() + '.' + name, index: a.name, key: valText(a.key, true, o), disk: cs ? sizeText(bytes) : '',
+          coveredBy: cover.name, coveredKey: valText(cover.key, true, o) }, w: bytes });
+      });
+    });
+    rows.sort(function (p, q) { return q.w - p.w || (p.row.ns < q.row.ns ? -1 : p.row.ns > q.row.ns ? 1 : 0); });
+    rowsOut(rows.map(function (r) { return r.row; }), o, out);
+    if (!rows.length) out.push(M().noDup);
+    emit(out);
+  }
+
   // 日志：getLog 只保留内存里最近的 1024 行。4.4 起每行是 JSON，之前是文本：
   // 2024-01-01T08:30:00.123+0000 I NETWORK  [listener] connection accepted ...
   var SEV_RANK = { F: 0, E: 1, W: 2, I: 3, D: 4 };
@@ -1526,6 +1629,8 @@
     ["mt.colls('db')", 'SHOW TABLE STATUS', 'colls'],
     ["mt.frag('db')", 'TABLES.DATA_FREE', 'frag'],
     ["mt.idx('coll')", 'SHOW INDEX FROM t', 'idx'],
+    ["mt.unusedIdx('db')", 'sys.schema_unused_indexes', 'unusedIdx'],
+    ["mt.dupIdx('db')", 'sys.schema_redundant_indexes', 'dupIdx'],
     ['mt.conns()', 'PROCESSLIST GROUP BY host', 'conns'],
     ['mt.oplog()', 'SHOW BINARY LOGS', 'oplog'],
     ['mt.status({interval})', 'SHOW GLOBAL STATUS', 'status'],
@@ -1545,7 +1650,8 @@
   var api = {
     table: t, vertical: g, csv: csv, config: config, help: help, version: VERSION,
     cmds: cmds, ps: dba(ps), slow: dba(slow), top: dba(top), locks: dba(locks), txns: dba(txns), repl: dba(repl), dbs: dba(dbs), colls: dba(colls), idx: dba(idx),
-    conns: dba(conns), oplog: dba(oplog), status: dba(status), frag: dba(frag), cache: dba(cache), ttl: dba(ttl), log: dba(log)
+    conns: dba(conns), oplog: dba(oplog), status: dba(status), frag: dba(frag), cache: dba(cache), ttl: dba(ttl), log: dba(log),
+    unusedIdx: dba(unusedIdx), dupIdx: dba(dupIdx)
   };
   t[MARK] = g[MARK] = api[MARK] = true;
 

@@ -347,6 +347,8 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 | mt.colls('db')               | SHOW TABLE STATUS                | 各集合文档数、数据和索引大小，大的在前；默认当前库                                                                              |
 | mt.frag('db')                | TABLES.DATA_FREE                 | 各集合删数据后可回收的磁盘空间，多的在前；默认当前库                                                                            |
 | mt.idx('coll')               | SHOW INDEX FROM t                | 索引的键、大小、使用次数和选项                                                                                                  |
+| mt.unusedIdx('db')           | sys.schema_unused_indexes        | 没被用过的索引（ops = 0），大的在前；默认所有用户库                                                                             |
+| mt.dupIdx('db')              | sys.schema_redundant_indexes     | 冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库                                                  |
 | mt.conns()                   | PROCESSLIST GROUP BY host        | 按客户端 IP 统计连接数                                                                                                          |
 | mt.oplog()                   | SHOW BINARY LOGS                 | oplog 大小和能覆盖多长时间                                                                                                      |
 | mt.status({interval})        | SHOW GLOBAL STATUS               | 版本、角色、ops/s、连接、缓存等关键指标                                                                                         |
@@ -813,6 +815,82 @@ mt.idx(db.orders)         // 集合对象
 +-----------------------+----------------------------+----------+-----+-------------------------+----------------+
 4 rows in set
 ```
+
+### mt.unusedIdx()：没被用过的索引
+
+相当于 MySQL 的 `sys.schema_unused_indexes`：哪些索引一直没被查询用过，可以考虑删掉，省磁盘、省缓存、也让写入更快。
+
+```js
+mt.unusedIdx()          // 所有用户库（跳过 admin、local、config）
+mt.unusedIdx('shop')    // 只看一个库，也可以传 db 对象
+```
+
+对每个集合执行 `$indexStats`，列出 `accesses.ops` 为 0 的索引，按磁盘占用从大到小排。上面一行 `uptime` 是 mongod 已经运行了多久。
+
+| 列 | 说明 |
+|---|---|
+| `ns` / `index` / `key` | 库.集合、索引名、索引键 |
+| `disk` | 索引占的磁盘空间，删掉能省下的就是这么多 |
+| `since` | 从什么时候开始计数（mongod 启动或索引建好的时间） |
+| `options` | `unique`、`ttl=秒`、`partial=条件`、`sparse`、`hidden`、`collation=语言` |
+
+```
+> mt.unusedIdx()
+-- every user db: each collection getIndexes() + aggregate([{$indexStats: {}}]) → accesses.ops = 0
+uptime: 15s
++-------------+-----------------+---------------------+----------+-------------------------+----------------+
+| ns          | index           | key                 | disk     | since                   | options        |
++-------------+-----------------+---------------------+----------+-------------------------+----------------+
+| shop.orders | ttl_createdAt   | {createdAt: 1}      | 232.0 KB | 2026-11-22 11:07:07.525 | ttl=315360000s |
+| shop.orders | customer.name_1 | {customer.name: 1}  | 168.0 KB | 2026-11-22 11:07:07.383 |                |
+| shop.orders | status_1        | {status: 1}         | 116.0 KB | 2026-11-22 11:07:07.131 |                |
+| shop.users  | email_1_name_1  | {email: 1, name: 1} |  20.0 KB | 2026-11-22 11:07:07.775 |                |
++-------------+-----------------+---------------------+----------+-------------------------+----------------+
+4 rows in set
+```
+
+删之前先确认：
+
+- **统计时间够不够长**：计数在 mongod 重启、索引重建后清零。`uptime` 或 `since` 只有几天的话，月报、年报这类偶尔才跑的查询可能还没来得及用到。
+- **每个成员都要看**：计数是每个节点自己的。读写分离时，从节点上的查询只记在从节点上，要连到每个成员上分别执行。
+- **`unique` 索引**即使没被查询用过，也在保证唯一性，不能随便删；**`ttl` 索引**在负责过期删除，同样不能删。
+- 不确定的话，可以先 `db.orders.hideIndex('status_1')`（4.4 起）把它藏起来观察一段时间，查询变慢了再 `unhideIndex` 恢复，比直接删安全。
+- `_id_` 索引删不掉，不列出来。
+
+### mt.dupIdx()：冗余索引
+
+相当于 MySQL 的 `sys.schema_redundant_indexes`：一个索引的键是另一个索引键的前缀（字段和方向都一样），比如 `{status: 1}` 能做的，`{status: 1, createdAt: -1}` 都能做，前者就是多余的。
+
+```js
+mt.dupIdx()          // 所有用户库（跳过 admin、local、config）
+mt.dupIdx('shop')    // 只看一个库，也可以传 db 对象
+```
+
+| 列 | 说明 |
+|---|---|
+| `ns` / `index` / `key` | 冗余的那个索引 |
+| `disk` | 它占的磁盘空间 |
+| `coveredBy` / `coveredKey` | 能代替它的索引；有多个时取键最短的那个 |
+
+```
+> mt.dupIdx()
+-- every user db: each collection getIndexes() → key is a prefix of another index
++-------------+----------+-------------+----------+-----------------------+----------------------------+
+| ns          | index    | key         | disk     | coveredBy             | coveredKey                 |
++-------------+----------+-------------+----------+-----------------------+----------------------------+
+| shop.orders | status_1 | {status: 1} | 116.0 KB | status_1_createdAt_-1 | {status: 1, createdAt: -1} |
++-------------+----------+-------------+----------+-----------------------+----------------------------+
+1 row in set
+```
+
+为了不误报，这些情况不算冗余：
+
+- 前缀索引是 `unique`、`ttl`、`partial`、`sparse`、`hidden` 的：它们有额外作用，或者本来就没在用。
+- 长的那个索引是 `partial` 或 `sparse` 的：它不包含所有文档，代替不了。
+- 两个索引的 collation 不一样，或者有 `text`、`2dsphere`、`hashed` 这类特殊索引。
+- 方向不同的，如 `{d: -1}` 和 `{d: 1, e: 1}`。
+
+删冗余索引前同样建议先 `hideIndex` 观察。
 
 ### mt.conns()：连接来源
 
