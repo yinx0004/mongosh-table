@@ -347,6 +347,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 | mt.colls('db')               | SHOW TABLE STATUS                | 各集合文档数、数据和索引大小，大的在前；默认当前库                                                                              |
 | mt.frag('db')                | TABLES.DATA_FREE                 | 各集合删数据后可回收的磁盘空间，多的在前；默认当前库                                                                            |
 | mt.idx('coll')               | SHOW INDEX FROM t                | 索引的键、大小、使用次数和选项                                                                                                  |
+| mt.explain(cursor)           | EXPLAIN ANALYZE                  | 执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；analyze: false 只看计划不执行                     |
 | mt.unusedIdx('db')           | sys.schema_unused_indexes        | 没被用过的索引（ops = 0），大的在前；默认所有用户库                                                                             |
 | mt.dupIdx('db')              | sys.schema_redundant_indexes     | 冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库                                                  |
 | mt.conns()                   | PROCESSLIST GROUP BY host        | 按客户端 IP 统计连接数                                                                                                          |
@@ -520,6 +521,117 @@ Empty set
 - 总会排除读 `system.profile` 本身的操作和 `profile` 命令，否则在 level 2 下会看到 `mt.slow()` 自己。
 - `docsExamined` 远大于 `nreturned`、`plan` 是 `COLLSCAN` 的，通常就是缺索引。
 - `system.profile` 是个 1 MB 的 capped 集合，满了会覆盖最早的记录，所以只能看到最近一段时间的。
+
+### mt.explain()：执行计划
+
+相当于 MySQL 的 `EXPLAIN ANALYZE`：把 `explain('executionStats')` 那一大段 JSON 排成一张表，一眼看出用了哪个索引、扫了多少、哪一步慢。
+
+```js
+mt.explain(db.orders.find({status: 'PAID'}).sort({createdAt: -1}))   // 游标：会真的执行一遍查询
+mt.explain(db.orders.find({status: 'PAID'}), {analyze: false})       // 只看计划，不执行（queryPlanner）
+mt.explain(db.orders.explain('executionStats').aggregate([...]))     // 聚合：先 explain，再把结果交给 mt.explain
+mt.explain(db.orders.aggregate([...]))                               // mongosh 里聚合游标也可以直接传
+```
+
+老的 mongo shell 的聚合游标没有 `explain()`，要用上面第三种写法，或者 `db.orders.aggregate([...], {explain: true})`（这种只有计划，没有执行统计）。也可以把自己跑好的任何 explain 结果直接传进来。
+
+上面几行是整体情况：
+
+| 字段 | 说明 |
+|---|---|
+| `ns` | 库.集合 |
+| `engine` | 执行引擎：`classic` 经典引擎，`sbe` 新的 slot-based 引擎（5.0 起部分查询使用） |
+| `executionTimeMillis` | 总耗时（毫秒） |
+| `nReturned` | 返回了多少条 |
+| `totalKeysExamined` / `totalDocsExamined` | 一共扫了多少索引键、多少文档 |
+| `docsExaminedPerReturned` | 每返回 1 条要扫多少文档。理想是 1，几十上百说明索引不合适 |
+| `rejectedPlans` | 被淘汰的候选计划个数 |
+
+表格是计划树，**从上往下读是从结果往数据源**：最上面是最后一步，缩进最深的是最先执行的（读索引或读集合）。
+
+| 列 | 说明 |
+|---|---|
+| `stage` | 阶段：`IXSCAN` 扫索引、`FETCH` 按索引取文档、`COLLSCAN` 扫整个集合、`SORT` 排序、`LIMIT`...；聚合管道里的阶段是 `$group`、`$sort` 这样 |
+| `index` | 用的索引 |
+| `nReturned` | 这一步输出了多少条 |
+| `keysExamined` / `docsExamined` | 这一步扫了多少索引键、多少文档 |
+| `ms` | 这一步的耗时估计（毫秒） |
+| `detail` | 索引的扫描范围、过滤条件、排序字段、limit 等 |
+| `note` | `全表扫描`（COLLSCAN）、`内存排序`（SORT：没走索引排序，数据多了会慢甚至超内存）、`用到了磁盘`、`取出后再过滤`（FETCH 后还要按条件过滤，说明索引没覆盖所有条件）、`多键索引` |
+
+走对了索引的：每一步的扫描数和返回数都是 5。
+
+```
+> mt.explain(db.orders.find({status: 'PAID'}).sort({createdAt: -1}).limit(5))
+-- cursor.explain('executionStats')
+                     ns: shop.orders
+                 engine: classic
+    executionTimeMillis: 0
+              nReturned: 5
+      totalKeysExamined: 5
+      totalDocsExamined: 5
+docsExaminedPerReturned: 1
+          rejectedPlans: 0
++------------+-----------------------+-----------+--------------+--------------+----+------------------------------------------+------+
+| stage      | index                 | nReturned | keysExamined | docsExamined | ms | detail                                   | note |
++------------+-----------------------+-----------+--------------+--------------+----+------------------------------------------+------+
+| LIMIT      |                       |         5 |              |              |  0 | limit 5                                  |      |
+|   FETCH    |                       |         5 |              |            5 |  0 |                                          |      |
+|     IXSCAN | status_1_createdAt_-1 |         5 |            5 |              |  0 | status ["PAID", "PAID"], createdAt [M... |      |
++------------+-----------------------+-----------+--------------+--------------+----+------------------------------------------+------+
+3 rows in set
+```
+
+没有合适的索引：扫了整个集合 2 万条，只要其中 1000 条，还要在内存里排序。这时可以建 `{'customer.name': 1, amount: -1}` 这样的索引。
+
+```
+> mt.explain(db.orders.find({'customer.name': 'Bob', amount: {$gt: 400}}).sort({amount: -1}))
+-- cursor.explain('executionStats')
+                     ns: shop.orders
+                 engine: classic
+    executionTimeMillis: 5
+              nReturned: 1000
+      totalKeysExamined: 0
+      totalDocsExamined: 20000
+docsExaminedPerReturned: 20
+          rejectedPlans: 0
++------------+-------+-----------+--------------+--------------+----+------------------------------------------+----------+
+| stage      | index | nReturned | keysExamined | docsExamined | ms | detail                                   | note     |
++------------+-------+-----------+--------------+--------------+----+------------------------------------------+----------+
+| SORT       |       |      1000 |              |              |  0 | sort {amount: -1}                        | 内存排序 |
+|   COLLSCAN |       |      1000 |              |        20000 |  0 | filter {$and: [{customer.name: {$eq: ... | 全表扫描 |
++------------+-------+-----------+--------------+--------------+----+------------------------------------------+----------+
+2 rows in set
+注意：内存排序；全表扫描
+```
+
+聚合：`$match` 下推成了索引扫描，后面的 `$group`、`$sort` 在上面。
+
+```
+> mt.explain(db.orders.explain('executionStats').aggregate([{$match: {status: 'NEW'}}, {$group: {_id: '$customer.name', total: {$sum: '$amount'}}}, {$sort: {total: -1}}]))
+                     ns: shop.orders
+                 engine: classic
+    executionTimeMillis: 8
+              nReturned: 6667
+      totalKeysExamined: 6667
+      totalDocsExamined: 6667
+docsExaminedPerReturned: 1
+          rejectedPlans: 0
++------------------------+-----------------------+-----------+--------------+--------------+----+------------------------------------------+------+
+| stage                  | index                 | nReturned | keysExamined | docsExamined | ms | detail                                   | note |
++------------------------+-----------------------+-----------+--------------+--------------+----+------------------------------------------+------+
+| $sort                  |                       |         4 |              |              |  6 | {sortKey: {total: -1}}                   |      |
+|   $group               |                       |         4 |              |              |  6 | {_id: $customer.name, total: {$sum: $... |      |
+|     PROJECTION_DEFAULT |                       |      6667 |              |              |  0 | {amount: 1, customer.name: 1, _id: 0}    |      |
+|       FETCH            |                       |      6667 |              |         6667 |  0 |                                          |      |
+|         IXSCAN         | status_1_createdAt_-1 |      6667 |         6667 |              |  0 | status ["NEW", "NEW"], createdAt [Max... |      |
++------------------------+-----------------------+-----------+--------------+--------------+----+------------------------------------------+------+
+5 rows in set
+```
+
+- 默认（`executionStats`）会真的执行一遍查询来统计，大查询要注意耗时；只想看计划用 `{analyze: false}`。
+- `sbe` 引擎的计划只拿得到每一步的返回行数和耗时，扫描行数只有上面的合计。
+- 分片集群（mongos）的计划会按分片分开显示，但还没测过。
 
 ### mt.top()：各集合读写耗时
 

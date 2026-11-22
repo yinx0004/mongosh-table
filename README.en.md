@@ -347,6 +347,7 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 | mt.colls('db')               | SHOW TABLE STATUS                | Documents, data and index size per collection, largest first; current db by default                                                                                                |
 | mt.frag('db')                | TABLES.DATA_FREE                 | Disk space each collection can reuse after deletes, most first; current db by default                                                                                              |
 | mt.idx('coll')               | SHOW INDEX FROM t                | Index keys, size, usage count and options                                                                                                                                          |
+| mt.explain(cursor)           | EXPLAIN ANALYZE                  | Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; analyze: false = plan only, no execution                        |
 | mt.unusedIdx('db')           | sys.schema_unused_indexes        | Indexes never used (ops = 0), largest first; all user databases by default                                                                                                         |
 | mt.dupIdx('db')              | sys.schema_redundant_indexes     | Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default                                                       |
 | mt.conns()                   | PROCESSLIST GROUP BY host        | Connections per client IP                                                                                                                                                          |
@@ -520,6 +521,117 @@ How it works:
 - Reads of `system.profile` itself and `profile` commands are always left out, so at level 2 you do not see `mt.slow()` itself.
 - `docsExamined` far above `nreturned`, or a `COLLSCAN` plan, usually means a missing index.
 - `system.profile` is a 1 MB capped collection that overwrites its oldest entries when full, so it only covers recent activity.
+
+### mt.explain(): query plans
+
+Like MySQL's `EXPLAIN ANALYZE`: turns the long JSON of `explain('executionStats')` into a table, so you can see at a glance which index was used, how much was scanned and which step was slow.
+
+```js
+mt.explain(db.orders.find({status: 'PAID'}).sort({createdAt: -1}))   // a cursor: the query really runs once
+mt.explain(db.orders.find({status: 'PAID'}), {analyze: false})       // plan only, nothing runs (queryPlanner)
+mt.explain(db.orders.explain('executionStats').aggregate([...]))     // aggregation: explain it, then pass the result in
+mt.explain(db.orders.aggregate([...]))                               // in mongosh an aggregation cursor works too
+```
+
+Aggregation cursors in the legacy mongo shell have no `explain()`; use the third form above, or `db.orders.aggregate([...], {explain: true})` (plan only, no execution statistics). Any explain result you ran yourself can be passed in as well.
+
+The lines on top are the overall picture:
+
+| Field | Meaning |
+|---|---|
+| `ns` | database.collection |
+| `engine` | Execution engine: `classic`, or `sbe`, the newer slot-based engine (used for some queries since 5.0) |
+| `executionTimeMillis` | Total time (ms) |
+| `nReturned` | Documents returned |
+| `totalKeysExamined` / `totalDocsExamined` | Index keys and documents scanned in total |
+| `docsExaminedPerReturned` | Documents scanned per document returned. 1 is ideal; tens or hundreds mean the index does not fit |
+| `rejectedPlans` | Number of candidate plans that lost |
+
+The table is the plan tree, **read top to bottom from the result toward the data**: the top row is the last step, the most indented row runs first (reading an index or the collection).
+
+| Column | Meaning |
+|---|---|
+| `stage` | Step: `IXSCAN` index scan, `FETCH` fetch documents by index, `COLLSCAN` scan the whole collection, `SORT`, `LIMIT`...; aggregation stages show as `$group`, `$sort` and so on |
+| `index` | Index used |
+| `nReturned` | Rows this step produced |
+| `keysExamined` / `docsExamined` | Index keys and documents this step scanned |
+| `ms` | Estimated time of this step (ms) |
+| `detail` | Index bounds, filter, sort fields, limit and so on |
+| `note` | `full scan` (COLLSCAN), `in-memory sort` (SORT without an index: slow with much data, and it can run out of memory), `spilled to disk`, `filtered after fetch` (FETCH still filters, so the index does not cover every condition), `multikey` |
+
+A query using the right index: every step scans and returns 5.
+
+```
+> mt.explain(db.orders.find({status: 'PAID'}).sort({createdAt: -1}).limit(5))
+-- cursor.explain('executionStats')
+                     ns: shop.orders
+                 engine: classic
+    executionTimeMillis: 0
+              nReturned: 5
+      totalKeysExamined: 5
+      totalDocsExamined: 5
+docsExaminedPerReturned: 1
+          rejectedPlans: 0
++------------+-----------------------+-----------+--------------+--------------+----+------------------------------------------+------+
+| stage      | index                 | nReturned | keysExamined | docsExamined | ms | detail                                   | note |
++------------+-----------------------+-----------+--------------+--------------+----+------------------------------------------+------+
+| LIMIT      |                       |         5 |              |              |  0 | limit 5                                  |      |
+|   FETCH    |                       |         5 |              |            5 |  0 |                                          |      |
+|     IXSCAN | status_1_createdAt_-1 |         5 |            5 |              |  0 | status ["PAID", "PAID"], createdAt [M... |      |
++------------+-----------------------+-----------+--------------+--------------+----+------------------------------------------+------+
+3 rows in set
+```
+
+No suitable index: it scans all 20,000 documents to return 1,000, then sorts them in memory. An index such as `{'customer.name': 1, amount: -1}` would fix it.
+
+```
+> mt.explain(db.orders.find({'customer.name': 'Bob', amount: {$gt: 400}}).sort({amount: -1}))
+-- cursor.explain('executionStats')
+                     ns: shop.orders
+                 engine: classic
+    executionTimeMillis: 6
+              nReturned: 1000
+      totalKeysExamined: 0
+      totalDocsExamined: 20000
+docsExaminedPerReturned: 20
+          rejectedPlans: 0
++------------+-------+-----------+--------------+--------------+----+------------------------------------------+----------------+
+| stage      | index | nReturned | keysExamined | docsExamined | ms | detail                                   | note           |
++------------+-------+-----------+--------------+--------------+----+------------------------------------------+----------------+
+| SORT       |       |      1000 |              |              |  1 | sort {amount: -1}                        | in-memory sort |
+|   COLLSCAN |       |      1000 |              |        20000 |  1 | filter {$and: [{customer.name: {$eq: ... | full scan      |
++------------+-------+-----------+--------------+--------------+----+------------------------------------------+----------------+
+2 rows in set
+Note: in-memory sort; full scan
+```
+
+An aggregation: `$match` became an index scan, with `$group` and `$sort` above it.
+
+```
+> mt.explain(db.orders.explain('executionStats').aggregate([{$match: {status: 'NEW'}}, {$group: {_id: '$customer.name', total: {$sum: '$amount'}}}, {$sort: {total: -1}}]))
+                     ns: shop.orders
+                 engine: classic
+    executionTimeMillis: 8
+              nReturned: 6667
+      totalKeysExamined: 6667
+      totalDocsExamined: 6667
+docsExaminedPerReturned: 1
+          rejectedPlans: 0
++------------------------+-----------------------+-----------+--------------+--------------+----+------------------------------------------+------+
+| stage                  | index                 | nReturned | keysExamined | docsExamined | ms | detail                                   | note |
++------------------------+-----------------------+-----------+--------------+--------------+----+------------------------------------------+------+
+| $sort                  |                       |         4 |              |              |  5 | {sortKey: {total: -1}}                   |      |
+|   $group               |                       |         4 |              |              |  5 | {_id: $customer.name, total: {$sum: $... |      |
+|     PROJECTION_DEFAULT |                       |      6667 |              |              |  0 | {amount: 1, customer.name: 1, _id: 0}    |      |
+|       FETCH            |                       |      6667 |              |         6667 |  0 |                                          |      |
+|         IXSCAN         | status_1_createdAt_-1 |      6667 |         6667 |              |  0 | status ["NEW", "NEW"], createdAt [Max... |      |
++------------------------+-----------------------+-----------+--------------+--------------+----+------------------------------------------+------+
+5 rows in set
+```
+
+- By default (`executionStats`) the query really runs once to collect statistics; mind the time on big queries, and use `{analyze: false}` to see only the plan.
+- With the `sbe` engine only rows returned and time are available per step; scan counts are only in the totals on top.
+- Plans from a sharded cluster (mongos) are shown per shard, but this is not tested yet.
 
 ### mt.top(): time per collection
 
