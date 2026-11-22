@@ -113,7 +113,7 @@
         unusedIdx: '没被用过的索引（ops = 0），大的在前；默认所有用户库',
         dupIdx: '冗余索引：键是另一个索引的前缀，如 {a: 1} 被 {a: 1, b: 1} 覆盖；默认所有用户库',
         builds: '正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久',
-        explain: '执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；也接受慢日志里的命令，mt.explain(n) 对上次 mt.slow() / mt.log() 的第 n 行；analyze: false 只看计划不执行',
+        explain: '执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；也接受慢日志里的命令，mt.explain(n) 对上次 mt.slow() / mt.log() 的第 n 行；默认只看计划、不执行，analyze: true 执行一遍看扫描数和耗时',
         log: "最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告",
         repl: '副本集成员状态、复制延迟（秒）、同步源',
         dbs: '各库占用的磁盘空间',
@@ -201,7 +201,7 @@
         unusedIdx: 'Indexes never used (ops = 0), largest first; all user databases by default',
         dupIdx: 'Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default',
         builds: 'Index builds in progress: collection, index, phase, progress and how long they have run',
-        explain: 'Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; also takes slow-log commands, and mt.explain(n) explains row n of the last mt.slow() / mt.log(); analyze: false = plan only, no execution',
+        explain: 'Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; also takes slow-log commands, and mt.explain(n) explains row n of the last mt.slow() / mt.log(); plan only by default, nothing runs; analyze: true runs it for rows scanned and time',
         log: "Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings",
         repl: 'Replica set members, replication lag (seconds), sync source',
         dbs: 'Disk space used by each database',
@@ -1833,7 +1833,8 @@
   }
   function explain(x, opts) {
     var o = dbaOpts(opts, ['nReturned', 'keysExamined', 'docsExamined', 'ms']), out = [];
-    var m = M(), analyze = o.analyze !== false, verb = analyze ? 'executionStats' : 'queryPlanner';
+    // 默认只取计划（queryPlanner），不执行查询；{analyze: true} 才真的执行一遍拿统计（executionStats）
+    var m = M(), analyze = o.analyze === true, verb = analyze ? 'executionStats' : 'queryPlanner';
     var ex, entry = null;
     if (typeof x === 'number') {
       if (!lastRows || x < 1 || x > lastRows.length || x !== Math.floor(x)) fail(m.noRow(x));
@@ -1921,6 +1922,10 @@
     if (qp.rejectedPlans) h.rejectedPlans = qp.rejectedPlans.length;
     if (qp.indexFilterSet) h.indexFilterSet = true;
     headOut(h, Object.assign({}, o, { cols: null, exclude: null }), out);
+    // 只看计划时没有统计；SBE 没有每一步的扫描数：整列都是空的就不显示
+    ['nReturned', 'keysExamined', 'docsExamined', 'ms'].forEach(function (k) {
+      if (rows.every(function (r) { return r[k] === ''; })) rows.forEach(function (r) { delete r[k]; });
+    });
     renderRows(rows, o, out, false, rows.length);
     var nl = [];
     notes.forEach(function (_, k) { nl.push(m.exNote[k]); });
@@ -2063,7 +2068,7 @@
     ["mt.colls('db')", 'SHOW TABLE STATUS', 'colls'],
     ["mt.frag('db')", 'TABLES.DATA_FREE', 'frag'],
     ["mt.idx('coll')", 'SHOW INDEX FROM t', 'idx'],
-    ['mt.explain(cursor | n)', 'EXPLAIN ANALYZE', 'explain'],
+    ['mt.explain(cursor | n)', 'EXPLAIN [ANALYZE]', 'explain'],
     ['mt.builds()', 'ALTER TABLE progress', 'builds'],
     ["mt.unusedIdx('db')", 'sys.schema_unused_indexes', 'unusedIdx'],
     ["mt.dupIdx('db')", 'sys.schema_redundant_indexes', 'dupIdx'],
