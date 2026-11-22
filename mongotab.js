@@ -5,6 +5,7 @@
 //   t(db.orders.find({status: 'PAID'}))          // 表格（太宽自动竖排）
 //   g(db.orders.findOne())                         // 竖排，相当于 MySQL 的 \G
 //   t(rs.status().members, 'name,stateStr,health,optimeDate')
+//   mt.ps() / mt.repl() / mt.colls() ...           // DBA 常用命令，mt.cmds() 列出全部
 //   mt.help()
 //
 // 只新增三个全局函数 t、g、mt（名字已被占用就跳过，并提示改用 mongotab.xxx），
@@ -12,7 +13,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.2.0';
+  var VERSION = '0.3.0';
   var MARK = '__mongotab__';
 
   // mongosh 跑在 Node 上，有 globalThis / process / Intl；老的 mongo shell 都没有：
@@ -34,6 +35,7 @@
     color: null,        // null = 终端里自动开启
     width: null,        // 终端宽度，null = 自动检测
     depth: null,        // 嵌套展开层数，null = 全部展开
+    showCmd: true,      // mt.ps() 等 DBA 命令先打印等价的原生命令
     lang: detectLang()  // 'zh' | 'en'：MONGOTAB_LANG > LC_ALL / LC_MESSAGES / LANG > 系统区域
   };
 
@@ -62,6 +64,27 @@
       more: function (n, next, fn) { return '(只显示前 ' + n + ' 行，还有更多；用 ' + fn + '(x, {limit: ' + next + '}) 看更多)'; },
       partial: function (n, total) { return '(共 ' + total + ' 行，只显示前 ' + n + ' 行)'; },
       missing: '(无字段)',
+      noDb: '没有连接数据库',
+      unauthorized: function (c) { return '没有执行 ' + c + ' 的权限，需要 clusterMonitor 角色（或 root）'; },
+      cmdFailed: function (c, err) { return c + ' 执行失败：' + err; },
+      onMongos: function (n) { return n + ' 要连到副本集成员上执行，当前连的是 mongos'; },
+      notRs: function (n) { return n + ' 只适用于副本集，当前是单机（standalone）'; },
+      needColl: "mt.idx() 需要集合名，例如 mt.idx('orders')、mt.idx('shop.orders') 或 mt.idx(db.orders)",
+      noColl: function (ns) { return '集合 ' + ns + ' 不存在'; },
+      noOplog: 'local.oplog.rs 是空的',
+      total: function (s) { return '合计 ' + s; },
+      sampled: function (n) { return '，间隔 ' + n + ' 秒采样两次算 ops/s'; },
+      cmdDesc: {
+        ps: '正在执行的操作，耗时长的在前；secs 最短秒数，ns 库或集合，all 含空闲连接',
+        repl: '副本集成员状态、复制延迟（秒）、同步源',
+        dbs: '各库占用的磁盘空间',
+        colls: '各集合文档数、数据和索引大小，大的在前；默认当前库',
+        idx: '索引的键、大小、使用次数和选项',
+        conns: '按客户端 IP 统计连接数',
+        oplog: 'oplog 大小和能覆盖多长时间',
+        status: '版本、角色、ops/s、连接、缓存等关键指标'
+      },
+      cmdsNote: '都可以加 t() 的选项，如 {cols: ...}、{vertical: true}；mt.config({showCmd: false}) 不打印原生命令',
       loaded: function (v, tz) { return 'MongoTab ' + v + ' 已加载：t(x) 表格 / g(x) 竖排 / mt.help()   时区 ' + tz; },
       skipped: function (names) {
         return '  注意：' + names.join('、') + ' 已被占用，未覆盖；请用 mongotab.table / mongotab.vertical / mongotab.help()';
@@ -77,6 +100,7 @@
           helpRow("t(x, {tz: '+08:00'})", '本次用指定时区显示时间'),
           helpRow('mt.csv(x, ...)', '输出 CSV（贴进 Excel）'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'en'})", '改本会话默认值'),
+          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
           '',
           '  示例：'
         ].concat(HELP_EXAMPLES, ['', '  显示约定：' + (nul || '空白') + ' = 值为 null；空白 = 空字符串 ""；' +
@@ -89,6 +113,27 @@
       more: function (n, next, fn) { return '(showing the first ' + n + ' rows, more available; use ' + fn + '(x, {limit: ' + next + '}) to see more)'; },
       partial: function (n, total) { return '(showing the first ' + n + ' of ' + total + ' rows)'; },
       missing: '(missing)',
+      noDb: 'not connected to a database',
+      unauthorized: function (c) { return 'not authorized to run ' + c + '; this needs the clusterMonitor role (or root)'; },
+      cmdFailed: function (c, err) { return c + ' failed: ' + err; },
+      onMongos: function (n) { return n + ' must run on a replica set member; this is a mongos'; },
+      notRs: function (n) { return n + ' only works on a replica set; this is a standalone server'; },
+      needColl: "mt.idx() needs a collection, e.g. mt.idx('orders'), mt.idx('shop.orders') or mt.idx(db.orders)",
+      noColl: function (ns) { return 'collection ' + ns + ' does not exist'; },
+      noOplog: 'local.oplog.rs is empty',
+      total: function (s) { return 'Total ' + s; },
+      sampled: function (n) { return ', sampled twice ' + n + 's apart for ops/s'; },
+      cmdDesc: {
+        ps: 'Running operations, longest first; secs = minimum seconds, ns = db or collection, all = include idle',
+        repl: 'Replica set members, replication lag (seconds), sync source',
+        dbs: 'Disk space used by each database',
+        colls: 'Documents, data and index size per collection, largest first; current db by default',
+        idx: 'Index keys, size, usage count and options',
+        conns: 'Connections per client IP',
+        oplog: 'Oplog size and how much time it covers',
+        status: 'Version, role, ops/s, connections, cache and other key metrics'
+      },
+      cmdsNote: 'All accept t() options such as {cols: ...} or {vertical: true}; mt.config({showCmd: false}) hides the native command',
       loaded: function (v, tz) { return 'MongoTab ' + v + ' loaded: t(x) table / g(x) vertical / mt.help()   time zone ' + tz; },
       skipped: function (names) {
         return '  Note: ' + names.join(', ') + ' already defined, left untouched; use mongotab.table / mongotab.vertical / mongotab.help()';
@@ -104,6 +149,7 @@
           helpRow("t(x, {tz: '+08:00'})", 'Show times in this time zone for this call'),
           helpRow('mt.csv(x, ...)', 'Print CSV (paste into Excel)'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'zh'})", 'Change defaults for this session'),
+          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
           '',
           '  Examples:'
         ].concat(HELP_EXAMPLES, ['', '  Conventions: ' + (nul || 'blank') + ' = value is null; blank = empty string ""; ' +
@@ -427,7 +473,7 @@
         return { s: s, dim: v === null || v === undefined };
       });
     });
-    numeric = numeric.map(function (n, j) { return n && hasNum[j]; });
+    numeric = numeric.map(function (n, j) { return (n && hasNum[j]) || (o._right ? o._right.indexOf(cols[j]) >= 0 : false); });
     var sep = '+' + widths.map(function (w) { return '-'.repeat(w + 2); }).join('+') + '+';
     var lines = [sep, '| ' + head.map(function (h, j) { return paint(o, BOLD, padR(h, widths[j])); }).join(' | ') + ' |', sep];
     body.forEach(function (row) {
@@ -604,7 +650,406 @@
     emit(['MongoTab ' + VERSION + ' — Make mongosh readable', ''].concat(L(cfg.lang).help(cfg.limit, String(cfg.nullText), missingText(cfg))));
   }
 
-  var api = { table: t, vertical: g, csv: csv, config: config, help: help, version: VERSION };
+  // ───────────────────────── DBA 常用命令 ─────────────────────────
+  // mt.ps() / mt.repl() / ...：只读，对应 MySQL 的 SHOW 系列。先打印等价的原生命令
+  // （mt.config({showCmd: false}) 关掉），再出表格。选项和 t() 通用（cols、limit、vertical...）。
+  function toNum(v) {
+    if (v === null || v === undefined || v === '') return null;
+    if (typeof v === 'number') return v;
+    if (typeof v === 'bigint') return Number(v);
+    if (bsonType(v)) return Number(numText(v));
+    return Number(v);
+  }
+  function sizeText(n) {
+    n = toNum(n);
+    if (n === null || isNaN(n)) return '';
+    var u = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(1) : String(Math.round(n))) + ' ' + u[i];
+  }
+  function durText(sec) {
+    sec = Math.max(0, Math.round(toNum(sec) || 0));
+    var d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+    if (d) return d + 'd ' + h + 'h ' + m + 'm';
+    if (h) return h + 'h ' + m + 'm';
+    if (m) return m + 'm ' + s + 's';
+    return s + 's';
+  }
+  function fail(msg) { var e = new Error(msg); e.mtFriendly = true; throw e; }
+  function M() { return L(cfg.lang); }
+  function isAuthErr(r) { return !!r && (r.code === 13 || r.codeName === 'Unauthorized' || /not authorized|requires authentication/i.test(String(r.errmsg || r.message || ''))); }
+  function curDb() {
+    var d = safe(function () { return db; });   // eslint-disable-line no-undef
+    if (!d || typeof d.getSiblingDB !== 'function') fail(M().noDb);
+    return d;
+  }
+  function admin() { return curDb().getSiblingDB('admin'); }
+  function runCmd(d, cmd) {
+    var r;
+    try { r = unwrap(d.runCommand(cmd)); } catch (e) { r = { ok: 0, errmsg: e.message, code: e.code, codeName: e.codeName }; }
+    if (!r || !r.ok) {
+      var name = Object.keys(cmd)[0];
+      if (isAuthErr(r)) fail(M().unauthorized(name));
+      fail(M().cmdFailed(name, (r && r.codeName ? r.codeName + ': ' : '') + (r && r.errmsg || String(r))));
+    }
+    return r;
+  }
+  // 聚合失败时返回 null（权限不够除外），让调用方留空而不是整条命令失败
+  function aggArr(coll, pipeline) {
+    try { return coll.aggregate(pipeline).toArray(); } catch (e) {
+      if (isAuthErr(e)) fail(M().unauthorized(Object.keys(pipeline[0])[0]));
+      return null;
+    }
+  }
+  function helloDoc(a) {
+    var r = safe(function () { return unwrap(a.runCommand({ hello: 1 })); });
+    if (!r || !r.ok) r = safe(function () { return unwrap(a.runCommand({ isMaster: 1 })); });
+    return r || {};
+  }
+  function ensureRs(a, name) {
+    var h = helloDoc(a);
+    if (h.msg === 'isdbgrid') fail(M().onMongos(name));
+    if (!h.setName) fail(M().notRs(name));
+  }
+  // $collStats.storageStats；经 mongos 时每个分片一条，加起来
+  function collStats(d, name) {
+    var docs = aggArr(d.getCollection(name), [{ $collStats: { storageStats: {} } }]);
+    if (!docs || !docs.length) return null;
+    var s = { count: 0, size: 0, storageSize: 0, totalIndexSize: 0, nindexes: 0, maxSize: null, indexSizes: {} };
+    docs.forEach(function (x) {
+      var st = x.storageStats || {};
+      s.count += toNum(st.count) || 0;
+      s.size += toNum(st.size) || 0;
+      s.storageSize += toNum(st.storageSize) || 0;
+      s.totalIndexSize += toNum(st.totalIndexSize) || 0;
+      s.nindexes = Math.max(s.nindexes, toNum(st.nindexes) || 0);
+      if (st.maxSize != null) s.maxSize = (s.maxSize || 0) + toNum(st.maxSize);
+      Object.keys(st.indexSizes || {}).forEach(function (k) { s.indexSizes[k] = (s.indexSizes[k] || 0) + toNum(st.indexSizes[k]); });
+    });
+    return s;
+  }
+  function hostOf(client) {
+    var m = /^\[?(.*?)\]?:(\d+)$/.exec(String(client || ''));
+    return m ? m[1] : String(client || '');
+  }
+  // 去掉空值，免得竖排里出现一堆 NULL
+  function prune(doc) {
+    var out = {};
+    Object.keys(doc).forEach(function (k) {
+      var v = doc[k];
+      if (v === null || v === undefined || v === '' || (typeof v === 'number' && isNaN(v))) return;
+      if (isDoc(v)) { v = prune(v); if (!Object.keys(v).length) return; }
+      out[k] = v;
+    });
+    return out;
+  }
+  function dbaOpts(opts, right) { return makeOpts(opts, { _fn: 'table', _right: right || [] }); }
+  function cmdLine(o, text, out) { if (o.showCmd !== false) out.push(paint(o, DIM, '-- ' + text)); }
+  function rowsOut(rows, o, out) {
+    var lim = limitOf(o);
+    renderRows(rows.length > lim ? rows.slice(0, lim) : rows, o, out, false, rows.length);
+  }
+  function headOut(doc, o, out) {
+    var f = flatten(prune(doc), o, null), keys = [];
+    f.forEach(function (_, k) { keys.push(k); });
+    kvLines(f, keys, o, out);
+  }
+  // 包一层：可预期的错误（没权限、不是副本集...）打印一行提示，不抛异常。
+  // 直接调用 fn(a, b) 而不是 fn.apply：mongosh 会把调用数据库的函数改写成 async，
+  // 只有直接调用才会被自动 await，catch 才接得住。
+  function dba(fn) {
+    return function (a, b) {
+      try { fn(a, b); } catch (e) {
+        if (e && e.mtFriendly) { emit(['mongotab: ' + e.message]); return; }
+        if (e && /No connected database/i.test(String(e.message))) { emit(['mongotab: ' + M().noDb]); return; }   // mongosh --nodb
+        throw e;
+      }
+    };
+  }
+
+  function isSelfOp(c) {
+    return !!(c.currentOp || (Array.isArray(c.pipeline) && c.pipeline[0] && c.pipeline[0].$currentOp));
+  }
+  function cleanCmd(c) {
+    var out = {};
+    Object.keys(c).forEach(function (k) { if (k[0] !== '$' && k !== 'lsid' && k !== 'txnNumber') out[k] = c[k]; });
+    return out;
+  }
+  function ps(opts) {
+    var o = dbaOpts(opts, ['opid', 'secs']), out = [];
+    var all = !!o.all;
+    cmdLine(o, 'db.adminCommand({currentOp: 1, ' + (all ? '$all: true' : 'active: true') + '})', out);
+    var ops = runCmd(admin(), all ? { currentOp: 1, $all: true } : { currentOp: 1, active: true }).inprog || [];
+    var minSecs = toNum(o.secs) || 0, ns = o.ns ? String(o.ns) : '';
+    var rows = [];
+    ops.forEach(function (op, i) {
+      var c = op.command || {};
+      if (isSelfOp(c)) return;
+      if (!all) {
+        if (!(op.client || op.client_s)) return;                                         // 内部线程
+        if ((c.hello || c.isMaster || c.ismaster) && c.maxAwaitTimeMS != null) return;  // 驱动的心跳长轮询
+      }
+      var secs = toNum(op.secs_running) || 0;
+      if (secs < minSecs) return;
+      if (ns && !(op.ns === ns || String(op.ns || '').indexOf(ns + '.') === 0)) return;
+      var cc = cleanCmd(c);
+      rows.push({ i: i, row: {
+        opid: op.opid != null ? op.opid : '', secs: secs, op: op.active === false ? 'idle' : (op.op || ''),
+        ns: op.ns || '', client: op.client || op.client_s || '',
+        app: op.appName || '', lock: op.waitingForLock ? 'WAIT' : '', plan: op.planSummary || '',
+        command: Object.keys(cc).length ? valText(cc, true, o) : (op.desc || '')
+      } });
+    });
+    // 耗时长的在前；同耗时时有客户端的连接排在内部线程前面
+    rows.sort(function (a, b) {
+      return b.row.secs - a.row.secs || (a.row.client ? 0 : 1) - (b.row.client ? 0 : 1) || a.i - b.i;
+    });
+    rowsOut(rows.map(function (x) { return x.row; }), o, out);
+    emit(out);
+  }
+
+  function repl(opts) {
+    var o = dbaOpts(opts, ['lagSecs', 'pingMs']), out = [];
+    var a = admin();
+    ensureRs(a, 'mt.repl()');
+    cmdLine(o, 'rs.status()', out);
+    var st = runCmd(a, { replSetGetStatus: 1 });
+    var ms = st.members || [];
+    var opt = function (m) { return isDate(m.optimeDate) && m.optimeDate.getTime() > 0 ? m.optimeDate : null; };
+    var ref = null;
+    ms.forEach(function (m) { if (m.state === 1 && opt(m)) ref = opt(m).getTime(); });
+    if (ref === null) ms.forEach(function (m) { if (opt(m) && (ref === null || opt(m).getTime() > ref)) ref = opt(m).getTime(); });
+    headOut({ set: st.set, date: st.date }, Object.assign({}, o, { cols: null, exclude: null }), out);
+    var rows = ms.map(function (m) {
+      var od = opt(m);
+      return {
+        name: m.name, state: m.stateStr, health: m.health,
+        lagSecs: od && ref !== null ? Math.max(0, Math.round((ref - od.getTime()) / 1000)) : '',
+        optime: od || '', syncSource: m.syncSourceHost || m.syncingTo || '',
+        pingMs: m.pingMs != null ? toNum(m.pingMs) : '',
+        lastHeartbeat: isDate(m.lastHeartbeat) ? m.lastHeartbeat : '',
+        self: m.self ? '*' : ''
+      };
+    });
+    rowsOut(rows, o, out);
+    emit(out);
+  }
+
+  function dbs(opts) {
+    var o = dbaOpts(opts, ['size']), out = [];
+    cmdLine(o, 'db.adminCommand({listDatabases: 1})', out);
+    var r = runCmd(admin(), { listDatabases: 1 });
+    var rows = (r.databases || []).map(function (d) { return { name: d.name, size: sizeText(d.sizeOnDisk), empty: !!d.empty }; });
+    rows.sort(function (x, y) { return x.name < y.name ? -1 : x.name > y.name ? 1 : 0; });
+    rowsOut(rows, o, out);
+    if (r.totalSize != null) out.push(M().total(sizeText(r.totalSize)));
+    emit(out);
+  }
+
+  function isDbHandle(x) { return !!x && typeof x === 'object' && typeof x.getCollectionInfos === 'function' && typeof x.getSiblingDB === 'function'; }
+  function colls(dbName, opts) {
+    if (dbName && typeof dbName === 'object' && !isDbHandle(dbName)) { opts = dbName; dbName = null; }
+    var o = dbaOpts(opts, ['size', 'storage', 'indexSize']), out = [];
+    var d = isDbHandle(dbName) ? dbName : dbName ? curDb().getSiblingDB(String(dbName)) : curDb();
+    var dn = d.getName();
+    cmdLine(o, "db.getSiblingDB('" + dn + "').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}])", out);
+    var infos;
+    try { infos = d.getCollectionInfos(); } catch (e) {
+      if (isAuthErr(e)) fail(M().unauthorized('listCollections'));
+      throw e;
+    }
+    var rows = [];
+    infos.forEach(function (info) {
+      if (info.type === 'view') return;
+      var s = collStats(d, info.name);
+      rows.push({
+        row: {
+          name: info.name, count: s ? s.count : '', size: s ? sizeText(s.size) : '', storage: s ? sizeText(s.storageSize) : '',
+          indexes: s ? s.nindexes : '', indexSize: s ? sizeText(s.totalIndexSize) : ''
+        },
+        w: s ? s.storageSize + s.totalIndexSize : -1
+      });
+    });
+    rows.sort(function (x, y) { return y.w - x.w || (x.row.name < y.row.name ? -1 : 1); });
+    rowsOut(rows.map(function (x) { return x.row; }), o, out);
+    emit(out);
+  }
+
+  function collExists(d, n) { return d.getCollectionInfos({ name: n }).length > 0; }
+  function resolveColl(x) {
+    if (x && typeof x === 'object' && typeof x.getIndexes === 'function' && typeof x.getDB === 'function') {
+      if (!collExists(x.getDB(), x.getName())) fail(M().noColl(x.getFullName()));
+      return x;
+    }
+    if (typeof x !== 'string' || !x) fail(M().needColl);
+    var cur = curDb();
+    if (collExists(cur, x)) return cur.getCollection(x);
+    var i = x.indexOf('.');
+    if (i > 0) {
+      var d2 = cur.getSiblingDB(x.slice(0, i)), n2 = x.slice(i + 1);
+      if (collExists(d2, n2)) return d2.getCollection(n2);
+    }
+    fail(M().noColl(cur.getName() + '.' + x));
+  }
+  function idx(coll, opts) {
+    var o = dbaOpts(opts, ['size']), out = [];
+    var c = resolveColl(coll), d = c.getDB(), cn = c.getName();
+    cmdLine(o, "db.getSiblingDB('" + d.getName() + "').getCollection('" + cn + "').getIndexes(); aggregate([{$indexStats: {}}])", out);
+    var ixs = c.getIndexes();
+    var usage = {};
+    (aggArr(c, [{ $indexStats: {} }]) || []).forEach(function (x) {
+      var u = usage[x.name] || (usage[x.name] = { ops: 0, since: null });
+      u.ops += toNum(x.accesses && x.accesses.ops) || 0;
+      var since = x.accesses && x.accesses.since;
+      if (isDate(since) && (!u.since || since < u.since)) u.since = since;
+    });
+    var cs = collStats(d, cn);
+    var rows = ixs.map(function (ix) {
+      var flags = [];
+      if (ix.unique) flags.push('unique');
+      if (ix.sparse) flags.push('sparse');
+      if (ix.expireAfterSeconds != null) flags.push('ttl=' + toNum(ix.expireAfterSeconds) + 's');
+      if (ix.partialFilterExpression) flags.push('partial=' + valText(ix.partialFilterExpression, true, o));
+      if (ix.hidden) flags.push('hidden');
+      if (ix.collation && ix.collation.locale) flags.push('collation=' + ix.collation.locale);
+      var u = usage[ix.name];
+      return {
+        name: ix.name, key: valText(ix.key, true, o), size: cs ? sizeText(cs.indexSizes[ix.name]) : '',
+        ops: u ? u.ops : '', since: u && u.since ? u.since : '', options: flags.join(', ')
+      };
+    });
+    rowsOut(rows, o, out);
+    emit(out);
+  }
+
+  function conns(opts) {
+    var o = dbaOpts(opts), out = [];
+    var a = admin();
+    cmdLine(o, 'db.serverStatus().connections; db.adminCommand({currentOp: 1, $all: true})', out);
+    var sc = runCmd(a, { serverStatus: 1 }).connections || {};
+    headOut({ current: sc.current, available: sc.available, totalCreated: sc.totalCreated }, Object.assign({}, o, { cols: null, exclude: null }), out);
+    var ops = runCmd(a, { currentOp: 1, $all: true }).inprog || [];
+    var by = new StrMap();
+    ops.forEach(function (op) {
+      var cl = op.client || op.client_s;
+      if (!cl) return;
+      var h = hostOf(cl);
+      var r = by.get(h);
+      if (!r) { r = { client: h, conns: 0, active: 0, apps: new StrMap(), ids: new StrMap() }; by.set(h, r); }
+      // 同一个连接可能有多条（如事务），按 connectionId 去重
+      var id = op.connectionId != null ? String(op.connectionId) : cl + '#' + r.conns;
+      if (!r.ids.has(id)) { r.ids.set(id, true); r.conns++; }
+      if (op.active && !isSelfOp(op.command || {})) r.active++;
+      if (op.appName) r.apps.set(op.appName, true);
+    });
+    var rows = [];
+    by.forEach(function (r) {
+      var apps = [];
+      r.apps.forEach(function (_, k) { apps.push(k); });
+      rows.push({ client: r.client, conns: r.conns, active: r.active, apps: apps.join(', ') });
+    });
+    rows.sort(function (x, y) { return y.conns - x.conns || (x.client < y.client ? -1 : 1); });
+    rowsOut(rows, o, out);
+    emit(out);
+  }
+
+  function tsDate(ts) { var p = tsParts(ts); return typeof p[0] === 'number' ? new Date(p[0] * 1000) : null; }
+  function oplog(opts) {
+    var o = dbaOpts(opts), out = [];
+    ensureRs(admin(), 'mt.oplog()');
+    cmdLine(o, 'rs.printReplicationInfo()', out);
+    var local = curDb().getSiblingDB('local'), oc = local.getCollection('oplog.rs');
+    var edge = function (dir) {
+      try { return oc.find({}, { ts: 1 }).sort({ $natural: dir }).limit(1).toArray()[0]; } catch (e) {
+        if (isAuthErr(e)) fail(M().unauthorized('find local.oplog.rs'));
+        throw e;
+      }
+    };
+    var first = edge(1), last = edge(-1);
+    if (!first || !last) fail(M().noOplog);
+    var t1 = tsDate(first.ts), t2 = tsDate(last.ts);
+    var secs = (t2.getTime() - t1.getTime()) / 1000;
+    var cs = collStats(local, 'oplog.rs') || {};
+    var doc = prune({
+      maxSize: sizeText(cs.maxSize), usedSize: sizeText(cs.size),
+      firstEvent: t1, lastEvent: t2, window: durText(secs) + ' (' + (secs / 3600).toFixed(2) + ' h)', now: new Date()
+    });
+    var f = flatten(doc, o, null), keys = [];
+    f.forEach(function (_, k) { keys.push(k); });
+    kvLines(f, selectCols(keys, o.cols, o.exclude), o, out);
+    emit(out);
+  }
+
+  function status(opts) {
+    var o = dbaOpts(opts), out = [];
+    var a = admin();
+    var iv = o.interval == null ? 1 : toNum(o.interval) || 0;
+    var canSleep = typeof sleep === 'function';   // eslint-disable-line no-undef
+    cmdLine(o, 'db.serverStatus()' + (iv > 0 && canSleep ? M().sampled(iv) : ''), out);
+    var s1 = runCmd(a, { serverStatus: 1 }), s2 = null;
+    if (iv > 0 && canSleep) { sleep(iv * 1000); s2 = runCmd(a, { serverStatus: 1 }); }   // eslint-disable-line no-undef
+    var s = s2 || s1;
+    var dt = s2 ? ((s2.localTime - s1.localTime) / 1000 || iv) : 0;
+    var rate = function (a1, a2) { return Math.round((toNum(a2) - toNum(a1)) / dt * 10) / 10; };
+    var r = s.repl;
+    var role = s.process && /mongos/.test(s.process) ? 'mongos' : !r ? 'standalone' :
+      (r.ismaster || r.isWritablePrimary) ? 'PRIMARY' : r.secondary ? 'SECONDARY' : r.arbiterOnly ? 'ARBITER' : 'OTHER';
+    var doc = { host: s.host, version: s.version, role: role + (r && r.setName ? ' (' + r.setName + ')' : ''), uptime: durText(s.uptime) };
+    var oc = s.opcounters || {};
+    var names = ['insert', 'query', 'update', 'delete', 'getmore', 'command'];
+    if (s2) {
+      doc['ops/s'] = {};
+      names.forEach(function (k) { doc['ops/s'][k] = rate((s1.opcounters || {})[k], oc[k]); });
+    } else {
+      doc.opcounters = {};
+      names.forEach(function (k) { doc.opcounters[k] = toNum(oc[k]); });
+    }
+    var cn = s.connections || {};
+    doc.connections = { current: toNum(cn.current), available: toNum(cn.available) };
+    var gl = s.globalLock || {};
+    if (gl.activeClients) doc.activeClients = { readers: toNum(gl.activeClients.readers), writers: toNum(gl.activeClients.writers) };
+    if (gl.currentQueue) doc.queue = { readers: toNum(gl.currentQueue.readers), writers: toNum(gl.currentQueue.writers) };
+    if (s2 && s.network && s1.network) {
+      doc['network/s'] = { 'in': sizeText(rate(s1.network.bytesIn, s.network.bytesIn)), 'out': sizeText(rate(s1.network.bytesOut, s.network.bytesOut)) };
+    }
+    if (s.mem) doc.mem = { resident: sizeText(toNum(s.mem.resident) * 1048576), virtual: sizeText(toNum(s.mem.virtual) * 1048576) };
+    var wc = s.wiredTiger && s.wiredTiger.cache;
+    if (wc) {
+      doc.cache = {
+        used: sizeText(wc['bytes currently in the cache']), max: sizeText(wc['maximum bytes configured']),
+        dirty: sizeText(wc['tracked dirty bytes in the cache'])
+      };
+    }
+    var f = flatten(prune(doc), o, null), keys = [];
+    f.forEach(function (_, k) { keys.push(k); });
+    kvLines(f, selectCols(keys, o.cols, o.exclude), o, out);
+    emit(out);
+  }
+
+  var CMDS = [
+    ['mt.ps({secs, ns, all})', 'SHOW PROCESSLIST', 'ps'],
+    ['mt.repl()', 'SHOW SLAVE STATUS', 'repl'],
+    ['mt.dbs()', 'SHOW DATABASES', 'dbs'],
+    ["mt.colls('db')", 'SHOW TABLE STATUS', 'colls'],
+    ["mt.idx('coll')", 'SHOW INDEX FROM t', 'idx'],
+    ['mt.conns()', 'PROCESSLIST GROUP BY host', 'conns'],
+    ['mt.oplog()', 'SHOW BINARY LOGS', 'oplog'],
+    ['mt.status({interval})', 'SHOW GLOBAL STATUS', 'status']
+  ];
+  function cmds() {
+    var m = M(), out = [];
+    var rows = CMDS.map(function (c) { return { command: c[0], mysql: c[1], description: m.cmdDesc[c[2]] }; });
+    renderRows(rows, makeOpts({ table: true, maxCol: 0 }), out, false, rows.length);
+    out.pop();   // 去掉 "8 rows in set"
+    out.push(m.cmdsNote);
+    emit(out);
+  }
+
+  var api = {
+    table: t, vertical: g, csv: csv, config: config, help: help, version: VERSION,
+    cmds: cmds, ps: dba(ps), repl: dba(repl), dbs: dba(dbs), colls: dba(colls), idx: dba(idx),
+    conns: dba(conns), oplog: dba(oplog), status: dba(status)
+  };
   t[MARK] = g[MARK] = api[MARK] = true;
 
   var skipped = [];

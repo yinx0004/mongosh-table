@@ -111,6 +111,7 @@ t(db.orders.find(), {limit: 200})                // 默认最多 50 行
 t(db.orders.find(), {tz: '+08:00'})              // 本次按东八区显示时间
 mt.csv(db.orders.find(), 'orderNo,amount')      // 输出 CSV，贴进 Excel
 mt.config({tz: 'Asia/Shanghai', maxCol: 60})    // 改本会话默认值
+mt.ps() / mt.repl() / mt.colls() ...            // DBA 常用命令，见下文
 mt.help()
 ```
 
@@ -124,7 +125,58 @@ mt.help()
 2 rows in set
 ```
 
-### DBA 常用
+### DBA 常用命令
+
+从 v0.3.0 起，`mt` 下面带了一组只读的快捷命令，对应 MySQL 的 `SHOW ...`：
+
+```js
+mt.cmds()                     // 列出全部命令
+mt.ps()                       // SHOW PROCESSLIST：正在执行的操作，耗时长的在前
+mt.ps({secs: 5})              // 只看运行超过 5 秒的
+mt.ps({ns: 'shop.orders'})    // 只看某个库或集合
+mt.ps({all: true})            // 含空闲连接和内部线程
+mt.repl()                     // SHOW SLAVE STATUS：成员状态、复制延迟（秒）、同步源
+mt.dbs()                      // SHOW DATABASES：各库占用空间
+mt.colls('shop')              // SHOW TABLE STATUS：各集合文档数、数据和索引大小，大的在前；不写库名就是当前库
+mt.idx('orders')              // SHOW INDEX：索引的键、大小、使用次数；也可以写 'shop.orders' 或 db.orders
+mt.conns()                    // 按客户端 IP 统计连接数
+mt.oplog()                    // SHOW BINARY LOGS：oplog 大小和能覆盖多长时间
+mt.status()                   // SHOW GLOBAL STATUS：版本、角色、ops/s（间隔 1 秒采样）、连接、缓存
+```
+
+```
+> mt.ps()
+-- db.adminCommand({currentOp: 1, active: true})
++------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
+| opid | secs | op      | ns             | client              | app            | lock | plan                                | command                                  |
++------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
+| 1625 |    9 | query   | shop.orders    | 192.168.147.5:47218 | mongosh 2.14.2 |      | IXSCAN { status: 1, createdAt: -1 } | {find: orders, filter: {$where: sleep... |
+| 1791 |    0 | getmore | local.oplog.rs | 192.168.147.3:41478 | OplogFetcher   |      | COLLSCAN                            | {getMore: 7311352941832819751, collec... |
+| 1790 |    0 | getmore | local.oplog.rs | 192.168.147.4:55718 | OplogFetcher   |      | COLLSCAN                            | {getMore: 8081156913663858071, collec... |
++------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
+3 rows in set
+
+> mt.repl()
+-- rs.status()
+ set: rs0
+date: 2026-11-22 05:02:46.493
++-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
+| name      | state     | health | lagSecs | optime              | syncSource | pingMs | lastHeartbeat           | self |
++-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
+| db1:27017 | PRIMARY   |      1 |       0 | 2026-11-22 05:02:36 |            |        |                         | *    |
+| db2:27017 | SECONDARY |      1 |       0 | 2026-11-22 05:02:36 | db1:27017  |      0 | 2026-11-22 05:02:45.284 |      |
+| db3:27017 | SECONDARY |      1 |       0 | 2026-11-22 05:02:36 | db1:27017  |      0 | 2026-11-22 05:02:45.284 |      |
++-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
+3 rows in set
+```
+
+- 每条命令先打印对应的原生命令（`-- ...` 那一行，终端里是灰色），方便复制、核对。不想看用 `mt.config({showCmd: false})` 关掉。
+- 选项和 `t()` 通用，例如 `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`、`mt.colls('shop', {limit: 200})`、`mt.idx('orders', {vertical: true})`。
+- `mt.ps()` 默认不显示空闲连接、内部线程、驱动的心跳长轮询（awaitable hello）和这条查询自己。
+- 这些命令需要监控类权限（如 `clusterMonitor` 角色）。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()` 时，只打印一行说明，不抛异常。
+- 老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过；分片集群（mongos）还没测过。
+
+#### 也可以直接套原生命令
 
 | MySQL 习惯 | mongosh + MongoTab |
 |---|---|
@@ -172,7 +224,7 @@ mt.help()
 
 ## 配置项
 
-`limit` 50 · `maxCol` 40 · `tz` `'UTC'` · `nullText` `'NULL'` · `missingText` 跟随语言 · `color` 自动 · `width` 自动 · `depth` 全部展开 · `lang` 自动
+`limit` 50 · `maxCol` 40 · `tz` `'UTC'` · `nullText` `'NULL'` · `missingText` 跟随语言 · `color` 自动 · `width` 自动 · `depth` 全部展开 · `lang` 自动 · `showCmd` true（DBA 命令先打印原生命令）
 
 `missingText` 不设时跟随语言显示 `(无字段)` / `(missing)`；自己设了就固定用设的值，例如 `mt.config({missingText: '-'})`，设成 `''` 则留空。
 
