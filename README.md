@@ -348,6 +348,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 | mt.locks({all})              | sys.innodb_lock_waits         | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                               |
 | mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                      |
 | mt.top({interval, ns})       | sys.schema_table_statistics   | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                                 |
+| mt.latency('db', {interval}) | sys.statement_analysis        | 读 / 写 / 命令的平均延迟（毫秒），整台和各集合；interval 采样秒数，0 = 启动以来；默认所有用户库                                                            |
 | mt.builds()                  | ALTER TABLE progress          | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                                                           |
 +------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
@@ -1149,6 +1150,50 @@ mt.top({ns: 'shop'})        // 只看 shop 库；'shop.orders' 只看这一个�
 - 这段时间里没有操作的集合不显示，按 `totalMs` 从大到小排。
 - `top` 是在操作**结束时**才记时间的：还在跑的长查询要等它结束才算进来，结束时一次记下全部耗时。所以上面 1 秒的采样里会出现 `shop.orders` 1 万多毫秒，那是一个刚跑完一批的长查询；还在跑的操作看 `mt.ps()`。
 - 有些操作不算读锁也不算写锁，所以 `readMs + writeMs` 可能小于 `totalMs`。
+
+### mt.latency()：读写延迟
+
+`mt.top()` 看的是各集合一共花了多少时间，`mt.latency()` 看的是平均每次操作多慢。
+
+```js
+mt.latency()                // 间隔 1 秒采样两次，看这 1 秒内的平均延迟
+mt.latency('shop')          // 只看一个库；默认所有用户库（跳过 admin、local、config）
+mt.latency({interval: 5})   // 间隔 5 秒
+mt.latency({interval: 0})   // 只取一次，看启动以来的平均值
+```
+
+上面几行是整台的情况（`serverStatus().opLatencies`）：`reads` / `writes` / `commands` / `transactions` 的平均延迟 `avgMs`，以及每秒次数 `ops/s`（启动以来时是总次数 `ops`）。下面是各集合（`$collStats` 的 `latencyStats`）：
+
+| 列 | 说明 |
+|---|---|
+| `ns` | 库.集合 |
+| `readOps` / `readMs` | 读的次数、平均延迟（毫秒） |
+| `writeOps` / `writeMs` | 写的次数、平均延迟 |
+| `cmdOps` / `cmdMs` | 其他命令的次数、平均延迟 |
+| `totalMs` | 这段时间里花的总时间，按它从大到小排 |
+
+```
+> mt.latency()
+-- db.serverStatus().opLatencies; every user db: each collection aggregate([{$collStats: {latencyStats: {}}}])，间隔 1 秒采样两次，显示这段时间内的平均延迟（毫秒）
+       reads.avgMs: 1.81
+       reads.ops/s: 78
+      writes.avgMs: 4.26
+      writes.ops/s: 48
+    commands.ops/s: 0
+transactions.ops/s: 0
++-------------+---------+--------+----------+---------+--------+-------+---------+
+| ns          | readOps | readMs | writeOps | writeMs | cmdOps | cmdMs | totalMs |
++-------------+---------+--------+----------+---------+--------+-------+---------+
+| shop.orders |      55 |   0.54 |       52 |    0.33 |      0 |       |      47 |
+| shop.users  |      25 |   0.18 |        0 |         |      0 |       |       5 |
++-------------+---------+--------+----------+---------+--------+-------+---------+
+2 rows in set
+```
+
+- 延迟是 mongod 处理请求的时间，不含网络往返。
+- 这段时间里没有操作的集合不显示。
+- `mt.latency()` 自己调用 `serverStatus`、`$collStats` 也会被 MongoDB 计数：采样时会先测出这些探测的次数和耗时，再从结果里减掉，所以安静的实例上看到的是 0，而不是自己的探测。
+- 要对每个集合各执行几次 `$collStats`，集合很多时会慢，可以指定一个库。
 
 ### mt.locks()：谁在等锁
 
