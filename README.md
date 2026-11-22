@@ -4,7 +4,7 @@
 [![license](https://img.shields.io/github/license/yinx0004/mongosh-table)](LICENSE)
 [![compat](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml/badge.svg)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
 [![mongosh](https://img.shields.io/badge/mongosh-1.x%20%7C%202.x-47A248?logo=mongodb&logoColor=white)](https://www.mongodb.com/docs/mongodb-shell/)
-[![MongoDB](https://img.shields.io/badge/MongoDB-4.4%20%7C%205.0%20%7C%206.0%20%7C%207.0%20%7C%208.0-47A248?logo=mongodb&logoColor=white)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
+[![MongoDB](https://img.shields.io/badge/MongoDB-4.0%20%7C%204.4%20%7C%205.0%20%7C%206.0%20%7C%207.0%20%7C%208.0-47A248?logo=mongodb&logoColor=white)](https://github.com/yinx0004/mongosh-table/actions/workflows/compat.yml)
 [![platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](#兼容性)
 [![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](mongotab.js)
 
@@ -19,7 +19,7 @@ MongoTab 在 mongosh 里把查询结果排成 MySQL 风格的表格 / `\G` 竖�
 
 ## 下载
 
-只有一个文件 `mongotab.js`，放到**运行 mongosh 的机器**上（你的电脑或跳板机），哪个目录都行。连接远程 MongoDB 时，服务器上不用放任何东西，见[连接远程 MongoDB](#连接远程-mongodb)。
+只有一个文件 `mongotab.js`，放到**运行 mongosh 的机器**上（你的电脑或跳板机），哪个目录都行。连接远程 MongoDB 时，服务器上不用放任何东西，见[连接远程 MongoDB](#连接远程-mongodb)。连 MongoDB 4.0 要用 mongosh 1.x，见 [MongoDB 4.0](#mongodb-40)。
 
 Linux / macOS：
 
@@ -182,10 +182,11 @@ mt.help()
 
 ## 兼容性
 
-每个 PR 和每次推送到 main 都会在 GitHub Actions 里跑 [test/compat.js](test/compat.js)，下面每个 MongoDB 版本和每个 mongosh 版本两两组合各跑一遍（共 10 组）：
+每个 PR 和每次推送到 main 都会在 GitHub Actions 里跑 [test/compat.js](test/compat.js)，下面每个 MongoDB 版本和每个 mongosh 版本两两组合各跑一遍（共 12 组）：
 
 - MongoDB：4.4、5.0、6.0、7.0、8.0（单节点副本集）
 - mongosh：1.8.0、2.x 最新版
+- MongoDB 4.0 只配 mongosh 1.x：1.8.0、1.10.6（mongosh 2.x 连不了 4.0）
 
 本地跑（需要 Docker）：
 
@@ -203,6 +204,25 @@ test/run.sh mongo:4.4 mongo:6.0.4
 ```bash
 mongosh --nodb test/format.js
 ```
+
+### MongoDB 4.0
+
+MongoDB 4.0 要用 **mongosh 1.x** 来连：
+
+- mongosh 2.x 最低要求 MongoDB 4.2，连 4.0 会报 `requires at least 8 (MongoDB 4.2)`。
+- MongoDB 4.x 自带的老 `mongo` 命令（提示符像 `rs0:PRIMARY>`）不是 mongosh，MongoTab 不支持，`load()` 会报错。
+
+mongosh 1.x 解压就能用，不需要 root，也不影响机器上原来的 `mongo`。以 Linux x64 为例（1.10.6 是 1.x 的最后一版）：
+
+```bash
+curl -fLO https://downloads.mongodb.com/compass/mongosh-1.10.6-linux-x64.tgz && tar xzf mongosh-1.10.6-linux-x64.tgz
+```
+
+```bash
+./mongosh-1.10.6-linux-x64/bin/mongosh "mongodb://user@host:27017/admin" /path/to/mongotab.js --shell
+```
+
+其他系统把链接里的 `linux-x64.tgz` 换成 `darwin-arm64.zip`（Apple 芯片的 Mac）、`darwin-x64.zip`（Intel Mac）或 `win32-x64.zip`（Windows）。
 
 ## License
 

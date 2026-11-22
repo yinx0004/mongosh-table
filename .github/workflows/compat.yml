@@ -13,14 +13,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mongodb: ['4.4', '5.0', '6.0', '7.0', '8.0']
+        mongodb: ['4.0', '4.4', '5.0', '6.0', '7.0', '8.0']
         mongosh: ['1.x', '2.x']
+        exclude:
+          # mongosh 2.x needs MongoDB 4.2+.
+          - mongodb: '4.0'
+            mongosh: '2.x'
         include:
           # The client comes from a mongo image that bundles that mongosh version.
           - mongosh: '1.x'
             client: mongo:6.0.4   # mongosh 1.8.0
           - mongosh: '2.x'
             client: mongo:8.0     # newest mongosh 2.x
+          # The last 1.x release, the one the README suggests for MongoDB 4.0.
+          - mongodb: '4.0'
+            mongosh: '1.10.6'
+            client: mongo:7.0.0   # mongosh 1.10.6
     steps:
       - uses: actions/checkout@v4
       - name: Run test/compat.js
