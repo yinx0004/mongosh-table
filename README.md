@@ -102,6 +102,8 @@ mongosh "mongodb://user@db.example.com:27017/admin" ~/mongotab.js --shell
 
 ## 用法
 
+先看速查，细节见后面各节。
+
 ```js
 t(db.orders.find({status: 'PAID'}))          // 表格，太宽自动改竖排
 g(db.orders.findOne())                       // 竖排，相当于 \G
@@ -111,44 +113,276 @@ t(db.orders.find(), {limit: 200})                // 默认最多 50 行
 t(db.orders.find(), {tz: '+08:00'})              // 本次按东八区显示时间
 mt.csv(db.orders.find(), 'orderNo,amount')      // 输出 CSV，贴进 Excel
 mt.config({tz: 'Asia/Shanghai', maxCol: 60})    // 改本会话默认值
-mt.ps() / mt.repl() / mt.colls() ...            // DBA 常用命令，见下文
-mt.help()
+mt.ps() / mt.slow() / mt.colls() ...            // DBA 常用命令，见下一节
+mt.help()                                       // 帮助；t() / g() 不带参数也是帮助
+```
+
+下面的示例都来自一个 3 节点副本集（`db1` / `db2` / `db3`），`shop.orders` 里有 2 万条订单，输出是真实跑出来的。
+
+### 表格和竖排：t() / g()
+
+```js
+t(x)                 // 表格
+t(x, 'a,b,c')        // 第二个参数是字符串：选列
+t(x, {limit: 200})   // 第二个参数是对象：选项，见“选项一览”
+g(x)                 // 竖排，参数和 t() 一样
+```
+
+`x` 可以是：
+
+| 传入 | 例子 | 怎么显示 |
+|---|---|---|
+| 游标 | `find()`、`aggregate()`，可以接 `.sort()` / `.limit()` | 每个文档一行，最多 `limit` 行（默认 50） |
+| 数组 | `toArray()`、`getIndexes()`、`currentOp().inprog`、`rs.status().members` | 每个元素一行 |
+| 单个文档 | `findOne()`、`rs.status()`、`serverStatus()`、`db.stats()` | 竖排 `字段: 值`；里面的文档数组单独成子表 |
+| 其他值 | 数字、字符串 | 原样打印 |
+
+- **表格还是竖排**：`t()` 先排成表格，比终端宽就自动改成竖排；`{table: true}` 强制表格（太宽时终端会折行）。`g()` 总是竖排，和 `t(x, {vertical: true})` 一样。
+- **嵌套文档**展开成 `a.b` 形式的列，例如 `customer.name`；`{depth: 1}` 只展开一层，更深的整个放进一格，显示成 `{city: 上海, zip: 200000}` 这样。
+- **普通数组**显示成 `[a, b]`，文档数组显示成 `[{...}, {...}]`；单个文档里的文档数组（如 `rs.status()` 的 `members`）会单独排成子表。
+- **列的顺序**按字段第一次出现的顺序；有的文档没有某个字段时显示 `(无字段)`，见[显示约定](#显示约定)。
+- 数字右对齐；中文按 2 列宽对齐；超过 `maxCol`（默认 40）的单元格截断成 `...`，竖排不截断。
+
+```
+> t(db.orders.find({status: 'PAID'}).sort({_id: 1}).limit(3), 'orderNo,customer,amount,createdAt')
++---------------+---------------+--------------+--------+---------------------+
+| orderNo       | customer.name | customer.vip | amount | createdAt           |
++---------------+---------------+--------------+--------+---------------------+
+| SO20240101001 | Alice         | false        |    1.5 | 2024-01-01 08:31:00 |
+| SO20240101002 | Bob           | false        |    2.5 | 2024-01-01 08:32:00 |
+| SO20240101004 | 张三          | false        |    4.5 | 2024-01-01 08:34:00 |
++---------------+---------------+--------------+--------+---------------------+
+3 rows in set
 ```
 
 ```
-+---------------+---------------+---------+---------------------+
-| orderNo       | customer.name | amount  | createdAt           |
-+---------------+---------------+---------+---------------------+
-| SO20240101001 | 张三          | 1299.50 | 2024-01-01 16:30:00 |
-| SO20240101002 | Alice         |   88.00 | 2024-01-01 17:00:00 |
-+---------------+---------------+---------+---------------------+
+> g(db.orders.findOne({orderNo: 'SO20240101001'}))
+          _id: 6b02a25049e5a32e9040733f
+      orderNo: SO20240101001
+       status: PAID
+       amount: 1.5
+customer.name: Alice
+ customer.vip: false
+    createdAt: 2024-01-01 08:31:00
+       coupon: 
+       remark: NULL
+
+── items (1) ──
+*************************** 1. row ***************************
+sku: A1
+  n: 2
+1 row in set
+```
+
+```
+> t(db.orders.aggregate([{$group: {_id: '$status', n: {$sum: 1}, total: {$sum: '$amount'}}}, {$sort: {_id: 1}}]))
++------+-------+-----------+
+| _id  | n     | total     |
++------+-------+-----------+
+| NEW  |  6667 | 1666666.5 |
+| PAID | 13333 | 3333333.5 |
++------+-------+-----------+
 2 rows in set
 ```
 
-### DBA 常用命令
-
-从 v0.3.0 起，`mt` 下面带了一组只读的快捷命令，对应 MySQL 的 `SHOW ...`：
+### 选列和排除列
 
 ```js
-mt.cmds()                     // 列出全部命令
-mt.ps()                       // SHOW PROCESSLIST：正在执行的操作，耗时长的在前
-mt.ps({secs: 5})              // 只看运行超过 5 秒的
-mt.ps({ns: 'shop.orders'})    // 只看某个库或集合
-mt.ps({all: true})            // 含空闲连接和内部线程
-mt.ps({sort: 'asc'})          // 运行最短的在前；'opid' 按 opid，也可以给排序文档如 {ns: 1, secs: -1}
-mt.slow()                     // 慢查询日志：读 system.profile，新的在前；默认当前库，也可以 mt.slow('shop')
-mt.slow({ms: 500, ns: 'orders'})  // 只看超过 500 毫秒的、某个集合的
-mt.slow({sort: 'ms'})         // 最慢的在前；'asc' 最早的在前，也可以给排序文档如 {docsExamined: -1}
-mt.top()                      // 各集合读写耗时（毫秒），间隔 1 秒采样，忙的在前；类似 mongotop
-mt.top({interval: 0})         // 启动以来累计
-mt.repl()                     // SHOW SLAVE STATUS：成员状态、复制延迟（秒）、同步源
-mt.dbs()                      // SHOW DATABASES：各库占用空间
-mt.colls('shop')              // SHOW TABLE STATUS：各集合文档数、数据和索引大小，大的在前；不写库名就是当前库
-mt.idx('orders')              // SHOW INDEX：索引的键、大小、使用次数；也可以写 'shop.orders' 或 db.orders
-mt.conns()                    // 按客户端 IP 统计连接数
-mt.oplog()                    // SHOW BINARY LOGS：oplog 大小和能覆盖多长时间
-mt.status()                   // SHOW GLOBAL STATUS：版本、角色、ops/s（间隔 1 秒采样）、连接、缓存
+t(x, 'orderNo,customer,amount')            // 字符串，逗号分隔
+t(x, ['orderNo', 'customer', 'amount'])    // 数组也行
+t(x, {cols: 'orderNo,amount', limit: 10})  // 和其他选项一起时写在 cols 里
+t(x, {exclude: '_id,items,raw.*'})         // 排除列
 ```
+
+- 列按你写的顺序显示。
+- 写 `customer` 等于 `customer` 加上 `customer.*` 全部子字段。
+- 支持通配：`*` 任意多个字符，`?` 一个字符，例如 `'*.name'`、`'customer.*'`、`'item?'`。
+- `cols` 和 `exclude` 可以一起用：先选，再排除。
+- 单个文档里，选列也能指到子表：`'members.name'` 只显示子表 `members` 的 `name` 列；不写 `members` 相关的列，子表就不显示。
+
+```
+> t(db.orders.find().sort({_id: 1}).limit(2), {exclude: '_id,items'})
++---------------+--------+--------+---------------+--------------+---------------------+----------+----------+----------+
+| orderNo       | status | amount | customer.name | customer.vip | createdAt           | level    | coupon   | remark   |
++---------------+--------+--------+---------------+--------------+---------------------+----------+----------+----------+
+| SO20240101000 | NEW    |    0.5 | 张三          | true         | 2024-01-01 08:30:00 | gold     | (无字段) | (无字段) |
+| SO20240101001 | PAID   |    1.5 | Alice         | false        | 2024-01-01 08:31:00 | (无字段) |          | NULL     |
++---------------+--------+--------+---------------+--------------+---------------------+----------+----------+----------+
+2 rows in set
+```
+
+```
+> t(rs.status(), 'set,myState,members.name,members.stateStr,members.health')
+    set: rs0
+myState: 1
+
+── members (3) ──
++-----------+-----------+--------+
+| name      | stateStr  | health |
++-----------+-----------+--------+
+| db1:27017 | PRIMARY   |      1 |
+| db2:27017 | SECONDARY |      1 |
+| db3:27017 | SECONDARY |      1 |
++-----------+-----------+--------+
+3 rows in set
+```
+
+### 行数：limit
+
+- 游标默认最多显示 50 行。还有更多时，页脚会提示怎么看更多：
+
+```
+> t(db.orders.find().sort({_id: 1}), {cols: 'orderNo,status', limit: 3})
++---------------+--------+
+| orderNo       | status |
++---------------+--------+
+| SO20240101000 | NEW    |
+| SO20240101001 | PAID   |
+| SO20240101002 | PAID   |
++---------------+--------+
+3 rows in set  (只显示前 3 行，还有更多；用 t(x, {limit: 200}) 看更多)
+```
+
+- `{limit: 0}` 不限行数；`mt.config({limit: 200})` 改本会话默认值。
+- 数组也按 `limit` 截断，页脚显示“共 N 行，只显示前 M 行”。
+- 想在数据库端就少取，直接在游标上 `.limit(n)`，比 `{limit: n}` 省流量。
+
+### 时间和时区
+
+日期默认按 UTC 显示成 `2024-01-01 08:30:00`，有毫秒时显示 `.123`。
+
+```js
+t(x, {tz: '+08:00'})          // 本次用东八区
+t(x, {tz: 'Asia/Shanghai'})   // IANA 时区名（老的 mongo shell 不支持，用偏移）
+t(x, {tz: 'local'})           // 运行 mongosh 那台机器的时区
+mt.config({tz: '+08:00'})     // 本会话默认
+```
+
+也可以在启动前设环境变量 `MONGOTAB_TZ=+08:00`，见[配置项](#配置项)。
+
+```
+> t(db.orders.find().sort({_id: 1}).limit(2), {cols: 'orderNo,createdAt', tz: '+08:00'})
++---------------+---------------------+
+| orderNo       | createdAt           |
++---------------+---------------------+
+| SO20240101000 | 2024-01-01 16:30:00 |
+| SO20240101001 | 2024-01-01 16:31:00 |
++---------------+---------------------+
+2 rows in set
+```
+
+### 导出 CSV：mt.csv()
+
+```js
+mt.csv(db.orders.find({status: 'PAID'}), 'orderNo,customer.name,amount')
+```
+
+- 参数和 `t()` 一样：选列、排除列、`limit`、`tz` 都能用。游标最多取 `limit` 行，数组全部输出。
+- 含逗号、引号、换行的值按 CSV 规则加引号；不输出颜色和页脚，可以直接复制进 Excel。
+- `NULL`、空字符串、`(无字段)` 的约定和表格相同。
+
+```
+> mt.csv(db.orders.find().sort({_id: 1}).limit(3), 'orderNo,customer.name,amount,remark')
+orderNo,customer.name,amount,remark
+SO20240101000,张三,0.5,(无字段)
+SO20240101001,Alice,1.5,NULL
+SO20240101002,Bob,2.5,(无字段)
+```
+
+### 选项一览
+
+每个选项都可以在单次调用时传（`t(x, {maxCol: 80})`），也可以用 `mt.config()` 改成本会话默认值。
+
+| 选项 | 默认 | 说明 |
+|---|---|---|
+| `cols` | 全部 | 只看这些列，见“选列和排除列” |
+| `exclude` | 无 | 排除这些列 |
+| `limit` | `50` | 游标 / 数组最多显示几行，`0` 不限 |
+| `table` | `false` | 强制表格，不自动改竖排 |
+| `vertical` | `false` | 强制竖排，`g()` 就是 `vertical: true` |
+| `tz` | `'UTC'` | 时区：`'UTC'`、`'local'`、`'+08:00'`、`'Asia/Shanghai'` |
+| `maxCol` | `40` | 表格每列最多显示几个字符宽，超出截断成 `...`；`0` 不截断 |
+| `width` | 自动 | 终端宽度，超过就改竖排；检测不到时按 160 |
+| `depth` | 全部 | 嵌套文档展开几层 |
+| `color` | 自动 | `true` / `false`：表头加粗、`(无字段)` 变暗等；不是终端时自动关闭 |
+| `nullText` | `'NULL'` | 值为 null 时显示什么 |
+| `missingText` | 跟随语言 | 没有这个字段时显示什么，默认 `(无字段)` / `(missing)` |
+| `lang` | 自动 | `'zh'` / `'en'`：提示和帮助的语言 |
+| `showCmd` | `true` | DBA 命令先打印等价的原生命令 |
+
+DBA 命令另有自己的选项（`secs`、`ns`、`sort`、`interval`...），见下一节各命令。
+
+### 会话默认值：mt.config()
+
+```js
+mt.config()                                  // 查看当前设置
+mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
+```
+
+```
+> mt.config()
+{"limit":50,"maxCol":40,"tz":"UTC","nullText":"NULL","missingText":null,"color":null,"width":200,"depth":null,"showCmd":true,"lang":"zh"}
+```
+
+- 设置只在当前 mongosh 会话里有效，退出就没了；重新 `load()` 也会回到默认值。
+- 想每次都生效，用环境变量 `MONGOTAB_TZ`、`MONGOTAB_LANG`，见[配置项](#配置项)。
+- `t`、`g`、`mt` 这几个名字已经被别的脚本占用时，MongoTab 不会覆盖，加载时会提示；这时用 `mongotab.table()`、`mongotab.vertical()`、`mongotab.ps()` 等，用法完全一样。
+
+## DBA 常用命令
+
+`mt` 下面带了一组只读的快捷命令，对应 MySQL 的 `SHOW ...`。`mt.cmds()` 列出全部：
+
+```
+> mt.cmds()
++------------------------------+-----------------------------+---------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                       | description                                                                                                                     |
++------------------------------+-----------------------------+---------------------------------------------------------------------------------------------------------------------------------+
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST            | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                 |
+| mt.slow({ms, ns, sort})      | mysql.slow_log              | 慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前 |
+| mt.top({interval, ns})       | sys.schema_table_statistics | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                      |
+| mt.repl()                    | SHOW SLAVE STATUS           | 副本集成员状态、复制延迟（秒）、同步源                                                                                          |
+| mt.dbs()                     | SHOW DATABASES              | 各库占用的磁盘空间                                                                                                              |
+| mt.colls('db')               | SHOW TABLE STATUS           | 各集合文档数、数据和索引大小，大的在前；默认当前库                                                                              |
+| mt.idx('coll')               | SHOW INDEX FROM t           | 索引的键、大小、使用次数和选项                                                                                                  |
+| mt.conns()                   | PROCESSLIST GROUP BY host   | 按客户端 IP 统计连接数                                                                                                          |
+| mt.oplog()                   | SHOW BINARY LOGS            | oplog 大小和能覆盖多长时间                                                                                                      |
+| mt.status({interval})        | SHOW GLOBAL STATUS          | 版本、角色、ops/s、连接、缓存等关键指标                                                                                         |
++------------------------------+-----------------------------+---------------------------------------------------------------------------------------------------------------------------------+
+都可以加 t() 的选项，如 {cols: ...}、{vertical: true}；mt.config({showCmd: false}) 不打印原生命令
+```
+
+所有命令的共同点：
+
+- **先打印原生命令**：第一行 `-- ...`（终端里是灰色）是它实际执行的 MongoDB 命令，方便复制、核对；`mt.config({showCmd: false})` 关掉。
+- **选项和 `t()` 通用**：`cols`、`exclude`、`limit`、`vertical`、`table`、`tz` 都能用，例如 `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`、`mt.idx('orders', {vertical: true})`。
+- **只读**：不会改任何设置，`mt.slow()` 也不会打开 profiler。
+- **权限**：需要监控类权限，如 `clusterMonitor` 角色。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()`、在 mongos 上执行 `mt.slow()` / `mt.top()` 时，只打印一行说明，不抛异常。
+- **版本**：老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过；分片集群（mongos）还没测过。
+
+### mt.ps()：正在执行的操作
+
+相当于 `SHOW PROCESSLIST`，执行的是 `db.adminCommand({currentOp: 1, active: true})`。
+
+| 选项 | 说明 |
+|---|---|
+| `secs` | 只看运行超过这么多秒的，例如 `{secs: 5}` |
+| `ns` | 只看某个库或集合：`'shop'` 匹配 `shop` 下所有集合，`'shop.orders'` 只看这一个 |
+| `all` | `true` 时改用 `$all: true`，包括空闲连接和内部线程 |
+| `sort` | `'desc'`（默认，运行最久的在前）、`'asc'`（最短的在前）、`'opid'`，或按列名写的排序文档如 `{ns: 1, secs: -1}`；相同时再按运行时间从长到短 |
+
+| 列 | 说明 |
+|---|---|
+| `opid` | 操作 ID，`db.killOp(opid)` 用的就是它 |
+| `secs` | 已经运行的秒数 |
+| `op` | `query`、`getmore`、`insert`、`update`、`remove`、`command`；空闲连接显示 `idle` |
+| `ns` | 库.集合 |
+| `client` | 客户端 IP:端口 |
+| `app` | 客户端的 appName，如 `mongosh 2.14.2`、`OplogFetcher` |
+| `lock` | 在等锁时显示 `WAIT` |
+| `plan` | 执行计划摘要，`COLLSCAN` 是全表扫描 |
+| `command` | 命令内容，去掉了 `lsid`、`$clusterTime` 这类驱动加的字段 |
+
+默认不显示：空闲连接、没有客户端的内部线程、驱动的心跳长轮询（awaitable `hello`），以及 `mt.ps()` 自己这条查询。
 
 ```
 > mt.ps()
@@ -156,74 +390,411 @@ mt.status()                   // SHOW GLOBAL STATUS：版本、角色、ops/s（
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
 | opid | secs | op      | ns             | client              | app            | lock | plan                                | command                                  |
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
-| 1625 |    9 | query   | shop.orders    | 192.168.147.5:47218 | mongosh 2.14.2 |      | IXSCAN { status: 1, createdAt: -1 } | {find: orders, filter: {$where: sleep... |
-| 1791 |    0 | getmore | local.oplog.rs | 192.168.147.3:41478 | OplogFetcher   |      | COLLSCAN                            | {getMore: 7311352941832819751, collec... |
-| 1790 |    0 | getmore | local.oplog.rs | 192.168.147.4:55718 | OplogFetcher   |      | COLLSCAN                            | {getMore: 8081156913663858071, collec... |
+| 1852 |    9 | query   | shop.orders    | 192.168.117.5:45392 | mongosh 2.14.2 |      | IXSCAN { status: 1, createdAt: -1 } | {find: orders, filter: {$where: sleep... |
+| 2026 |    0 | getmore | local.oplog.rs | 192.168.117.4:38358 | OplogFetcher   |      | COLLSCAN                            | {getMore: 4128049805525302686, collec... |
+| 2027 |    0 | getmore | local.oplog.rs | 192.168.117.3:40114 | OplogFetcher   |      | COLLSCAN                            | {getMore: 4195733008104728874, collec... |
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
 3 rows in set
-
-> mt.repl()
--- rs.status()
- set: rs0
-date: 2026-11-22 05:02:46.493
-+-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
-| name      | state     | health | lagSecs | optime              | syncSource | pingMs | lastHeartbeat           | self |
-+-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
-| db1:27017 | PRIMARY   |      1 |       0 | 2026-11-22 05:02:36 |            |        |                         | *    |
-| db2:27017 | SECONDARY |      1 |       0 | 2026-11-22 05:02:36 | db1:27017  |      0 | 2026-11-22 05:02:45.284 |      |
-| db3:27017 | SECONDARY |      1 |       0 | 2026-11-22 05:02:36 | db1:27017  |      0 | 2026-11-22 05:02:45.284 |      |
-+-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
-3 rows in set
 ```
 
-- 每条命令先打印对应的原生命令（`-- ...` 那一行，终端里是灰色），方便复制、核对。不想看用 `mt.config({showCmd: false})` 关掉。
-- 选项和 `t()` 通用，例如 `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`、`mt.colls('shop', {limit: 200})`、`mt.idx('orders', {vertical: true})`。
-- `mt.ps()` 默认不显示空闲连接、内部线程、驱动的心跳长轮询（awaitable hello）和这条查询自己。`sort` 是在 shell 里对过滤后的结果排序，排序文档里写的是输出的列名（`opid`、`secs`、`op`、`ns`、`client`、`app`...），相同时再按运行时间从长到短。
-- `mt.slow()` 只读 `system.profile`，不会改 profiler 设置。profiler 默认是关的，没开时会提示用 `db.setProfilingLevel(1, {slowms: 100})` 打开（每个库单独设置）。
-- `mt.slow()`、`mt.top()` 要连到 mongod 上执行，mongos 上没有这些数据。
-- 这些命令需要监控类权限（如 `clusterMonitor` 角色）。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()` 时，只打印一行说明，不抛异常。
-- 老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过；分片集群（mongos）还没测过。
+```
+> mt.ps({all: true, cols: 'opid,secs,op,ns,client,app', limit: 5})
+-- db.adminCommand({currentOp: 1, $all: true})
++------+------+---------+-------------+---------------------+----------------+
+| opid | secs | op      | ns          | client              | app            |
++------+------+---------+-------------+---------------------+----------------+
+| 1852 |    9 | query   | shop.orders | 192.168.117.5:45392 | mongosh 2.14.2 |
+| 1864 |    8 | command | admin.$cmd  | 192.168.117.5:45388 | mongosh 2.14.2 |
+|      |    0 | idle    |             | 192.168.117.3:40118 |                |
+|      |    0 | idle    |             | 192.168.117.5:45414 | mongosh 2.14.2 |
+|      |    0 | idle    |             | 192.168.117.4:38384 |                |
++------+------+---------+-------------+---------------------+----------------+
+5 rows in set  (共 78 行，只显示前 5 行)
+```
 
-#### mt.slow() 怎么查的
+### mt.slow()：慢查询
 
-读的是 profiler 写进当前库 `system.profile` 集合的记录，相当于：
+相当于 MySQL 的慢查询日志，读的是 profiler 写进 `system.profile` 集合的记录。
 
 ```js
-db.getProfilingStatus()                        // 表头的 level / slowms / sampleRate
-db.system.profile.find({...}).sort({ts: -1})   // 默认新的在前，sort 选项可改
+mt.slow()                           // 当前库
+mt.slow('shop')                     // 指定库，也可以传 db 对象：mt.slow(db.getSiblingDB('shop'))
+mt.slow({ms: 500, ns: 'orders'})    // 只看超过 500 毫秒的、orders 集合的
+mt.slow('shop', {sort: 'ms'})       // 最慢的在前
 ```
 
-- profiler 按库开关：`level` 0 关闭，1 只记超过 `slowms` 的操作，2 全记；`sampleRate` 是抽样比例。`mt.slow()` 只读，不改这些设置。
-- 过滤条件：`ms` 变成 `{millis: {$gte: ms}}`；`ns` 写集合名（`'orders'`）或完整的 `'库.集合'`。另外总会排除读 `system.profile` 自己的操作和 `profile` 命令，否则在 level 2 下会看到 `mt.slow()` 自己。
-- 排序 `sort`：默认 `'desc'` 即 `{ts: -1}`，最新的在前；`'asc'` 即 `{ts: 1}`，最早的在前；`'ms'` 即 `{millis: -1, ts: -1}`，最慢的在前；也可以直接给排序文档，如 `{docsExamined: -1}`。
-- 先用 `count` 数出总共有多少条，再按 `sort` 排好取前 `limit` 条（默认 50，`{limit: 0}` 不限），超出时页脚显示“共 N 行，只显示前 50 行”。所以默认拿到的是最近的 50 条，`{sort: 'ms'}` 拿到的是最慢的 50 条。
-- 每行：`ts` 时间、`ms` 耗时（`millis`）、`op`、`ns`、`plan`（`planSummary`，如 `COLLSCAN`、`IXSCAN {...}`）、`keysExamined` / `docsExamined` 扫描的索引键和文档数、`nreturned` 返回条数、`client`、`user`、`command`（去掉 `lsid`、`$clusterTime` 这类驱动加的字段）。没开认证时 `user` 全空，这一列不显示。
+| 选项 | 说明 |
+|---|---|
+| `ms` | 只看耗时不少于这么多毫秒的，变成 `{millis: {$gte: ms}}` |
+| `ns` | 集合名（`'orders'`）或完整的 `'库.集合'` |
+| `sort` | `'desc'`（默认，`{ts: -1}` 最新的在前）、`'asc'`（`{ts: 1}` 最早的在前）、`'ms'`（`{millis: -1, ts: -1}` 最慢的在前），或排序文档如 `{docsExamined: -1}` |
+
+表头显示 profiler 的设置：
+
+- profiler 按库开关：`level` 0 关闭，1 只记超过 `slowms` 毫秒的操作，2 全记；`sampleRate` 是抽样比例。
+- 默认是关的。没开时 `mt.slow()` 会提示用 `db.setProfilingLevel(1, {slowms: 100})` 打开，要在每个库里分别执行。
+
+| 列 | 说明 |
+|---|---|
+| `ts` | 操作结束的时间 |
+| `ms` | 耗时（毫秒），即 `millis` |
+| `op` | `query`、`update`、`command`... |
+| `ns` | 库.集合 |
+| `plan` | 执行计划摘要，如 `COLLSCAN`、`IXSCAN { status: 1 }` |
+| `keysExamined` / `docsExamined` | 扫描了多少索引键、多少文档 |
+| `nreturned` | 返回了多少条 |
+| `client` / `user` | 客户端 IP、用户；没开认证时 `user` 全空，这一列不显示 |
+| `command` | 命令内容，去掉了驱动加的字段 |
+
+```
+> mt.slow()
+-- db.getSiblingDB('shop').system.profile.find({}).sort({ts: -1})
+        db: shop
+     level: 1
+    slowms: 20
+sampleRate: 1
++-------------------------+-----+--------+-------------+-------------------------------------+--------------+--------------+-----------+---------------+------------------------------------------+
+| ts                      | ms  | op     | ns          | plan                                | keysExamined | docsExamined | nreturned | client        | command                                  |
++-------------------------+-----+--------+-------------+-------------------------------------+--------------+--------------+-----------+---------------+------------------------------------------+
+| 2026-11-22 08:05:37.638 |  44 | update | shop.orders | COLLSCAN                            |            0 |        20000 |           | 192.168.117.5 | {q: {customer.vip: true}, u: {$set: {... |
+| 2026-11-22 08:05:37.590 | 182 | query  | shop.orders | IXSCAN { status: 1, createdAt: -1 } |           80 |           80 |        80 | 192.168.117.5 | {find: orders, filter: {$where: sleep... |
++-------------------------+-----+--------+-------------+-------------------------------------+--------------+--------------+-----------+---------------+------------------------------------------+
+2 rows in set
+```
+
+```
+> mt.slow({sort: 'ms', limit: 2, vertical: true})
+-- db.getSiblingDB('shop').system.profile.find({}).sort({millis: -1, ts: -1})
+        db: shop
+     level: 1
+    slowms: 20
+sampleRate: 1
+*************************** 1. row ***************************
+          ts: 2026-11-22 08:05:37.590
+          ms: 182
+          op: query
+          ns: shop.orders
+        plan: IXSCAN { status: 1, createdAt: -1 }
+keysExamined: 80
+docsExamined: 80
+   nreturned: 80
+      client: 192.168.117.5
+     command: {find: orders, filter: {$where: sleep(1) || true, status: NEW}, limit: 80}
+*************************** 2. row ***************************
+          ts: 2026-11-22 08:05:37.638
+          ms: 44
+          op: update
+          ns: shop.orders
+        plan: COLLSCAN
+keysExamined: 0
+docsExamined: 20000
+   nreturned: 
+      client: 192.168.117.5
+     command: {q: {customer.vip: true}, u: {$set: {level: gold}}, multi: true, upsert: false}
+2 rows in set
+```
+
+```
+> mt.slow('crm')
+-- db.getSiblingDB('crm').system.profile.find({}).sort({ts: -1})
+        db: crm
+     level: 0
+    slowms: 20
+sampleRate: 1
+Empty set
+没有开 profiler（level 0），可用 db.setProfilingLevel(1, {slowms: 100}) 打开
+```
+
+怎么查的：
+
+- 先执行 `profile: -1` 拿到表头的设置（和 `db.getProfilingStatus()` 一样），再用 `count` 数出符合条件的总数，然后 `find(条件).sort(sort).limit(limit)`。所以默认拿到的是最近的 50 条，`{sort: 'ms'}` 拿到的是最慢的 50 条；总数比 `limit` 多时页脚会显示“共 N 行”。
+- 总会排除读 `system.profile` 本身的操作和 `profile` 命令，否则在 level 2 下会看到 `mt.slow()` 自己。
 - `docsExamined` 远大于 `nreturned`、`plan` 是 `COLLSCAN` 的，通常就是缺索引。
 - `system.profile` 是个 1 MB 的 capped 集合，满了会覆盖最早的记录，所以只能看到最近一段时间的。
 
-#### mt.top() 怎么算的
+### mt.top()：各集合读写耗时
 
-和 mongotop 一样，用的是 `db.adminCommand({top: 1})`。mongod 按集合累计了启动以来的耗时（微秒）和次数：
+类似 mongotop，看哪些集合最忙。
 
 ```js
-totals: {
-  "shop.orders": {
-    total:     { time: 244000, count: 22 },   // 所有操作
-    readLock:  { time: 2000,   count: 5 },    // 读
-    writeLock: { time: 242000, count: 17 },   // 写
-    ...
-  },
-  ...
-}
+mt.top()                    // 间隔 1 秒采样两次，看这 1 秒内的耗时
+mt.top({interval: 5})       // 间隔 5 秒
+mt.top({interval: 0})       // 只取一次，看启动以来的累计值
+mt.top({ns: 'shop'})        // 只看 shop 库；'shop.orders' 只看这一个集合
 ```
 
-- 默认取两次，中间 `sleep` 1 秒（`interval` 可改），两次相减就是这 1 秒内每个集合花的时间；`{interval: 0}` 只取一次，看启动以来的累计值。
-- 每行：`totalMs`、`readMs`、`writeMs` 分别来自 `total`、`readLock`、`writeLock` 的 `time`（换成毫秒，取整），`ops` 来自 `total.count`。
+| 列 | 说明 |
+|---|---|
+| `ns` | 库.集合 |
+| `totalMs` | 这段时间里所有操作的耗时（毫秒） |
+| `readMs` / `writeMs` | 其中读锁、写锁的耗时 |
+| `ops` | 操作次数 |
+
+```
+> mt.top()
+-- db.adminCommand({top: 1})，间隔 1 秒采样两次，显示这段时间内的耗时（毫秒）
++----------------+---------+--------+---------+-----+
+| ns             | totalMs | readMs | writeMs | ops |
++----------------+---------+--------+---------+-----+
+| shop.orders    |   10318 |  10318 |       0 |   1 |
+| local.oplog.rs |       1 |      1 |       0 |   2 |
++----------------+---------+--------+---------+-----+
+2 rows in set
+```
+
+```
+> mt.top({interval: 0, ns: 'shop'})
+-- db.adminCommand({top: 1})，启动以来累计（毫秒）
++---------------------+---------+--------+---------+-----+
+| ns                  | totalMs | readMs | writeMs | ops |
++---------------------+---------+--------+---------+-----+
+| shop.orders         |   10869 |  10511 |     359 |  49 |
+| shop.users          |       8 |      0 |       8 |   1 |
+| shop.system.profile |       1 |      1 |       0 |   4 |
+| shop.system.js      |       0 |      0 |       0 |   4 |
++---------------------+---------+--------+---------+-----+
+4 rows in set
+```
+
+怎么算的：
+
+- 执行的是 `db.adminCommand({top: 1})`。mongod 按集合累计了启动以来的耗时（微秒）和次数：
+
+  ```js
+  totals: {
+    "shop.orders": {
+      total:     { time: 244000, count: 22 },   // 所有操作
+      readLock:  { time: 2000,   count: 5 },    // 读
+      writeLock: { time: 242000, count: 17 },   // 写
+      ...
+    },
+    ...
+  }
+  ```
+
+- 默认取两次，中间 `sleep` 1 秒，两次相减就是这 1 秒内每个集合花的时间；`totalMs`、`readMs`、`writeMs` 分别来自 `total`、`readLock`、`writeLock` 的 `time`（换成毫秒，取整），`ops` 来自 `total.count`。
 - 这段时间里没有操作的集合不显示，按 `totalMs` 从大到小排。
-- `top` 是在操作**结束时**才记时间的：还在跑的长查询要等它结束才算进来，这种看 `mt.ps()`。
+- `top` 是在操作**结束时**才记时间的：还在跑的长查询要等它结束才算进来，结束时一次记下全部耗时。所以上面 1 秒的采样里会出现 `shop.orders` 1 万多毫秒，那是一个刚跑完一批的长查询；还在跑的操作看 `mt.ps()`。
 - 有些操作不算读锁也不算写锁，所以 `readMs + writeMs` 可能小于 `totalMs`。
 
-#### 也可以直接套原生命令
+### mt.repl()：副本集状态
+
+相当于 `SHOW SLAVE STATUS`，执行的是 `rs.status()`。只能在副本集成员上执行。
+
+| 列 | 说明 |
+|---|---|
+| `name` | 成员地址 |
+| `state` | `PRIMARY`、`SECONDARY`、`ARBITER`、`RECOVERING`... |
+| `health` | 1 正常，0 连不上 |
+| `lagSecs` | 复制延迟（秒）：主节点的 optime 减去这个成员的；没有主节点时和 optime 最新的成员比 |
+| `optime` | 这个成员最后应用的操作时间 |
+| `syncSource` | 从哪个成员同步 |
+| `pingMs` | 心跳往返时间 |
+| `lastHeartbeat` | 最后一次收到心跳的时间 |
+| `self` | `*` 是当前连接的成员 |
+
+```
+> mt.repl()
+-- rs.status()
+ set: rs0
+date: 2026-11-22 08:05:48.819
++-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
+| name      | state     | health | lagSecs | optime              | syncSource | pingMs | lastHeartbeat           | self |
++-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
+| db1:27017 | PRIMARY   |      1 |       0 | 2026-11-22 08:05:37 |            |        |                         | *    |
+| db2:27017 | SECONDARY |      1 |       0 | 2026-11-22 08:05:37 | db1:27017  |      0 | 2026-11-22 08:05:48.320 |      |
+| db3:27017 | SECONDARY |      1 |       0 | 2026-11-22 08:05:37 | db1:27017  |      0 | 2026-11-22 08:05:48.321 |      |
++-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
+3 rows in set
+```
+
+### mt.dbs()：各库大小
+
+相当于 `SHOW DATABASES`，执行的是 `listDatabases`，按库名排序，最后一行是合计。`size` 是磁盘占用（`sizeOnDisk`）。
+
+```
+> mt.dbs()
+-- db.adminCommand({listDatabases: 1})
++--------+----------+-------+
+| name   | size     | empty |
++--------+----------+-------+
+| admin  |  80.0 KB | false |
+| config | 168.0 KB | false |
+| crm    |  40.0 KB | false |
+| local  |   1.8 MB | false |
+| shop   |   2.2 MB | false |
++--------+----------+-------+
+5 rows in set
+合计 4.2 MB
+```
+
+### mt.colls()：各集合大小
+
+相当于 `SHOW TABLE STATUS`。
+
+```js
+mt.colls()          // 当前库
+mt.colls('shop')    // 指定库，也可以传 db 对象
+```
+
+对每个集合执行 `$collStats`（视图跳过），按 `storage + indexSize` 从大到小排。
+
+| 列 | 说明 |
+|---|---|
+| `count` | 文档数 |
+| `size` | 数据大小（未压缩） |
+| `storage` | 数据占的磁盘空间（压缩后） |
+| `indexes` | 索引个数 |
+| `indexSize` | 索引占的磁盘空间 |
+
+```
+> mt.colls()
+-- db.getSiblingDB('shop').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}])
++----------------+-------+--------+----------+---------+-----------+
+| name           | count | size   | storage  | indexes | indexSize |
++----------------+-------+--------+----------+---------+-----------+
+| orders         | 20000 | 3.6 MB | 956.0 KB |       4 |    1.2 MB |
+| users          |     2 |   68 B |  20.0 KB |       1 |   20.0 KB |
+| system.profile |     3 | 5.0 KB |   4.0 KB |       0 |       0 B |
++----------------+-------+--------+----------+---------+-----------+
+3 rows in set
+```
+
+### mt.idx()：索引
+
+相当于 `SHOW INDEX FROM t`。
+
+```js
+mt.idx('orders')          // 当前库的 orders
+mt.idx('shop.orders')     // 指定库
+mt.idx(db.orders)         // 集合对象
+```
+
+用 `getIndexes()` 拿索引定义，`$indexStats` 拿使用次数，`$collStats` 拿每个索引的大小。
+
+| 列 | 说明 |
+|---|---|
+| `name` | 索引名 |
+| `key` | 索引键 |
+| `size` | 磁盘占用 |
+| `ops` | 自 `since` 以来被查询用到的次数；一直是 0 的索引可以考虑删掉 |
+| `since` | 开始计数的时间（mongod 重启或索引重建后清零） |
+| `options` | `unique`、`sparse`、`ttl=秒`、`partial=条件`、`hidden`、`collation=语言` |
+
+```
+> mt.idx('orders')
+-- db.getSiblingDB('shop').getCollection('orders').getIndexes(); aggregate([{$indexStats: {}}])
++-----------------------+----------------------------+----------+-----+-------------------------+----------------+
+| name                  | key                        | size     | ops | since                   | options        |
++-----------------------+----------------------------+----------+-----+-------------------------+----------------+
+| _id_                  | {_id: 1}                   | 508.0 KB |   6 | 2026-11-22 08:05:36.873 |                |
+| orderNo_1             | {orderNo: 1}               | 248.0 KB |   1 | 2026-11-22 08:05:37.074 | unique         |
+| status_1_createdAt_-1 | {status: 1, createdAt: -1} | 232.0 KB |  32 | 2026-11-22 08:05:37.139 |                |
+| ttl_createdAt         | {createdAt: 1}             | 232.0 KB |   0 | 2026-11-22 08:05:37.191 | ttl=315360000s |
++-----------------------+----------------------------+----------+-----+-------------------------+----------------+
+4 rows in set
+```
+
+### mt.conns()：连接来源
+
+按客户端 IP 统计连接数，看是哪台机器、哪个应用连得最多。
+
+- 上面几行来自 `db.serverStatus().connections`：`current` 当前连接数，`available` 还能建多少，`totalCreated` 启动以来一共建过多少。
+- 表格来自 `currentOp` 的 `$all: true`：`conns` 连接数，`active` 其中正在执行操作的，`apps` 这些连接的 appName。
+
+```
+> mt.conns()
+-- db.serverStatus().connections; db.adminCommand({currentOp: 1, $all: true})
+     current: 19
+   available: 8173
+totalCreated: 69
++---------------+-------+--------+----------------+
+| client        | conns | active | apps           |
++---------------+-------+--------+----------------+
+| 192.168.117.4 |     5 |      1 | OplogFetcher   |
+| 192.168.117.5 |     5 |      2 | mongosh 2.14.2 |
+| 192.168.117.6 |     5 |      1 | mongosh 2.14.2 |
+| 192.168.117.3 |     4 |      1 | OplogFetcher   |
+| 192.168.117.2 |     1 |      0 |                |
++---------------+-------+--------+----------------+
+5 rows in set
+```
+
+### mt.oplog()：oplog 窗口
+
+相当于 `SHOW BINARY LOGS`，和 `rs.printReplicationInfo()` 看的是同一件事：oplog 能覆盖多长时间。只能在副本集成员上执行。
+
+| 字段 | 说明 |
+|---|---|
+| `maxSize` | oplog 上限 |
+| `usedSize` | 已经用了多少 |
+| `firstEvent` / `lastEvent` | oplog 里最早、最晚一条的时间 |
+| `window` | 两者之差。从节点停机或延迟超过这个时间，就要全量重新同步 |
+| `now` | 当前时间 |
+
+```
+> mt.oplog()
+-- rs.printReplicationInfo()
+   maxSize: 1.4 GB
+  usedSize: 9.5 MB
+firstEvent: 2026-11-22 08:05:23
+ lastEvent: 2026-11-22 08:05:37
+    window: 14s (0.00 h)
+       now: 2026-11-22 08:05:48.865
+```
+
+示例是刚建好的副本集，所以窗口只有几十秒；生产环境一般要有几十个小时以上。
+
+### mt.status()：关键指标
+
+相当于 `SHOW GLOBAL STATUS`，从 `serverStatus` 里挑出常看的指标。
+
+```js
+mt.status()                 // 间隔 1 秒采样两次，ops/s 和 network/s 是每秒的量
+mt.status({interval: 5})    // 间隔 5 秒
+mt.status({interval: 0})    // 只取一次，显示 opcounters 启动以来的累计值
+```
+
+| 字段 | 说明 |
+|---|---|
+| `host` / `version` / `role` / `uptime` | 主机、版本、角色（副本集名）、运行时长 |
+| `ops/s.*` | 每秒的 insert / query / update / delete / getmore / command 次数 |
+| `connections.*` | 当前连接数、还能建多少 |
+| `activeClients.*` | 正在执行读、写操作的客户端数 |
+| `queue.*` | 在排队等锁的读、写操作数，持续不为 0 说明有压力 |
+| `network/s.*` | 每秒进、出流量 |
+| `mem.*` | 常驻内存、虚拟内存 |
+| `cache.*` | WiredTiger 缓存：已用、上限、脏数据 |
+
+```
+> mt.status()
+-- db.serverStatus()，间隔 1 秒采样两次算 ops/s
+                 host: db1
+              version: 7.0.48
+                 role: PRIMARY (rs0)
+               uptime: 32s
+         ops/s.insert: 0
+          ops/s.query: 0
+         ops/s.update: 0
+         ops/s.delete: 0
+        ops/s.getmore: 0
+        ops/s.command: 4
+  connections.current: 20
+connections.available: 8172
+activeClients.readers: 1
+activeClients.writers: 0
+        queue.readers: 0
+        queue.writers: 0
+         network/s.in: 1.1 KB
+        network/s.out: 75.3 KB
+         mem.resident: 217.0 MB
+          mem.virtual: 1.1 GB
+           cache.used: 22.2 MB
+            cache.max: 7.3 GB
+          cache.dirty: 11.0 MB
+```
+
+### 也可以直接套原生命令
 
 | MySQL 习惯 | mongosh + MongoTab |
 |---|---|
@@ -271,7 +842,7 @@ totals: {
 
 ## 配置项
 
-`limit` 50 · `maxCol` 40 · `tz` `'UTC'` · `nullText` `'NULL'` · `missingText` 跟随语言 · `color` 自动 · `width` 自动 · `depth` 全部展开 · `lang` 自动 · `showCmd` true（DBA 命令先打印原生命令）
+各选项的默认值和说明见[选项一览](#选项一览)，会话里用 [`mt.config()`](#会话默认值mtconfig) 修改。
 
 `missingText` 不设时跟随语言显示 `(无字段)` / `(missing)`；自己设了就固定用设的值，例如 `mt.config({missingText: '-'})`，设成 `''` 则留空。
 
