@@ -127,7 +127,7 @@ mt.help()
 
 ### DBA 常用命令
 
-从 v0.3.0 起，`mt` 下面带了一组只读的快捷命令，对应 MySQL 的 `SHOW ...`：
+从 v0.3.0 起，`mt` 下面带了一组只读的快捷命令，对应 MySQL 的 `SHOW ...`（`mt.slow()`、`mt.top()` 从 v0.4.0 起）：
 
 ```js
 mt.cmds()                     // 列出全部命令
@@ -135,6 +135,10 @@ mt.ps()                       // SHOW PROCESSLIST：正在执行的操作，耗�
 mt.ps({secs: 5})              // 只看运行超过 5 秒的
 mt.ps({ns: 'shop.orders'})    // 只看某个库或集合
 mt.ps({all: true})            // 含空闲连接和内部线程
+mt.slow()                     // 慢查询日志：读 system.profile，新的在前；默认当前库，也可以 mt.slow('shop')
+mt.slow({ms: 500, ns: 'orders'})  // 只看超过 500 毫秒的、某个集合的
+mt.top()                      // 各集合读写耗时（毫秒），间隔 1 秒采样，忙的在前；类似 mongotop
+mt.top({interval: 0})         // 启动以来累计
 mt.repl()                     // SHOW SLAVE STATUS：成员状态、复制延迟（秒）、同步源
 mt.dbs()                      // SHOW DATABASES：各库占用空间
 mt.colls('shop')              // SHOW TABLE STATUS：各集合文档数、数据和索引大小，大的在前；不写库名就是当前库
@@ -173,6 +177,8 @@ date: 2026-11-22 05:02:46.493
 - 每条命令先打印对应的原生命令（`-- ...` 那一行，终端里是灰色），方便复制、核对。不想看用 `mt.config({showCmd: false})` 关掉。
 - 选项和 `t()` 通用，例如 `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`、`mt.colls('shop', {limit: 200})`、`mt.idx('orders', {vertical: true})`。
 - `mt.ps()` 默认不显示空闲连接、内部线程、驱动的心跳长轮询（awaitable hello）和这条查询自己。
+- `mt.slow()` 只读 `system.profile`，不会改 profiler 设置。profiler 默认是关的，没开时会提示用 `db.setProfilingLevel(1, {slowms: 100})` 打开（每个库单独设置）。
+- `mt.slow()`、`mt.top()` 要连到 mongod 上执行，mongos 上没有这些数据。
 - 这些命令需要监控类权限（如 `clusterMonitor` 角色）。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()` 时，只打印一行说明，不抛异常。
 - 老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过；分片集群（mongos）还没测过。
 

@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.3.0';
+  var VERSION = '0.4.0';
   var MARK = '__mongotab__';
 
   // mongosh 跑在 Node 上，有 globalThis / process / Intl；老的 mongo shell 都没有：
@@ -74,8 +74,13 @@
       noOplog: 'local.oplog.rs 是空的',
       total: function (s) { return '合计 ' + s; },
       sampled: function (n) { return '，间隔 ' + n + ' 秒采样两次算 ops/s'; },
+      topSampled: function (n) { return '，间隔 ' + n + ' 秒采样两次，显示这段时间内的耗时（毫秒）'; },
+      topTotals: '，启动以来累计（毫秒）',
+      profOff: '没有开 profiler（level 0），可用 db.setProfilingLevel(1, {slowms: 100}) 打开',
       cmdDesc: {
         ps: '正在执行的操作，耗时长的在前；secs 最短秒数，ns 库或集合，all 含空闲连接',
+        slow: "慢查询（system.profile），新的在前；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合",
+        top: '各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合',
         repl: '副本集成员状态、复制延迟（秒）、同步源',
         dbs: '各库占用的磁盘空间',
         colls: '各集合文档数、数据和索引大小，大的在前；默认当前库',
@@ -100,7 +105,7 @@
           helpRow("t(x, {tz: '+08:00'})", '本次用指定时区显示时间'),
           helpRow('mt.csv(x, ...)', '输出 CSV（贴进 Excel）'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'en'})", '改本会话默认值'),
-          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
+          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
           '',
           '  示例：'
         ].concat(HELP_EXAMPLES, ['', '  显示约定：' + (nul || '空白') + ' = 值为 null；空白 = 空字符串 ""；' +
@@ -123,8 +128,13 @@
       noOplog: 'local.oplog.rs is empty',
       total: function (s) { return 'Total ' + s; },
       sampled: function (n) { return ', sampled twice ' + n + 's apart for ops/s'; },
+      topSampled: function (n) { return ', sampled twice ' + n + 's apart; time spent in between (ms)'; },
+      topTotals: ', totals since startup (ms)',
+      profOff: 'the profiler is off (level 0); turn it on with db.setProfilingLevel(1, {slowms: 100})',
       cmdDesc: {
         ps: 'Running operations, longest first; secs = minimum seconds, ns = db or collection, all = include idle',
+        slow: "Slow operations from system.profile, newest first; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection",
+        top: 'Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection',
         repl: 'Replica set members, replication lag (seconds), sync source',
         dbs: 'Disk space used by each database',
         colls: 'Documents, data and index size per collection, largest first; current db by default',
@@ -149,7 +159,7 @@
           helpRow("t(x, {tz: '+08:00'})", 'Show times in this time zone for this call'),
           helpRow('mt.csv(x, ...)', 'Print CSV (paste into Excel)'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'zh'})", 'Change defaults for this session'),
-          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
+          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
           '',
           '  Examples:'
         ].concat(HELP_EXAMPLES, ['', '  Conventions: ' + (nul || 'blank') + ' = value is null; blank = empty string ""; ' +
@@ -1026,8 +1036,92 @@
     emit(out);
   }
 
+  function notMongos(name) { if (helloDoc(admin()).msg === 'isdbgrid') fail(M().onMongos(name)); }
+  function nsMatch(x, ns) { return !ns || x === ns || String(x || '').indexOf(ns + '.') === 0; }
+
+  // 慢查询：读 system.profile，不改 profiler 设置
+  function slow(dbName, opts) {
+    if (dbName && typeof dbName === 'object' && !isDbHandle(dbName)) { opts = dbName; dbName = null; }
+    var o = dbaOpts(opts, ['ms']), out = [];
+    notMongos('mt.slow()');
+    var d = isDbHandle(dbName) ? dbName : dbName ? curDb().getSiblingDB(String(dbName)) : curDb();
+    var dn = d.getName();
+    // 排除读 system.profile 自己和 profile 命令（level 2 时会被记下来）
+    var filter = { ns: { $ne: dn + '.system.profile' }, 'command.profile': { $exists: false } };
+    var user = {};
+    if (toNum(o.ms)) user.millis = { $gte: toNum(o.ms) };
+    if (o.ns) {
+      var ns = String(o.ns);
+      user.ns = ns.indexOf(dn + '.') === 0 ? ns : dn + '.' + ns;
+    }
+    var q = Object.keys(user).length ? { $and: [filter, user] } : filter;
+    cmdLine(o, "db.getSiblingDB('" + dn + "').system.profile.find(" + valText(user, true, o) + ').sort({ts: -1})', out);
+    var st = runCmd(d, { profile: -1 });
+    var total = toNum(runCmd(d, { count: 'system.profile', query: q }).n) || 0;
+    var lim = limitOf(o), docs;
+    try {
+      var cur = d.getCollection('system.profile').find(q).sort({ ts: -1 });
+      docs = (lim < Infinity ? cur.limit(lim) : cur).toArray();
+    } catch (e) {
+      if (isAuthErr(e)) fail(M().unauthorized('find ' + dn + '.system.profile'));
+      throw e;
+    }
+    headOut({ db: dn, level: st.was, slowms: st.slowms, sampleRate: st.sampleRate }, Object.assign({}, o, { cols: null, exclude: null }), out);
+    var rows = docs.map(function (p) {
+      var cc = cleanCmd(p.command || p.query || {});
+      return {
+        ts: isDate(p.ts) ? p.ts : '', ms: toNum(p.millis), op: p.op || '', ns: p.ns || '', plan: p.planSummary || '',
+        keysExamined: p.keysExamined != null ? toNum(p.keysExamined) : '',
+        docsExamined: p.docsExamined != null ? toNum(p.docsExamined) : '',
+        nreturned: p.nreturned != null ? toNum(p.nreturned) : '',
+        client: p.client || '', user: p.user || '',
+        command: Object.keys(cc).length ? valText(cc, true, o) : ''
+      };
+    });
+    if (rows.every(function (r) { return !r.user; })) rows.forEach(function (r) { delete r.user; });   // 没开认证
+    renderRows(rows, o, out, false, Math.max(total, rows.length));
+    if (!rows.length && !st.was) out.push(M().profOff);
+    emit(out);
+  }
+
+  // 按集合的读写耗时，相当于 mongotop；top 命令的时间单位是微秒
+  function top(opts) {
+    var o = dbaOpts(opts, ['totalMs', 'readMs', 'writeMs', 'ops']), out = [];
+    var a = admin();
+    notMongos('mt.top()');
+    var iv = o.interval == null ? 1 : toNum(o.interval) || 0;
+    var canSleep = typeof sleep === 'function';   // eslint-disable-line no-undef
+    var sampled = iv > 0 && canSleep;
+    cmdLine(o, 'db.adminCommand({top: 1})' + (sampled ? M().topSampled(iv) : M().topTotals), out);
+    var t1 = runCmd(a, { top: 1 }).totals || {}, t2 = null;
+    if (sampled) { sleep(iv * 1000); t2 = runCmd(a, { top: 1 }).totals || {}; }   // eslint-disable-line no-undef
+    var cur = t2 || t1, base = t2 ? t1 : {};
+    var ns = o.ns ? String(o.ns) : '';
+    var f = function (x, k, sub) { return toNum(x && x[k] && x[k][sub]) || 0; };
+    var ms = function (us) { return Math.round(us / 1000); };
+    var rows = [];
+    Object.keys(cur).forEach(function (k) {
+      var c = cur[k], b = base[k];
+      if (!k || !isDoc(c) || !c.total || !nsMatch(k, ns)) return;
+      var tot = f(c, 'total', 'time') - f(b, 'total', 'time');
+      var n = f(c, 'total', 'count') - f(b, 'total', 'count');
+      if (tot <= 0 && n <= 0) return;
+      rows.push({
+        ns: k, totalMs: ms(tot),
+        readMs: ms(f(c, 'readLock', 'time') - f(b, 'readLock', 'time')),
+        writeMs: ms(f(c, 'writeLock', 'time') - f(b, 'writeLock', 'time')),
+        ops: n, us: tot
+      });
+    });
+    rows.sort(function (x, y) { return y.us - x.us || y.ops - x.ops || (x.ns < y.ns ? -1 : 1); });
+    rowsOut(rows.map(function (r) { delete r.us; return r; }), o, out);
+    emit(out);
+  }
+
   var CMDS = [
     ['mt.ps({secs, ns, all})', 'SHOW PROCESSLIST', 'ps'],
+    ['mt.slow({ms, ns})', 'mysql.slow_log', 'slow'],
+    ['mt.top({interval, ns})', 'sys.schema_table_statistics', 'top'],
     ['mt.repl()', 'SHOW SLAVE STATUS', 'repl'],
     ['mt.dbs()', 'SHOW DATABASES', 'dbs'],
     ["mt.colls('db')", 'SHOW TABLE STATUS', 'colls'],
@@ -1040,14 +1134,14 @@
     var m = M(), out = [];
     var rows = CMDS.map(function (c) { return { command: c[0], mysql: c[1], description: m.cmdDesc[c[2]] }; });
     renderRows(rows, makeOpts({ table: true, maxCol: 0 }), out, false, rows.length);
-    out.pop();   // 去掉 "8 rows in set"
+    out.pop();   // 去掉 "N rows in set"
     out.push(m.cmdsNote);
     emit(out);
   }
 
   var api = {
     table: t, vertical: g, csv: csv, config: config, help: help, version: VERSION,
-    cmds: cmds, ps: dba(ps), repl: dba(repl), dbs: dba(dbs), colls: dba(colls), idx: dba(idx),
+    cmds: cmds, ps: dba(ps), slow: dba(slow), top: dba(top), repl: dba(repl), dbs: dba(dbs), colls: dba(colls), idx: dba(idx),
     conns: dba(conns), oplog: dba(oplog), status: dba(status)
   };
   t[MARK] = g[MARK] = api[MARK] = true;
