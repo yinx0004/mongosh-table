@@ -80,12 +80,17 @@
       badSort: function (fn, ch, ex) { return fn + ' 的 sort 可以是 ' + ch + '，或排序文档如 ' + ex; },
       sortChoices: {
         slow: "'desc'（默认，最新的在前）、'asc'（最早的在前）、'ms'（最慢的在前）",
-        ps: "'desc'（默认，运行最久的在前）、'asc'（最短的在前）、'opid'"
+        ps: "'desc'（默认，运行最久的在前）、'asc'（最短的在前）、'opid'",
+        txns: "'desc'（默认，开得最久的在前）、'asc'（最短的在前）"
       },
+      noLockWait: '没有在等锁的操作',
+      noTxn: '没有未提交的事务',
       cmdDesc: {
         ps: "正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'",
         slow: "慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前",
         top: '各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合',
+        locks: '谁在等锁、锁被谁占着；all 显示所有被占用的锁',
+        txns: "未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'",
         repl: '副本集成员状态、复制延迟（秒）、同步源',
         dbs: '各库占用的磁盘空间',
         colls: '各集合文档数、数据和索引大小，大的在前；默认当前库',
@@ -110,7 +115,7 @@
           helpRow("t(x, {tz: '+08:00'})", '本次用指定时区显示时间'),
           helpRow('mt.csv(x, ...)', '输出 CSV（贴进 Excel）'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'en'})", '改本会话默认值'),
-          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
+          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.locks()、mt.txns()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
           '',
           '  示例：'
         ].concat(HELP_EXAMPLES, ['', '  显示约定：' + (nul || '空白') + ' = 值为 null；空白 = 空字符串 ""；' +
@@ -139,12 +144,17 @@
       badSort: function (fn, ch, ex) { return fn + ' sort can be ' + ch + ' or a sort document such as ' + ex; },
       sortChoices: {
         slow: "'desc' (default, newest first), 'asc' (oldest first), 'ms' (slowest first)",
-        ps: "'desc' (default, longest running first), 'asc' (shortest first), 'opid'"
+        ps: "'desc' (default, longest running first), 'asc' (shortest first), 'opid'",
+        txns: "'desc' (default, open longest first), 'asc' (shortest first)"
       },
+      noLockWait: 'no operation is waiting for a lock',
+      noTxn: 'no open transactions',
       cmdDesc: {
         ps: "Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'",
         slow: "Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first",
         top: 'Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection',
+        locks: 'Who is waiting for a lock and who holds it; all = every lock that is held',
+        txns: "Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'",
         repl: 'Replica set members, replication lag (seconds), sync source',
         dbs: 'Disk space used by each database',
         colls: 'Documents, data and index size per collection, largest first; current db by default',
@@ -169,7 +179,7 @@
           helpRow("t(x, {tz: '+08:00'})", 'Show times in this time zone for this call'),
           helpRow('mt.csv(x, ...)', 'Print CSV (paste into Excel)'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'zh'})", 'Change defaults for this session'),
-          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
+          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.locks(), mt.txns(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
           '',
           '  Examples:'
         ].concat(HELP_EXAMPLES, ['', '  Conventions: ' + (nul || 'blank') + ' = value is null; blank = empty string ""; ' +
@@ -1161,10 +1171,131 @@
     emit(out);
   }
 
+  // "{2305843009213693955: Global, 3}" → "Global 3"；
+  // "{...: Collection, 1162035566390870678, shop.orders}" → "Collection shop.orders"（去掉中间的哈希）
+  function resName(id) {
+    var m = /^\{\d+: ([^,]+), (.*)\}$/.exec(String(id || ''));
+    if (!m) return String(id || '');
+    var rest = m[2].replace(/^\d+, (?=\S)/, '');
+    return m[1] + ' ' + rest;
+  }
+  // 锁模式兼容表：IS / IX / S / X；currentOp 里的 r / w / R / W 分别对应 IS / IX / S / X
+  var LOCK_MODE = { r: 'IS', w: 'IX', R: 'S', W: 'X' };
+  var LOCK_OK = { IS: { IS: 1, IX: 1, S: 1 }, IX: { IS: 1, IX: 1 }, S: { IS: 1, S: 1 }, X: {} };
+  function lockConflicts(a, b) {
+    a = LOCK_MODE[a] || a; b = LOCK_MODE[b] || b;
+    return !!(LOCK_OK[a] && LOCK_OK[b]) && !LOCK_OK[a][b];
+  }
+  // 等锁：lockInfo 列出每个锁资源的持有者（granted）和排队者（pending），按 opid 关联 currentOp 补上耗时、客户端、命令。
+  // 默认只列有人排队的锁，以及和排队者冲突的持有者；all 列出所有被占用的锁
+  function locks(opts) {
+    var o = dbaOpts(opts, ['opid', 'secs']), out = [];
+    var a = admin();
+    notMongos('mt.locks()');
+    var all = !!o.all;
+    cmdLine(o, 'db.adminCommand({lockInfo: 1}); db.adminCommand({currentOp: 1, $all: true})', out);
+    var info = runCmd(a, { lockInfo: 1 }).lockInfo || [];
+    var byOp = {};
+    (runCmd(a, { currentOp: 1, $all: true }).inprog || []).forEach(function (op) { if (op.opid != null) byOp[String(op.opid)] = op; });
+    var rows = [], waiting = new StrMap();
+    // ci：lockInfo 里的 clientInfo（3.6 / 4.0 / 4.2 直接放在条目上），或 currentOp 的一条
+    var add = function (res, mode, ci, state) {
+      var op = ci.opid != null ? byOp[String(ci.opid)] : null;
+      if (op && isSelfOp(op.command || {})) return;
+      if (state === 'WAIT') waiting.set(String(ci.opid != null ? ci.opid : ci.desc), true);
+      var cc = op ? cleanCmd(op.command || {}) : {};
+      rows.push({
+        resource: res, mode: mode || '', state: state,
+        opid: ci.opid != null ? ci.opid : '', secs: op && op.secs_running != null ? toNum(op.secs_running) : '',
+        client: ci.client || ci.client_s || '', desc: ci.desc || '', op: op ? op.op || '' : '', ns: op ? op.ns || '' : '',
+        command: Object.keys(cc).length ? valText(cc, true, o) : ''
+      });
+    };
+    info.forEach(function (r) {
+      var pending = r.pending || [], granted = r.granted || [];
+      if (!pending.length && !(all && granted.length)) return;
+      granted.forEach(function (x) {
+        if (!all && !pending.some(function (p) { return lockConflicts(x.mode, p.mode); })) return;
+        add(resName(r.resourceId), x.mode, x.clientInfo || x, 'HOLD');
+      });
+      pending.forEach(function (x) { add(resName(r.resourceId), x.mode, x.clientInfo || x, 'WAIT'); });
+    });
+    // 4.2 等版本的 Global 锁不在 lockInfo 里：用 currentOp 的 waitingForLock 补上。
+    // 等的是 locks 里最后一项；占着它的是同一把锁上模式冲突的操作
+    var extra = new StrMap();
+    Object.keys(byOp).forEach(function (k) {
+      var op = byOp[k];
+      if (!op.waitingForLock || waiting.has(k) || !isDoc(op.locks)) return;
+      var names = Object.keys(op.locks), n = names[names.length - 1];
+      if (!n) return;
+      if (!extra.has(n)) {
+        extra.set(n, true);
+        Object.keys(byOp).forEach(function (k2) {
+          var h = byOp[k2];
+          if (!h.waitingForLock && isDoc(h.locks) && h.locks[n] && lockConflicts(h.locks[n], op.locks[n])) add(n, h.locks[n], h, 'HOLD');
+        });
+      }
+      add(n, op.locks[n], op, 'WAIT');
+    });
+    rowsOut(rows, o, out);
+    if (!waiting._keys.length) out.push(M().noLockWait);
+    emit(out);
+  }
+
+  // 未提交的事务：currentOp 里带 transaction 字段的（空闲的事务是 type: idleSession）
+  function txnSort(s) {
+    if (s == null || s === '' || s === 'desc') return null;
+    if (s === 'asc') return { openSecs: 1 };
+    if (isDoc(s) && Object.keys(s).length) return s;
+    fail(M().badSort('mt.txns()', M().sortChoices.txns, '{client: 1}'));
+  }
+  function txns(opts) {
+    var o = dbaOpts(opts, ['txnNumber', 'openSecs', 'activeSecs', 'idleSecs', 'expiresIn', 'opid']), out = [];
+    var spec = txnSort(o.sort);
+    cmdLine(o, 'db.adminCommand({currentOp: 1, $all: true}) → transaction', out);
+    var ops = runCmd(admin(), { currentOp: 1, $all: true }).inprog || [];
+    var now = Date.now(), minSecs = toNum(o.secs) || 0;
+    var secs = function (us) { return Math.round((toNum(us) || 0) / 1e6); };
+    // expiryTime / startWallClockTime 在有的版本里是 ISO 字符串
+    var asDate = function (v) {
+      if (isDate(v)) return v;
+      var d = typeof v === 'string' ? new Date(v) : null;
+      return d && !isNaN(d.getTime()) ? d : null;
+    };
+    var seen = new StrMap(), rows = [];
+    ops.forEach(function (op) {
+      var tx = op.transaction;
+      if (!tx || !isDoc(tx)) return;
+      var p = tx.parameters || {};
+      var id = op.lsid && op.lsid.id != null ? valText(op.lsid.id, true, o) : '';
+      var key = id + '#' + valText(p.txnNumber, true, o);
+      var r = seen.get(key);
+      var row = {
+        lsid: id, txnNumber: p.txnNumber != null ? toNum(p.txnNumber) : '',
+        state: op.active ? 'active' : 'idle', openSecs: secs(tx.timeOpenMicros),
+        activeSecs: secs(tx.timeActiveMicros), idleSecs: secs(tx.timeInactiveMicros),
+        start: asDate(tx.startWallClockTime) || '',
+        expiresIn: asDate(tx.expiryTime) ? Math.max(0, Math.round((asDate(tx.expiryTime).getTime() - now) / 1000)) : '',
+        opid: op.active && op.opid != null ? op.opid : '',
+        client: op.client || op.client_s || '', app: op.appName || '', ns: op.active ? op.ns || '' : ''
+      };
+      if (r) { if (row.state === 'active') seen.set(key, row); return; }   // 同一事务有多条时，留正在执行的那条
+      seen.set(key, row);
+    });
+    seen.forEach(function (row) { if (row.openSecs >= minSecs) rows.push(row); });
+    var cmp = spec ? rowCmp(spec) : null;
+    rows.sort(function (x, y) { return (cmp ? cmp(x, y) : 0) || y.openSecs - x.openSecs; });
+    rowsOut(rows, o, out);
+    if (!rows.length && !minSecs) out.push(M().noTxn);
+    emit(out);
+  }
+
   var CMDS = [
     ['mt.ps({secs, ns, all, sort})', 'SHOW PROCESSLIST', 'ps'],
     ['mt.slow({ms, ns, sort})', 'mysql.slow_log', 'slow'],
     ['mt.top({interval, ns})', 'sys.schema_table_statistics', 'top'],
+    ['mt.locks({all})', 'sys.innodb_lock_waits', 'locks'],
+    ['mt.txns({secs, sort})', 'INFORMATION_SCHEMA.INNODB_TRX', 'txns'],
     ['mt.repl()', 'SHOW SLAVE STATUS', 'repl'],
     ['mt.dbs()', 'SHOW DATABASES', 'dbs'],
     ["mt.colls('db')", 'SHOW TABLE STATUS', 'colls'],
@@ -1184,7 +1315,7 @@
 
   var api = {
     table: t, vertical: g, csv: csv, config: config, help: help, version: VERSION,
-    cmds: cmds, ps: dba(ps), slow: dba(slow), top: dba(top), repl: dba(repl), dbs: dba(dbs), colls: dba(colls), idx: dba(idx),
+    cmds: cmds, ps: dba(ps), slow: dba(slow), top: dba(top), locks: dba(locks), txns: dba(txns), repl: dba(repl), dbs: dba(dbs), colls: dba(colls), idx: dba(idx),
     conns: dba(conns), oplog: dba(oplog), status: dba(status)
   };
   t[MARK] = g[MARK] = api[MARK] = true;
