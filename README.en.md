@@ -362,6 +362,7 @@ All of them:
 - **Print the native command first**: the `-- ...` line (dimmed in a terminal) is the MongoDB command actually run, so you can copy or check it; turn it off with `mt.config({showCmd: false})`.
 - **Take the same options as `t()`**: `cols`, `exclude`, `limit`, `vertical`, `table` and `tz` all work, e.g. `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`, `mt.idx('orders', {vertical: true})`.
 - **Are read-only**: they never change settings; `mt.slow()` does not turn the profiler on either.
+- **Tell logical from disk sizes**: columns with `logical` in the name are the uncompressed data size (BSON), `disk` is what it actually takes on disk (compressed by WiredTiger), and `cached` is what it takes in the in-memory cache (uncompressed). The three can differ several times over for the same data.
 - **Need monitoring privileges**, such as the `clusterMonitor` role. Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, or `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` on a mongos, they print a one-line explanation instead of throwing.
 - **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version; sharded clusters (mongos) are not tested yet.
 
@@ -693,13 +694,13 @@ date: 2026-11-22 08:06:23.473
 
 ### mt.dbs(): database sizes
 
-Like `SHOW DATABASES`. It runs `listDatabases`, sorts by name and ends with the total. `size` is disk usage (`sizeOnDisk`).
+Like `SHOW DATABASES`. It runs `listDatabases`, sorts by name and ends with the total. `disk` is disk usage (`sizeOnDisk`).
 
 ```
 > mt.dbs()
 -- db.adminCommand({listDatabases: 1})
 +--------+----------+-------+
-| name   | size     | empty |
+| name   | disk     | empty |
 +--------+----------+-------+
 | admin  |  80.0 KB | false |
 | config | 168.0 KB | false |
@@ -720,26 +721,26 @@ mt.colls()          // current database
 mt.colls('shop')    // another database; a db object works too
 ```
 
-It runs `$collStats` for each collection (views are skipped) and sorts by `storage + indexSize`, largest first.
+It runs `$collStats` for each collection (views are skipped) and sorts by `disk + indexDisk` (disk usage), largest first.
 
 | Column | Meaning |
 |---|---|
 | `count` | Number of documents |
-| `size` | Data size (uncompressed) |
-| `storage` | Disk space used by the data (compressed) |
+| `logical` | Logical data size (uncompressed BSON) |
+| `disk` | Disk space used by the data (compressed) |
 | `indexes` | Number of indexes |
-| `indexSize` | Disk space used by the indexes |
+| `indexDisk` | Disk space used by the indexes |
 
 ```
 > mt.colls()
 -- db.getSiblingDB('shop').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}])
-+----------------+-------+--------+----------+---------+-----------+
-| name           | count | size   | storage  | indexes | indexSize |
-+----------------+-------+--------+----------+---------+-----------+
-| orders         | 20000 | 3.6 MB | 956.0 KB |       4 |    1.2 MB |
-| users          |     2 |   68 B |  20.0 KB |       1 |   20.0 KB |
-| system.profile |     3 | 5.0 KB |   4.0 KB |       0 |       0 B |
-+----------------+-------+--------+----------+---------+-----------+
++----------------+-------+---------+----------+---------+-----------+
+| name           | count | logical | disk     | indexes | indexDisk |
++----------------+-------+---------+----------+---------+-----------+
+| orders         | 20000 |  3.6 MB | 964.0 KB |       4 |    1.2 MB |
+| users          |     2 |    68 B |  20.0 KB |       1 |   20.0 KB |
+| system.profile |     5 |  7.0 KB |   4.0 KB |       0 |       0 B |
++----------------+-------+---------+----------+---------+-----------+
 3 rows in set
 ```
 
@@ -756,23 +757,23 @@ WiredTiger does not shrink files when data is deleted; the freed blocks stay in 
 
 | Column | Meaning |
 |---|---|
-| `storage` | Data file size |
+| `disk` | Size of the data file on disk |
 | `reusable` | Space in it that can be reused |
 | `pct` | Reusable as a share of the data file |
-| `indexSize` / `indexReusable` | Index file size and reusable space in it |
+| `indexDisk` / `indexReusable` | Size of the index files on disk and reusable space in them |
 
 ```
 > mt.frag('shop')
 -- db.getSiblingDB('shop').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}]) → wiredTiger['block-manager']
 +----------------+---------+----------+-------+-----------+---------------+
-| name           | storage | reusable | pct   | indexSize | indexReusable |
+| name           | disk    | reusable | pct   | indexDisk | indexReusable |
 +----------------+---------+----------+-------+-----------+---------------+
-| orders         |  2.0 MB | 952.0 KB | 45.9% |    3.6 MB |        1.2 MB |
+| orders         |  2.0 MB | 956.0 KB | 46.0% |    3.6 MB |        1.2 MB |
 | system.profile | 20.0 KB |      0 B |  0.0% |       0 B |           0 B |
 | users          | 20.0 KB |      0 B |  0.0% |   20.0 KB |           0 B |
 +----------------+---------+----------+-------+-----------+---------------+
 3 rows in set
-Total reusable 2.1 MB (data 952.0 KB, indexes 1.2 MB)
+Total reusable 2.1 MB (data 956.0 KB, indexes 1.2 MB)
 ```
 
 - New writes use the reusable space first. To give it back to the operating system, run `compact` on the collection (it no longer blocks reads and writes since 4.4, but it does use I/O), or resync a secondary from scratch.
@@ -794,7 +795,7 @@ It uses `getIndexes()` for the definitions, `$indexStats` for usage and `$collSt
 |---|---|
 | `name` | Index name |
 | `key` | Index key |
-| `size` | Disk usage |
+| `disk` | Disk usage |
 | `ops` | Times queries used it since `since`; an index that stays at 0 may be worth dropping |
 | `since` | When counting started (reset when mongod restarts or the index is rebuilt) |
 | `options` | `unique`, `sparse`, `ttl=seconds`, `partial=filter`, `hidden`, `collation=locale` |
@@ -803,12 +804,12 @@ It uses `getIndexes()` for the definitions, `$indexStats` for usage and `$collSt
 > mt.idx('orders')
 -- db.getSiblingDB('shop').getCollection('orders').getIndexes(); aggregate([{$indexStats: {}}])
 +-----------------------+----------------------------+----------+-----+-------------------------+----------------+
-| name                  | key                        | size     | ops | since                   | options        |
+| name                  | key                        | disk     | ops | since                   | options        |
 +-----------------------+----------------------------+----------+-----+-------------------------+----------------+
-| _id_                  | {_id: 1}                   | 508.0 KB |   6 | 2026-11-22 08:06:11.520 |                |
-| orderNo_1             | {orderNo: 1}               | 248.0 KB |   1 | 2026-11-22 08:06:11.646 | unique         |
-| status_1_createdAt_-1 | {status: 1, createdAt: -1} | 232.0 KB |  32 | 2026-11-22 08:06:11.699 |                |
-| ttl_createdAt         | {createdAt: 1}             | 232.0 KB |   0 | 2026-11-22 08:06:11.747 | ttl=315360000s |
+| _id_                  | {_id: 1}                   | 508.0 KB |   6 | 2026-11-22 10:33:40.712 |                |
+| orderNo_1             | {orderNo: 1}               | 248.0 KB |   1 | 2026-11-22 10:33:40.948 | unique         |
+| status_1_createdAt_-1 | {status: 1, createdAt: -1} | 232.0 KB |  32 | 2026-11-22 10:33:41.037 |                |
+| ttl_createdAt         | {createdAt: 1}             | 232.0 KB |   0 | 2026-11-22 10:33:41.121 | ttl=315360000s |
 +-----------------------+----------------------------+----------+-----+-------------------------+----------------+
 4 rows in set
 ```
@@ -844,8 +845,9 @@ Like `SHOW BINARY LOGS`; it answers the same question as `rs.printReplicationInf
 
 | Field | Meaning |
 |---|---|
-| `maxSize` | Oplog size limit |
-| `usedSize` | How much is used |
+| `maxLogical` | Oplog size limit (in logical size, i.e. `--oplogSize`) |
+| `usedLogical` | How much is used (logical size) |
+| `disk` | Disk space the oplog takes (compressed) |
 | `firstEvent` / `lastEvent` | Times of the oldest and newest entries |
 | `window` | The difference. A secondary that is down or behind for longer than this needs a full resync |
 | `now` | Current time |
@@ -853,12 +855,13 @@ Like `SHOW BINARY LOGS`; it answers the same question as `rs.printReplicationInf
 ```
 > mt.oplog()
 -- rs.printReplicationInfo()
-   maxSize: 1.3 GB
-  usedSize: 9.5 MB
-firstEvent: 2026-11-22 08:05:58
- lastEvent: 2026-11-22 08:06:12
-    window: 14s (0.00 h)
-       now: 2026-11-22 08:06:23.515
+ maxLogical: 1.4 GB
+usedLogical: 9.5 MB
+       disk: 1.4 MB
+ firstEvent: 2026-11-22 10:33:24
+  lastEvent: 2026-11-22 10:33:41
+     window: 17s (0.00 h)
+        now: 2026-11-22 10:33:55.564
 ```
 
 The example is a freshly created replica set, so the window is only seconds long; in production it is usually dozens of hours or more.
@@ -927,7 +930,7 @@ The lines on top come from `serverStatus().wiredTiger.cache`: `used` (in parenth
 |---|---|
 | `ns` | database.collection |
 | `cached` | Data plus indexes in the cache |
-| `data` / `indexes` | Of which data / indexes |
+| `dataCached` / `indexCached` | Of which data / indexes |
 | `share` | Share of the cache in use |
 
 ```
@@ -936,16 +939,16 @@ The lines on top come from `serverStatus().wiredTiger.cache`: `used` (in parenth
  used: 34.1 MB (0.5%)
   max: 7.3 GB
 dirty: 0 B (0.0%)
-+---------------------------+---------+---------+---------+-------+
-| ns                        | cached  | data    | indexes | share |
-+---------------------------+---------+---------+---------+-------+
-| shop.orders               | 18.2 MB |  7.6 MB | 10.6 MB | 53.3% |
-| local.oplog.rs            | 14.5 MB | 14.5 MB |     0 B | 42.4% |
-| config.transactions       | 77.3 KB | 75.8 KB |  1.6 KB |  0.2% |
-| shop.system.profile       | 10.5 KB | 10.5 KB |     0 B |  0.0% |
-| config.system.indexBuilds |  6.2 KB |  4.5 KB |  1.7 KB |  0.0% |
-| local.startup_log         |  4.7 KB |  3.5 KB |  1.2 KB |  0.0% |
-+---------------------------+---------+---------+---------+-------+
++---------------------------+---------+------------+-------------+-------+
+| ns                        | cached  | dataCached | indexCached | share |
++---------------------------+---------+------------+-------------+-------+
+| shop.orders               | 18.2 MB |     7.6 MB |     10.6 MB | 53.3% |
+| local.oplog.rs            | 14.5 MB |    14.5 MB |         0 B | 42.4% |
+| config.transactions       | 77.3 KB |    75.8 KB |      1.6 KB |  0.2% |
+| shop.system.profile       | 10.5 KB |    10.5 KB |         0 B |  0.0% |
+| config.system.indexBuilds |  6.2 KB |     4.5 KB |      1.7 KB |  0.0% |
+| local.startup_log         |  4.7 KB |     3.5 KB |      1.2 KB |  0.0% |
++---------------------------+---------+------------+-------------+-------+
 6 rows in set  (showing the first 6 of 25 rows)
 These collections hold 32.8 MB in the cache, 96.1% of the cache in use
 ```
