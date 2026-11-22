@@ -89,6 +89,7 @@
       logTail: function (n, total) { return '(共 ' + total + ' 行，只显示最后 ' + n + ' 行)'; },
       fragTotal: function (all, data, idx) { return '合计可回收 ' + all + '（数据 ' + data + '，索引 ' + idx + '）'; },
       cacheSum: function (sum, pct) { return '以上集合在缓存里合计 ' + sum + '，占已用缓存的 ' + pct; },
+      noTtl: '没有 TTL 索引',
       cmdDesc: {
         ps: "正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'",
         slow: "慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前",
@@ -97,6 +98,7 @@
         txns: "未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'",
         frag: '各集合删数据后可回收的磁盘空间，多的在前；默认当前库',
         cache: '各集合占用的 WiredTiger 缓存，多的在前；默认所有库',
+        ttl: 'TTL 索引：过期时间、最早一条的时间、超期了多久，以及 TTL 线程的状态；默认所有库',
         log: "最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告",
         repl: '副本集成员状态、复制延迟（秒）、同步源',
         dbs: '各库占用的磁盘空间',
@@ -122,7 +124,7 @@
           helpRow("t(x, {tz: '+08:00'})", '本次用指定时区显示时间'),
           helpRow('mt.csv(x, ...)', '输出 CSV（贴进 Excel）'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'en'})", '改本会话默认值'),
-          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.locks()、mt.txns()、mt.frag()、mt.cache()、mt.log()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
+          helpRow('mt.cmds()', 'DBA 常用命令：mt.ps()、mt.slow()、mt.top()、mt.locks()、mt.txns()、mt.frag()、mt.cache()、mt.ttl()、mt.log()、mt.repl()、mt.dbs()、mt.colls()、mt.idx()、mt.conns()、mt.oplog()、mt.status()'),
           '',
           '  示例：'
         ].concat(HELP_EXAMPLES, ['', '  显示约定：' + (nul || '空白') + ' = 值为 null；空白 = 空字符串 ""；' +
@@ -160,6 +162,7 @@
       logTail: function (n, total) { return '(showing the last ' + n + ' of ' + total + ' rows)'; },
       fragTotal: function (all, data, idx) { return 'Total reusable ' + all + ' (data ' + data + ', indexes ' + idx + ')'; },
       cacheSum: function (sum, pct) { return 'These collections hold ' + sum + ' in the cache, ' + pct + ' of the cache in use'; },
+      noTtl: 'no TTL indexes',
       cmdDesc: {
         ps: "Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'",
         slow: "Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first",
@@ -168,6 +171,7 @@
         txns: "Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'",
         frag: 'Disk space each collection can reuse after deletes, most first; current db by default',
         cache: 'WiredTiger cache used by each collection, most first; all databases by default',
+        ttl: 'TTL indexes: expiry, oldest document, how far past expiry, and the TTL thread; all databases by default',
         log: "Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings",
         repl: 'Replica set members, replication lag (seconds), sync source',
         dbs: 'Disk space used by each database',
@@ -193,7 +197,7 @@
           helpRow("t(x, {tz: '+08:00'})", 'Show times in this time zone for this call'),
           helpRow('mt.csv(x, ...)', 'Print CSV (paste into Excel)'),
           helpRow("mt.config({tz: 'local', maxCol: 60, lang: 'zh'})", 'Change defaults for this session'),
-          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.locks(), mt.txns(), mt.frag(), mt.cache(), mt.log(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
+          helpRow('mt.cmds()', 'DBA commands: mt.ps(), mt.slow(), mt.top(), mt.locks(), mt.txns(), mt.frag(), mt.cache(), mt.ttl(), mt.log(), mt.repl(), mt.dbs(), mt.colls(), mt.idx(), mt.conns(), mt.oplog(), mt.status()'),
           '',
           '  Examples:'
         ].concat(HELP_EXAMPLES, ['', '  Conventions: ' + (nul || 'blank') + ' = value is null; blank = empty string ""; ' +
@@ -1387,6 +1391,78 @@
     emit(out);
   }
 
+  // TTL：索引上的 expireAfterSeconds，以及时间序列 / 聚簇集合上的 expireAfterSeconds（5.0 / 5.3 起）。
+  // 对普通 TTL 索引顺着索引取最早的一条（{字段: {$type: 9}} 只看日期），算出它超期了多久：
+  // 远超 TTL 线程的间隔（默认 60 秒）说明删不过来或线程没在跑
+  function pathGet(doc, path) {
+    var parts = path.split('.'), v = doc;
+    for (var i = 0; i < parts.length && v != null; i++) v = v[parts[i]];
+    return v;
+  }
+  function oldestDate(c, ix) {
+    var f = Object.keys(ix.key || {})[0];
+    if (!f || ix.partialFilterExpression) return null;
+    var q = {}, proj = { _id: 0 }, sort = {};
+    q[f] = { $type: 9 }; proj[f] = 1; sort[f] = 1;
+    var doc = safe(function () { return c.find(q, proj).sort(sort).hint(ix.name).limit(1).toArray()[0]; });
+    var v = doc ? pathGet(doc, f) : null;
+    if (Array.isArray(v)) v = v.filter(isDate).sort(function (a, b) { return a - b; })[0];
+    return isDate(v) ? v : null;
+  }
+  function ttl(dbName, opts) {
+    var x = dbArg(dbName, opts);
+    var o = dbaOpts(x.opts, ['expireAfterSeconds', 'overdueSecs']), out = [];
+    var a = admin();
+    var dbsList = x.d ? [x.d] : (runCmd(a, { listDatabases: 1, nameOnly: true }).databases || [])
+      .map(function (i) { return curDb().getSiblingDB(i.name); });
+    cmdLine(o, (x.d ? "db.getSiblingDB('" + x.d.getName() + "')" : 'every db') +
+      ': getCollectionInfos() + each getIndexes() → expireAfterSeconds; getParameter ttlMonitor*; serverStatus().metrics.ttl', out);
+    var p = safe(function () { return unwrap(a.runCommand({ getParameter: 1, ttlMonitorEnabled: 1, ttlMonitorSleepSecs: 1 })); }) || {};
+    var tm = safe(function () { return unwrap(a.runCommand({ serverStatus: 1 })).metrics.ttl; }) || {};
+    headOut({ ttlMonitorEnabled: p.ok ? p.ttlMonitorEnabled : null, ttlMonitorSleepSecs: p.ok ? toNum(p.ttlMonitorSleepSecs) : null,
+      passes: toNum(tm.passes), deletedDocuments: toNum(tm.deletedDocuments) }, Object.assign({}, o, { cols: null, exclude: null }), out);
+    var now = Date.now(), rows = [];
+    var add = function (ns, index, field, secs, oldest, flags) {
+      secs = toNum(secs);
+      rows.push({
+        ns: ns, index: index, field: field, expireAfterSeconds: secs, expire: isNaN(secs) ? '' : durText(secs),
+        oldest: oldest || '', overdueSecs: oldest && !isNaN(secs) ? Math.max(0, Math.round((now - oldest.getTime()) / 1000 - secs)) : '',
+        options: flags.join(', ')
+      });
+    };
+    dbsList.forEach(function (d) {
+      var infos;
+      try { infos = d.getCollectionInfos(); } catch (e) {
+        if (isAuthErr(e)) fail(M().unauthorized('listCollections'));
+        throw e;
+      }
+      infos.forEach(function (info) {
+        if (info.type === 'view' || /^system\.buckets\./.test(info.name)) return;
+        var ns = d.getName() + '.' + info.name, op = info.options || {};
+        if (op.expireAfterSeconds != null) {
+          if (op.timeseries) add(ns, '(timeseries)', op.timeseries.timeField || '', op.expireAfterSeconds, null, []);
+          else add(ns, '(clustered)', '_id', op.expireAfterSeconds, null, []);
+        }
+        if (info.type === 'timeseries') return;
+        var c = d.getCollection(info.name);
+        (safe(function () { return c.getIndexes(); }) || []).forEach(function (ix) {
+          if (ix.expireAfterSeconds == null || ix.clustered) return;   // 聚簇索引上面已经算过
+          var flags = [];
+          if (ix.partialFilterExpression) flags.push('partial=' + valText(ix.partialFilterExpression, true, o));
+          if (ix.hidden) flags.push('hidden');
+          add(ns, ix.name, Object.keys(ix.key || {})[0] || '', ix.expireAfterSeconds, oldestDate(c, ix), flags);
+        });
+      });
+    });
+    rows.sort(function (p1, p2) {
+      var a1 = p1.overdueSecs === '' ? -1 : p1.overdueSecs, a2 = p2.overdueSecs === '' ? -1 : p2.overdueSecs;
+      return a2 - a1 || (p1.ns < p2.ns ? -1 : p1.ns > p2.ns ? 1 : 0);
+    });
+    rowsOut(rows, o, out);
+    if (!rows.length) out.push(M().noTtl);
+    emit(out);
+  }
+
   // 日志：getLog 只保留内存里最近的 1024 行。4.4 起每行是 JSON，之前是文本：
   // 2024-01-01T08:30:00.123+0000 I NETWORK  [listener] connection accepted ...
   var SEV_RANK = { F: 0, E: 1, W: 2, I: 3, D: 4 };
@@ -1453,6 +1529,7 @@
     ['mt.oplog()', 'SHOW BINARY LOGS', 'oplog'],
     ['mt.status({interval})', 'SHOW GLOBAL STATUS', 'status'],
     ["mt.cache('db')", 'sys.innodb_buffer_stats_by_table', 'cache'],
+    ["mt.ttl('db')", 'information_schema.EVENTS', 'ttl'],
     ['mt.log({n, grep, sev})', 'performance_schema.error_log', 'log']
   ];
   function cmds() {
@@ -1467,7 +1544,7 @@
   var api = {
     table: t, vertical: g, csv: csv, config: config, help: help, version: VERSION,
     cmds: cmds, ps: dba(ps), slow: dba(slow), top: dba(top), locks: dba(locks), txns: dba(txns), repl: dba(repl), dbs: dba(dbs), colls: dba(colls), idx: dba(idx),
-    conns: dba(conns), oplog: dba(oplog), status: dba(status), frag: dba(frag), cache: dba(cache), log: dba(log)
+    conns: dba(conns), oplog: dba(oplog), status: dba(status), frag: dba(frag), cache: dba(cache), ttl: dba(ttl), log: dba(log)
   };
   t[MARK] = g[MARK] = api[MARK] = true;
 
