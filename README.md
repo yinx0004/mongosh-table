@@ -182,6 +182,28 @@ date: 2026-11-22 05:02:46.493
 - 这些命令需要监控类权限（如 `clusterMonitor` 角色）。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()` 时，只打印一行说明，不抛异常。
 - 老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过；分片集群（mongos）还没测过。
 
+#### mt.top() 怎么算的
+
+和 mongotop 一样，用的是 `db.adminCommand({top: 1})`。mongod 按集合累计了启动以来的耗时（微秒）和次数：
+
+```js
+totals: {
+  "shop.orders": {
+    total:     { time: 244000, count: 22 },   // 所有操作
+    readLock:  { time: 2000,   count: 5 },    // 读
+    writeLock: { time: 242000, count: 17 },   // 写
+    ...
+  },
+  ...
+}
+```
+
+- 默认取两次，中间 `sleep` 1 秒（`interval` 可改），两次相减就是这 1 秒内每个集合花的时间；`{interval: 0}` 只取一次，看启动以来的累计值。
+- 每行：`totalMs`、`readMs`、`writeMs` 分别来自 `total`、`readLock`、`writeLock` 的 `time`（换成毫秒，取整），`ops` 来自 `total.count`。
+- 这段时间里没有操作的集合不显示，按 `totalMs` 从大到小排。
+- `top` 是在操作**结束时**才记时间的：还在跑的长查询要等它结束才算进来，这种看 `mt.ps()`。
+- 有些操作不算读锁也不算写锁，所以 `readMs + writeMs` 可能小于 `totalMs`。
+
 #### 也可以直接套原生命令
 
 | MySQL 习惯 | mongosh + MongoTab |

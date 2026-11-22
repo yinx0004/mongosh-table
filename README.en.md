@@ -182,6 +182,28 @@ date: 2026-11-22 05:02:46.493
 - They need monitoring privileges (such as the `clusterMonitor` role). Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, they print a one-line explanation instead of throwing.
 - They work in both the legacy mongo shell and mongosh and are tested in CI on a replica set for every version; sharded clusters (mongos) are not tested yet.
 
+#### How mt.top() works
+
+Like mongotop, it uses `db.adminCommand({top: 1})`. mongod keeps per-collection totals since startup: time (microseconds) and count:
+
+```js
+totals: {
+  "shop.orders": {
+    total:     { time: 244000, count: 22 },   // all operations
+    readLock:  { time: 2000,   count: 5 },    // reads
+    writeLock: { time: 242000, count: 17 },   // writes
+    ...
+  },
+  ...
+}
+```
+
+- By default it takes two samples with a 1-second `sleep` in between (change it with `interval`); the difference is the time each collection used in that second. `{interval: 0}` takes one sample and shows the totals since startup.
+- Per row: `totalMs`, `readMs` and `writeMs` come from the `time` of `total`, `readLock` and `writeLock` (converted to milliseconds, rounded); `ops` comes from `total.count`.
+- Collections with no activity in the interval are left out; rows are sorted by `totalMs`, highest first.
+- `top` records time when an operation **finishes**: a long query still running is not counted until it ends; use `mt.ps()` for those.
+- Some operations take neither a read nor a write lock, so `readMs + writeMs` can be less than `totalMs`.
+
 #### Or wrap the native commands yourself
 
 | MySQL habit | mongosh + MongoTab |
