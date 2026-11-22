@@ -96,8 +96,8 @@
       noDup: '没有冗余索引',
       needExplain: "mt.explain() 需要游标、explain 的结果、慢日志里的命令或行号，例如 mt.explain(db.orders.find({status: 'PAID'}))、mt.explain({find: 'orders', filter: {...}})、mt.explain(1)",
       noRow: function (n) { return '没有第 ' + n + ' 行：mt.explain(行号) 用的是上一次 mt.slow() 或 mt.log() 列出的行'; },
-      rowNoCmd: function (n) { return '第 ' + n + ' 行没有可以 explain 的命令（4.4 之前的日志是纯文本，没有命令结构；可以改用 mt.slow()）'; },
-      notJson: "解析不了这段文字：mt.slow() / mt.log() 显示的命令去掉了引号，不能直接粘贴；请用 mt.explain(行号)，或者传 JSON 日志的整行、命令文档",
+      rowNoCmd: function (n) { return '第 ' + n + ' 行没有可以 explain 的命令（或者日志行太长被截断了；可以改用 mt.slow()）'; },
+      notJson: "解析不了这段文字：mt.slow() / mt.log() 表格里显示的命令去掉了引号，不能直接粘贴；请用 mt.explain(行号)，或者传日志里的整行（4.4 起的 JSON 行、之前的文本行都可以）、命令文档",
       cantExplain: function (v) { return v + ' 命令不能 explain，支持 find、aggregate、count、distinct、update、delete、findAndModify'; },
       exNote: { fullScan: '全表扫描', memSort: '内存排序', spilled: '用到了磁盘', postFilter: '取出后再过滤', multikey: '多键索引' },
       exNotes: function (list) { return '注意：' + list.join('；'); },
@@ -184,8 +184,8 @@
       noDup: 'no redundant indexes',
       needExplain: "mt.explain() needs a cursor, an explain result, a command from a slow log, or a row number, e.g. mt.explain(db.orders.find({status: 'PAID'})), mt.explain({find: 'orders', filter: {...}}) or mt.explain(1)",
       noRow: function (n) { return 'there is no row ' + n + ': mt.explain(n) uses the rows of the last mt.slow() or mt.log()'; },
-      rowNoCmd: function (n) { return 'row ' + n + ' has no command that can be explained (logs before 4.4 are plain text without the command structure; try mt.slow())'; },
-      notJson: "cannot parse this text: the commands shown by mt.slow() / mt.log() drop the quotes and cannot be pasted back; use mt.explain(n), or pass a whole JSON log line or a command document",
+      rowNoCmd: function (n) { return 'row ' + n + ' has no command that can be explained (or the log line was truncated for being too long; try mt.slow())'; },
+      notJson: "cannot parse this text: the commands shown in mt.slow() / mt.log() tables drop the quotes and cannot be pasted back; use mt.explain(n), or pass a whole log line (a 4.4+ JSON line or an older text line) or a command document",
       cantExplain: function (v) { return 'a ' + v + ' command cannot be explained; find, aggregate, count, distinct, update, delete and findAndModify can'; },
       exNote: { fullScan: 'full scan', memSort: 'in-memory sort', spilled: 'spilled to disk', postFilter: 'filtered after fetch', multikey: 'multikey' },
       exNotes: function (list) { return 'Note: ' + list.join('; '); },
@@ -1658,6 +1658,146 @@
     ks.forEach(function (key) { out[key] = ejsonFix(v[key]); });
     return out;
   }
+  // ─── 4.4 之前的文本日志。命令部分是 shell 写法，不是 JSON：字段名不带引号（可以带点）、
+  // ObjectId('...')、Timestamp(1, 2)、new Date(123)、BinData(0, 十六进制) 等。不用 eval，自己解析
+  function hexToB64(hex) {
+    var abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', bytes = [], out = '';
+    for (var i = 0; i + 1 < hex.length; i += 2) bytes.push(parseInt(hex.substr(i, 2), 16));
+    for (var k = 0; k < bytes.length; k += 3) {
+      var b0 = bytes[k], b1 = bytes[k + 1], b2 = bytes[k + 2];
+      out += abc[b0 >> 2] + abc[((b0 & 3) << 4) | ((b1 || 0) >> 4)] +
+        (b1 === undefined ? '=' : abc[((b1 & 15) << 2) | ((b2 || 0) >> 6)]) + (b2 === undefined ? '=' : abc[b2 & 63]);
+    }
+    return out;
+  }
+  function tsMake(t, i) { return safe(function () { return Timestamp(t, i); }) || Timestamp({ t: t, i: i }); }   // eslint-disable-line no-undef
+  // 从 pos（应该是 '{' 或 '['）开始解析一个值，返回 {v, pos}；格式不对就抛异常
+  function looseParse(text, pos) {
+    var i = pos;
+    var bad = function () { throw new Error('mongotab: cannot parse at ' + i + ': ' + text.substr(i, 30)); };
+    var ws = function () { while (i < text.length && /\s/.test(text.charAt(i))) i++; };
+    var str = function () {
+      var q = text.charAt(i), j = i + 1;
+      while (j < text.length && text.charAt(j) !== q) j += text.charAt(j) === '\\' ? 2 : 1;
+      if (j >= text.length) bad();
+      var inner = text.slice(i + 1, j);
+      i = j + 1;
+      if (q === "'") inner = inner.replace(/\\'/g, "'").replace(/"/g, '\\"');
+      return JSON.parse('"' + inner + '"');
+    };
+    var args = function () {   // '(' 之后，按顶层逗号切开，到 ')' 为止
+      var list = [], cur = '', depth = 0;
+      i++;
+      while (i < text.length) {
+        var ch = text.charAt(i);
+        if (ch === '"' || ch === "'") { var st = i; str(); cur += text.slice(st, i); continue; }
+        if (ch === '(') depth++;
+        if (ch === ')') { if (!depth) { i++; break; } depth--; }
+        if (ch === ',' && !depth) { list.push(cur.trim()); cur = ''; i++; continue; }
+        cur += ch; i++;
+      }
+      if (cur.trim() || list.length) list.push(cur.trim());
+      return list;
+    };
+    var unq = function (a) { return /^["']/.test(a) ? looseParse(a, 0).v : a; };
+    var call = function (name) {
+      var a = args();
+      switch (name) {
+        case 'ObjectId': return ObjectId(unq(a[0]));   // eslint-disable-line no-undef
+        case 'Timestamp': return tsMake(Number(a[0]), Number(a[1]));
+        case 'Date': case 'ISODate': return /^["']/.test(a[0]) ? new Date(unq(a[0])) : new Date(Number(a[0]));
+        case 'NumberLong': return NumberLong(String(unq(a[0])));   // eslint-disable-line no-undef
+        case 'NumberInt': return NumberInt(Number(unq(a[0])));   // eslint-disable-line no-undef
+        case 'NumberDecimal': return NumberDecimal(String(unq(a[0])));   // eslint-disable-line no-undef
+        case 'UUID': return UUID(unq(a[0]));   // eslint-disable-line no-undef
+        case 'BinData': return BinData(Number(a[0]), /^["']/.test(a[1]) ? unq(a[1]) : hexToB64(a[1]));   // eslint-disable-line no-undef
+        case 'HexData': return BinData(Number(a[0]), hexToB64(unq(a[1])));   // eslint-disable-line no-undef
+      }
+      bad();
+    };
+    var val = function () {
+      ws();
+      var ch = text.charAt(i);
+      if (ch === '{') {
+        var o = {};
+        i++; ws();
+        if (text.charAt(i) === '}') { i++; return o; }
+        for (;;) {
+          ws();
+          var key;
+          if (text.charAt(i) === '"' || text.charAt(i) === "'") key = str();
+          else { var c = text.indexOf(':', i); if (c < 0) bad(); key = text.slice(i, c).trim(); i = c; }
+          ws();
+          if (text.charAt(i) !== ':') bad();
+          i++;
+          o[key] = val();
+          ws();
+          if (text.charAt(i) === ',') { i++; continue; }
+          if (text.charAt(i) === '}') { i++; return o; }
+          bad();
+        }
+      }
+      if (ch === '[') {
+        var arr = [];
+        i++; ws();
+        if (text.charAt(i) === ']') { i++; return arr; }
+        for (;;) {
+          arr.push(val());
+          ws();
+          if (text.charAt(i) === ',') { i++; continue; }
+          if (text.charAt(i) === ']') { i++; return arr; }
+          bad();
+        }
+      }
+      if (ch === '"' || ch === "'") return str();
+      if (ch === '/') {
+        var j = i + 1;
+        while (j < text.length && text.charAt(j) !== '/') j += text.charAt(j) === '\\' ? 2 : 1;
+        var pat = text.slice(i + 1, j), fl = /^[a-z]*/.exec(text.slice(j + 1))[0];
+        i = j + 1 + fl.length;
+        return new RegExp(pat, fl);
+      }
+      var num = /^-?(?:\d+\.?\d*(?:e[+-]?\d+)?|\.\d+)/i.exec(text.slice(i));
+      if (num) {
+        i += num[0].length;
+        var n = Number(num[0]);
+        if (/^-?\d+$/.test(num[0]) && Math.abs(n) > 9007199254740991) return NumberLong(num[0]);   // eslint-disable-line no-undef
+        return n;
+      }
+      var w = /^[A-Za-z_$][\w$]*/.exec(text.slice(i));
+      if (!w) bad();
+      i += w[0].length;
+      var word = w[0];
+      if (word === 'new') { ws(); var w2 = /^[A-Za-z_$][\w$]*/.exec(text.slice(i)); if (!w2) bad(); i += w2[0].length; word = w2[0]; }
+      ws();
+      if (text.charAt(i) === '(') return call(word);
+      switch (word) {
+        case 'true': return true;
+        case 'false': return false;
+        case 'null': return null;
+        case 'undefined': return undefined;
+        case 'NaN': case 'nan': return NaN;
+        case 'Infinity': case 'inf': return Infinity;
+        case 'MinKey': return MinKey();   // eslint-disable-line no-undef
+        case 'MaxKey': return MaxKey();   // eslint-disable-line no-undef
+      }
+      bad();
+    };
+    var v = val();
+    return { v: v, pos: i };
+  }
+  // 文本日志行 → {op, ns, command, originatingCommand}：
+  //   ... [conn12] command shop.orders appName: "x" command: find { find: "orders", ... } planSummary: ...
+  //   ... [conn12] update shop.orders command: { q: { ... }, u: { ... } } planSummary: ...
+  function textLogEntry(line) {
+    var m = /\]\s+(\w+)\s+(\S+)\s+(?:appName: "(?:[^"\\]|\\.)*"\s+)?command:\s+(?:\w+\s+)?(?=\{)/.exec(line);
+    if (!m) return null;
+    var cmd = looseParse(line, m.index + m[0].length);
+    var e = { op: m[1], ns: m[2], command: cmd.v };
+    var k = line.indexOf('originatingCommand: {', cmd.pos);
+    if (k >= 0) e.originatingCommand = looseParse(line, line.indexOf('{', k)).v;
+    return e;
+  }
   // mongos、驱动、副本集内部加的字段，explain 时去掉
   var EXPLAIN_DROP = ['lsid', 'txnNumber', 'txnRetryCounter', 'autocommit', 'startTransaction', 'readConcern', 'writeConcern',
     'shardVersion', 'databaseVersion', 'clientOperationKey', 'apiVersion', 'apiStrict', 'apiDeprecationErrors',
@@ -1701,10 +1841,16 @@
       if (!entry) fail(m.rowNoCmd(x));
     } else if (typeof x === 'string') {
       var j = safe(function () { return JSON.parse(x); });
-      if (!isDoc(j)) fail(m.notJson);
-      j = ejsonFix(j);
-      entry = isDoc(j.attr) && isDoc(j.attr.command) ? { op: j.attr.type, ns: j.attr.ns, command: j.attr.command, originatingCommand: j.attr.originatingCommand }
-        : isDoc(j.command) ? j : { command: j };
+      if (isDoc(j)) {
+        j = ejsonFix(j);
+        entry = isDoc(j.attr) && isDoc(j.attr.command) ? { op: j.attr.type, ns: j.attr.ns, command: j.attr.command, originatingCommand: j.attr.originatingCommand }
+          : isDoc(j.command) ? j : { command: j };
+      } else {
+        // 4.4 之前的文本日志行，或者 shell 写法的命令 { find: "c", filter: { ... } }
+        entry = safe(function () { return textLogEntry(x); });
+        if (!entry && /^\s*\{/.test(x)) entry = safe(function () { var c = looseParse(x, x.indexOf('{')).v; return isDoc(c) ? { command: c } : null; });
+        if (!entry) fail(m.notJson);
+      }
     } else if (x && typeof x.explain === 'function') {
       cmdLine(o, "cursor.explain('" + verb + "')", out);
       ex = unwrap(x.explain(verb));
@@ -1769,7 +1915,8 @@
       h.executionTimeMillis = toNum(es.executionTimeMillis); h.nReturned = toNum(es.nReturned);
       h.totalKeysExamined = toNum(es.totalKeysExamined); h.totalDocsExamined = toNum(es.totalDocsExamined);
       var nr = toNum(es.nReturned), de = toNum(es.totalDocsExamined);
-      if (de > 0) h.docsExaminedPerReturned = nr > 0 ? Math.round(de / nr * 10) / 10 : 'Infinity';
+      var isWrite = root && /^(UPDATE|DELETE)$/.test(String(root.stage));   // 写操作不返回文档，这个比例没意义
+      if (de > 0 && !isWrite) h.docsExaminedPerReturned = nr > 0 ? Math.round(de / nr * 10) / 10 : 'Infinity';
     }
     if (qp.rejectedPlans) h.rejectedPlans = qp.rejectedPlans.length;
     if (qp.indexFilterSet) h.indexFilterSet = true;
@@ -1885,6 +2032,7 @@
       var row = { '#': 0, time: r.time, sev: r.sev, comp: r.comp, ctx: r.ctx, id: r.id, msg: r.msg };
       if (r.json) row.attr = r.attr != null ? valText(r.attr, true, o) : '';
       row._attr = r.attr;
+      row._raw = r.json ? null : r.raw;
       rows.push(row);
     });
     var total = rows.length;
@@ -1892,9 +2040,10 @@
     // 4.4 起 Slow query 的 attr 里有 ns、command、type（update / remove 是单条语句）
     lastRows = rows.map(function (r, i) {
       r['#'] = i + 1;
-      var a = r._attr;
-      delete r._attr;
-      return isDoc(a) && isDoc(a.command) ? { op: a.type, ns: a.ns, command: a.command, originatingCommand: a.originatingCommand } : null;
+      var a = r._attr, raw = r._raw;
+      delete r._attr; delete r._raw;
+      if (isDoc(a) && isDoc(a.command)) return { op: a.type, ns: a.ns, command: a.command, originatingCommand: a.originatingCommand };
+      return raw ? safe(function () { return textLogEntry(raw); }) || null : null;   // 4.4 之前的文本日志
     });
     if (rows.every(function (r) { return r.id === ''; })) rows.forEach(function (r) { delete r.id; });   // 4.4 之前没有 id
     renderRows(rows, o, out, false, rows.length);

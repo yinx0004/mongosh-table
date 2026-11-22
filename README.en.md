@@ -697,14 +697,16 @@ mt.explain({find: 's02orders', filter: {status: 'shipped', amount: {$gte: 3000}}
             projection: {$sortKey: {$meta: 'sortKey'}}, shardVersion: [...]})
 mt.explain(db.system.profile.find().sort({millis: -1}).limit(1).next())   // a profile document
 mt.explain('{"t":{"$date":...},"msg":"Slow query","attr":{...}}')         // a whole 4.4+ JSON log line, as a string
+mt.explain(`2026-11-21T15:46:55.624+0000 I COMMAND  [conn2166] command shop.orders ... command: find { ... } planSummary: ...`)   // a whole text log line from before 4.4
 ```
 
 - Fields added by mongos and drivers are dropped (`shardVersion`, `databaseVersion`, `lsid`, `$clusterTime`, `readConcern`, `$sortKey` in the projection...), then it runs `db.runCommand({explain: command, verbosity: 'executionStats'})`.
 - The database is the command's `$db` or the database part of `ns`; failing that the `{db: 'shop'}` option, and failing that the current database.
 - `find`, `aggregate`, `count`, `distinct`, `update`, `delete` and `findAndModify` are supported. Single update / remove statements from the profiler or the log are wrapped into `update` / `delete` commands; a getMore uses its original command (`originatingCommand`). Explaining a write does not modify any data.
 - `{"$date": ...}`, `{"$oid": ...}`, `{"$numberLong": ...}` and friends in JSON logs are turned back into real types; otherwise the filter would not match.
+- In text logs from before 4.4 the command is in shell syntax: unquoted field names, `ObjectId('...')`, `Timestamp(1, 2)`, `new Date(...)`, hex `BinData(0, D941...)`. These are parsed into the matching types (no `eval`), and integers above 2^53 become `NumberLong`.
+- When passing a whole line: inside single quotes, single quotes in the line (as in `ObjectId('...')`) must be written `\'`; in mongosh, backticks `` `...` `` are easiest. Log lines over 10 KB are truncated and cannot be parsed; use `mt.slow()` instead.
 - The commands shown in `mt.slow()` / `mt.log()` tables have lost their quotes and types and cannot be pasted back; use the row number, or pass the original command or log line.
-- Logs before 4.4 are plain text without the command structure, so `mt.log()` rows cannot be explained there; `mt.slow()` (which reads the profiler) works on every version.
 
 ```
 > mt.slow({sort: 'ms', cols: '#,ms,op,plan,docsExamined,nreturned,command'})
@@ -1362,7 +1364,7 @@ It runs `db.adminCommand({getLog: 'global'})` and shows the last `n` lines, olde
 
 | Column | Meaning |
 |---|---|
-| `#` | Row number, used by `mt.explain(n)` (Slow query rows, 4.4+) |
+| `#` | Row number, used by `mt.explain(n)` (rows with a command, such as slow queries) |
 | `time` | Time, in the `tz` time zone |
 | `sev` | Severity: `F` fatal, `E` error, `W` warning, `I` info, `D1`–`D5` debug |
 | `comp` | Component: `NETWORK`, `COMMAND`, `REPL`, `STORAGE`... |
