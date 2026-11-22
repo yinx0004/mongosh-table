@@ -348,6 +348,7 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 | mt.frag('db')                | TABLES.DATA_FREE                 | Disk space each collection can reuse after deletes, most first; current db by default                                                                                              |
 | mt.idx('coll')               | SHOW INDEX FROM t                | Index keys, size, usage count and options                                                                                                                                          |
 | mt.explain(cursor)           | EXPLAIN ANALYZE                  | Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; analyze: false = plan only, no execution                        |
+| mt.builds()                  | ALTER TABLE progress             | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                            |
 | mt.unusedIdx('db')           | sys.schema_unused_indexes        | Indexes never used (ops = 0), largest first; all user databases by default                                                                                                         |
 | mt.dupIdx('db')              | sys.schema_redundant_indexes     | Redundant indexes whose key is a prefix of another index, e.g. {a: 1} covered by {a: 1, b: 1}; all user databases by default                                                       |
 | mt.conns()                   | PROCESSLIST GROUP BY host        | Connections per client IP                                                                                                                                                          |
@@ -1003,6 +1004,40 @@ To avoid false alarms, these are never reported:
 - Directions differ, e.g. `{d: -1}` and `{d: 1, e: 1}`.
 
 Hiding a redundant index with `hideIndex` before dropping it is a good idea here too.
+
+### mt.builds(): index builds in progress
+
+Like watching the progress of MySQL online DDL (`ALTER TABLE ... ADD INDEX`): building an index on a big collection takes a while, so see which phase it is in and how far along it is.
+
+```js
+mt.builds()
+```
+
+It runs `db.adminCommand({currentOp: 1, $all: true})` and picks the operations that are building indexes.
+
+| Column | Meaning |
+|---|---|
+| `ns` / `index` / `key` | database.collection, index name, index key (comma-separated when several are built together) |
+| `phase` | `scanning collection`, `inserting keys from external sorter into index` (writing the sorted keys into the index), `draining writes received during build` (applying writes that arrived during the build); `background` and similar on old versions |
+| `done` / `total` / `pct` | Progress of the current phase; empty for phases that do not report progress |
+| `secs` | Seconds it has been running |
+| `opid` / `client` | Operation ID and the client that started the build |
+
+```
+> mt.builds()
+-- db.adminCommand({currentOp: 1, $all: true}) → msg /Index Build/ or command.createIndexes
++-------------+------------------------------+-----------------------------------+------------------------------------------+---------+---------+-------+------+------+---------------------+
+| ns          | index                        | key                               | phase                                    | done    | total   | pct   | secs | opid | client              |
++-------------+------------------------------+-----------------------------------+------------------------------------------+---------+---------+-------+------+------+---------------------+
+| shop.orders | customer.name_1_createdAt_-1 | {customer.name: 1, createdAt: -1} | inserting keys from external sorter i... | 1447924 | 3000000 | 48.3% |    4 | 1048 | 192.168.107.3:39170 |
++-------------+------------------------------+-----------------------------------+------------------------------------------+---------+---------+-------+------+------+---------------------+
+1 row in set
+```
+
+- Since 4.4 indexes are built on a background thread while the client's `createIndexes` waits alongside; the two are shown as one row.
+- A build that has not started yet (waiting for a lock, say) shows as `waiting to start`.
+- To stop one: since 4.4 drop it with `db.orders.dropIndex('name')`; on earlier versions use `db.killOp(opid)`.
+- On a replica set, secondaries build the index too (at the same time since 4.4); connect to a secondary to see its progress.
 
 ### mt.conns(): where connections come from
 
