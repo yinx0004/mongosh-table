@@ -13,7 +13,7 @@
 **Make mongosh readable.**
 
 MongoTab renders query results in mongosh as MySQL-style tables or `\G`-style vertical records, without changing how you write MongoDB commands. A single JS file with no dependencies.
-The legacy `mongo` shell that ships with MongoDB 5.0 and earlier works too; see [Legacy mongo shell](#legacy-mongo-shell).
+The legacy `mongo` shell that ships with MongoDB 5.0 and earlier works too (since v0.2.0); see [Legacy mongo shell](#legacy-mongo-shell).
 
 **Non-intrusive**: it only adds three globals, `t`, `g` and `mt` (any name already taken is skipped; use `mongotab.xxx` instead).
 It does not touch mongosh objects, prototypes, `.mongoshrc` or any config, and it is gone when the session ends.
@@ -215,7 +215,7 @@ test/format.sh mongo:4.0
 
 ### Legacy mongo shell
 
-Since v0.2.0 the legacy `mongo` command that ships with MongoDB 5.0 and earlier (prompt like `rs0:PRIMARY>`) works too. Load it the same way as in mongosh, with `mongo` in place of `mongosh`:
+Since [v0.2.0](https://github.com/yinx0004/mongosh-table/releases/tag/v0.2.0) the legacy `mongo` command that ships with MongoDB 5.0 and earlier (prompt like `rs0:PRIMARY>`) works too. Load it the same way as in mongosh, with `mongo` in place of `mongosh`:
 
 ```js
 load('/path/to/mongotab.js')
@@ -224,6 +224,8 @@ load('/path/to/mongotab.js')
 ```bash
 mongo "mongodb://user@host:27017/admin" /path/to/mongotab.js --shell
 ```
+
+> **Versions:** v0.1.x does not support the legacy shell. v0.1.0 fails there with `TypeError: root is undefined`, and v0.1.1 says "MongoTab needs mongosh". If you see either, get the latest version from [Download](#download). For the changes and what was tested, see the [v0.2.0 release notes](https://github.com/yinx0004/mongosh-table/releases/tag/v0.2.0).
 
 Tables, vertical output, CSV and all BSON types look the same as in mongosh. A few things differ because the legacy shell lacks what mongosh provides:
 
