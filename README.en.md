@@ -127,7 +127,7 @@ mt.help()
 
 ### For DBAs
 
-Since v0.3.0, `mt` comes with a set of read-only shortcuts for the usual MySQL `SHOW ...` commands (`mt.slow()` and `mt.top()` since v0.4.0):
+Since v0.3.0, `mt` comes with a set of read-only shortcuts for the usual MySQL `SHOW ...` commands:
 
 ```js
 mt.cmds()                     // list all commands
@@ -135,8 +135,10 @@ mt.ps()                       // SHOW PROCESSLIST: running operations, longest f
 mt.ps({secs: 5})              // only those running for more than 5 seconds
 mt.ps({ns: 'shop.orders'})    // only one database or collection
 mt.ps({all: true})            // include idle connections and internal threads
+mt.ps({sort: 'asc'})          // shortest running first; 'opid' sorts by opid, or pass a sort document such as {ns: 1, secs: -1}
 mt.slow()                     // slow query log: reads system.profile, newest first; current db, or mt.slow('shop')
 mt.slow({ms: 500, ns: 'orders'})  // only those over 500 ms, only one collection
+mt.slow({sort: 'ms'})         // slowest first; 'asc' = oldest first, or a sort document such as {docsExamined: -1}
 mt.top()                      // read/write time per collection (ms), sampled 1 second apart, busiest first; like mongotop
 mt.top({interval: 0})         // totals since startup
 mt.repl()                     // SHOW REPLICA STATUS: member state, replication lag (seconds), sync source
@@ -176,11 +178,50 @@ date: 2026-11-22 05:02:46.493
 
 - Each command first prints the native command it runs (the `-- ...` line, dimmed in a terminal) so you can copy or check it. Turn it off with `mt.config({showCmd: false})`.
 - They take the same options as `t()`, e.g. `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`, `mt.colls('shop', {limit: 200})`, `mt.idx('orders', {vertical: true})`.
-- By default `mt.ps()` hides idle connections, internal threads, drivers' awaitable `hello` polls and its own query.
+- By default `mt.ps()` hides idle connections, internal threads, drivers' awaitable `hello` polls and its own query. `sort` is applied in the shell to the filtered rows; a sort document uses the output column names (`opid`, `secs`, `op`, `ns`, `client`, `app`...), and ties fall back to longest running first.
 - `mt.slow()` only reads `system.profile` and never changes profiler settings. The profiler is off by default; when it is, `mt.slow()` tells you to turn it on with `db.setProfilingLevel(1, {slowms: 100})` (set per database).
 - `mt.slow()` and `mt.top()` must run on a mongod; a mongos has no such data.
 - They need monitoring privileges (such as the `clusterMonitor` role). Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, they print a one-line explanation instead of throwing.
 - They work in both the legacy mongo shell and mongosh and are tested in CI on a replica set for every version; sharded clusters (mongos) are not tested yet.
+
+#### How mt.slow() works
+
+It reads what the profiler writes to the `system.profile` collection of the current database, roughly:
+
+```js
+db.getProfilingStatus()                        // level / slowms / sampleRate in the header
+db.system.profile.find({...}).sort({ts: -1})   // newest first by default; see sort below
+```
+
+- The profiler is set per database: `level` 0 is off, 1 records operations slower than `slowms`, 2 records everything; `sampleRate` is the fraction sampled. `mt.slow()` only reads; it never changes these settings.
+- Filters: `ms` becomes `{millis: {$gte: ms}}`; `ns` takes a collection name (`'orders'`) or a full `'db.collection'`. Reads of `system.profile` itself and `profile` commands are always left out, so at level 2 you do not see `mt.slow()` itself.
+- `sort`: `'desc'` (default) is `{ts: -1}`, newest first; `'asc'` is `{ts: 1}`, oldest first; `'ms'` is `{millis: -1, ts: -1}`, slowest first; or pass a sort document such as `{docsExamined: -1}`.
+- It first runs `count` for the total, then sorts and takes the first `limit` entries (50 by default, `{limit: 0}` for all); when there are more, the footer says "showing the first 50 of N rows". So by default you get the 50 newest, and with `{sort: 'ms'}` the 50 slowest.
+- Per row: `ts` time, `ms` duration (`millis`), `op`, `ns`, `plan` (`planSummary`, e.g. `COLLSCAN` or `IXSCAN {...}`), `keysExamined` / `docsExamined` index keys and documents scanned, `nreturned` documents returned, `client`, `user`, and `command` (without driver fields such as `lsid` and `$clusterTime`). Without authentication `user` is always empty, so that column is hidden.
+- `docsExamined` far above `nreturned`, or a `COLLSCAN` plan, usually means a missing index.
+- `system.profile` is a 1 MB capped collection that overwrites its oldest entries when full, so it only covers recent activity.
+
+#### How mt.top() works
+
+Like mongotop, it uses `db.adminCommand({top: 1})`. mongod keeps per-collection totals since startup: time (microseconds) and count:
+
+```js
+totals: {
+  "shop.orders": {
+    total:     { time: 244000, count: 22 },   // all operations
+    readLock:  { time: 2000,   count: 5 },    // reads
+    writeLock: { time: 242000, count: 17 },   // writes
+    ...
+  },
+  ...
+}
+```
+
+- By default it takes two samples with a 1-second `sleep` in between (change it with `interval`); the difference is the time each collection used in that second. `{interval: 0}` takes one sample and shows the totals since startup.
+- Per row: `totalMs`, `readMs` and `writeMs` come from the `time` of `total`, `readLock` and `writeLock` (converted to milliseconds, rounded); `ops` comes from `total.count`.
+- Collections with no activity in the interval are left out; rows are sorted by `totalMs`, highest first.
+- `top` records time when an operation **finishes**: a long query still running is not counted until it ends; use `mt.ps()` for those.
+- Some operations take neither a read nor a write lock, so `readMs + writeMs` can be less than `totalMs`.
 
 #### Or wrap the native commands yourself
 

@@ -75,7 +75,7 @@ run('missingText', function () { t(c.find(), { cols: 'orderNo,qty', missingText:
 run('config', function () { mt.config(); }, ['"limit":50']);
 run('help', function () { mt.help(); }, ['mt.csv(x, ...)']);
 // ── DBA 命令 ──
-run('mt.cmds', function () { mt.cmds(); }, ['| mt.ps({secs, ns, all}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})']);
+run('mt.cmds', function () { mt.cmds(); }, ['| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})']);
 run('mt.ps', function () { mt.ps(); }, ['-- db.adminCommand({currentOp: 1, active: true})']);
 run('mt.ps slow query', function () {
   for (var i = 0; i < 20 && !db.currentOp({ ns: 'mtslow.slow' }).inprog.length; i++) sleep(500);
@@ -83,6 +83,24 @@ run('mt.ps slow query', function () {
 }, ['| mtslow.slow |', '$where']);
 run('mt.ps secs filter', function () { mt.ps({ secs: 100000 }); }, ['Empty set']);
 run('mt.ps all', function () { mt.ps({ all: true, cols: 'opid,secs,op,client' }); }, ['| opid ']);
+// mt.ps 排序：取出某一列的数字，检查顺序
+function psCol(col, opts) {
+  var lines = [], realPrint = G.print;
+  G.print = function () { lines.push(Array.prototype.join.call(arguments, ' ')); };
+  try { mt.ps(Object.assign({ all: true, cols: col, table: true, showCmd: false, limit: 0 }, opts)); } finally { G.print = realPrint; }
+  var v = [];
+  lines.join('\n').split('\n').forEach(function (l) { var m = /^\|\s*(\d+)\s*\|$/.exec(l); if (m) v.push(Number(m[1])); });
+  return v;
+}
+function orderOk(v, dir) {
+  for (var i = 1; i < v.length; i++) if ((v[i] - v[i - 1]) * dir < 0) return false;
+  return v.length > 1;
+}
+run('mt.ps sort desc', function () { var v = psCol('secs', {}); print(orderOk(v, -1) ? 'order ok' : 'order bad ' + v); }, ['order ok']);
+run('mt.ps sort asc', function () { var v = psCol('secs', { sort: 'asc' }); print(orderOk(v, 1) ? 'order ok' : 'order bad ' + v); }, ['order ok']);
+run('mt.ps sort opid', function () { var v = psCol('opid', { sort: 'opid' }); print(orderOk(v, 1) ? 'order ok' : 'order bad ' + v); }, ['order ok']);
+run('mt.ps sort doc', function () { var v = psCol('opid', { sort: { opid: -1 } }); print(orderOk(v, -1) ? 'order ok' : 'order bad ' + v); }, ['order ok']);
+run('mt.ps bad sort', function () { mt.ps({ sort: 'x' }); }, ["mongotab: mt.ps() 的 sort 可以是 'desc'"]);
 run('mt.ps ns filter', function () { mt.ps({ ns: 'nosuchdb' }); }, ['Empty set']);
 // mt.slow：在单独的库里开 profiler（slowms 0 记下所有操作），用完关掉
 var pdb = db.getSiblingDB('mtprof');
@@ -90,8 +108,14 @@ pdb.dropDatabase();
 pdb.c.insert({ a: 1 });
 pdb.runCommand({ profile: 1, slowms: 0 });
 pdb.c.find({ a: 1 }).toArray();
-run('mt.slow', function () { mt.slow('mtprof'); }, ['-- db.getSiblingDB(\'mtprof\').system.profile.find({}).sort({ts: -1})', 'level: 1', 'slowms: 0', '| mtprof.c ', '| ts ']);
+pdb.c.find({ $where: 'sleep(50) || true' }).toArray();   // 更慢、更晚的一条
+run('mt.slow', function () { mt.slow('mtprof', { table: true }); }, ['-- db.getSiblingDB(\'mtprof\').system.profile.find({}).sort({ts: -1})', 'level: 1', 'slowms: 0', '| mtprof.c ', '| ts ']);
 run('mt.slow ns filter', function () { mt.slow(pdb, { ns: 'c', cols: 'ns,op,docsExamined,command', showCmd: false }); }, ['| mtprof.c | query ', '{find: c, filter: {a: 1}']);
+run('mt.slow sort desc', function () { mt.slow('mtprof', { limit: 1, cols: 'command' }); }, ['$where', '(共 2 行，只显示前 1 行)']);
+run('mt.slow sort asc', function () { mt.slow('mtprof', { sort: 'asc', limit: 1, cols: 'command' }); }, ['.sort({ts: 1})', '{find: c, filter: {a: 1}']);
+run('mt.slow sort ms', function () { mt.slow('mtprof', { sort: 'ms', limit: 1, cols: 'ms,command' }); }, ['.sort({millis: -1, ts: -1})', '$where']);
+run('mt.slow sort doc', function () { mt.slow('mtprof', { sort: { millis: 1 }, limit: 1, cols: 'command' }); }, ['.sort({millis: 1})', '{find: c, filter: {a: 1}']);
+run('mt.slow bad sort', function () { mt.slow('mtprof', { sort: 'x' }); }, ["mongotab: mt.slow() 的 sort 可以是 'desc'"]);
 run('mt.slow ms filter', function () { mt.slow('mtprof', { ms: 100000000 }); }, ['.find({millis: {$gte: 100000000}})', 'Empty set']);
 pdb.runCommand({ profile: 0, slowms: 100 });
 pdb.dropDatabase();
