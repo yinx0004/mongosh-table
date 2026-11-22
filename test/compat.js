@@ -427,6 +427,34 @@ run('mt.check issues only', function () {
   var o = capOut(function () { mt.check({ issues: true, quick: true }); });
   print(/\| OK\s/.test(o) ? 'has ok' : 'no ok rows');
 }, ['no ok rows']);
+// 查不全时不能显示 OK：用 failCommand 让 aggregate / listDatabases 真的失败（4.0 起才有 failCommand）
+var failCmd = function (cmds) {
+  try { return db.adminCommand({ configureFailPoint: 'failCommand', mode: 'alwaysOn', data: { failCommands: cmds, errorCode: 2 } }).ok; } catch (e) { return false; }
+};
+var failOff = function () { try { db.adminCommand({ configureFailPoint: 'failCommand', mode: 'off' }); } catch (e) { } };
+var hasFailCmd = failCmd(['mtNoSuchCommand']); failOff();
+if (hasFailCmd) {
+  run('mt.check aggregate fails', function () {
+    failCmd(['aggregate']);
+    var out;
+    try { out = capOut(function () { mt.check({ table: true }); }); } finally { failOff(); }
+    print(/可回收的磁盘空间\s*\|\s*UNKNOWN\s*\|\s*查了 0\/\d+ 个集合，\d+ 个失败/.test(out) ? 'frag unknown' : out);
+    print(/可回收的磁盘空间\s*\|\s*OK/.test(out) ? 'frag ok' : 'frag not ok');
+    print(/UNKNOWN \d/.test(out) ? 'summary has unknown' : 'summary missing unknown');
+  }, ['frag unknown', 'frag not ok', 'summary has unknown']);
+  run('mt.check listDatabases fails', function () {
+    failCmd(['listDatabases']);
+    var out;
+    try { out = capOut(function () { mt.check({ issues: true, table: true }); }); } finally { failOff(); }
+    ['profiler', 'TTL 超期', '冗余索引', '可回收的磁盘空间'].forEach(function (k) {
+      print(new RegExp(k + '\\s*\\|\\s*UNKNOWN').test(out) ? k + ' unknown' : k + ' wrong: ' + out);
+    });
+  }, ['profiler unknown', 'TTL 超期 unknown', '冗余索引 unknown', '可回收的磁盘空间 unknown']);
+  run('mt.frag aggregate fails', function () {
+    failCmd(['aggregate']);
+    try { mt.frag('mtest', { showCmd: false }); } finally { failOff(); }
+  }, ['合计可回收 ']);
+} else print('skip failCommand cases: not supported on ' + db.version());
 ckd.dropDatabase();
 // mt.desc：字段结构；mt.planCache：计划缓存（有两个候选索引的查询才会被缓存）
 var dsc = db.getSiblingDB('mtdesc'); dsc.dropDatabase();

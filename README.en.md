@@ -338,20 +338,20 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 ```
 > mt.cmds()
 ── Server activity ──
-+------------------------------+--------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                          | description                                                                                                                                                                                                                            |
-+------------------------------+--------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.check({quick, issues})    | mysqltuner / pt-summary        | Health check: replication, oplog, cache, connections, long operations and transactions, TTL, redundant / unused indexes and more, each with OK / WARN / CRIT and advice; quick skips per-collection checks, issues shows only problems |
-| mt.status({interval})        | SHOW GLOBAL STATUS             | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                         |
-| mt.host({all})               | SHOW VARIABLES LIKE 'version%' | Machine and process: CPU, memory, OS, open files limit, mongod version and build, storage engine, startup options; all lists every startup option                                                                                      |
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST               | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                   |
-| mt.conns()                   | PROCESSLIST GROUP BY host      | Connections per client IP                                                                                                                                                                                                              |
-| mt.locks({all})              | sys.innodb_lock_waits          | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                              |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX  | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                   |
-| mt.top({interval, ns})       | sys.schema_table_statistics    | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                           |
-| mt.latency('db', {interval}) | sys.statement_analysis         | Average latency (ms) of reads / writes / commands, server-wide and per collection; interval = seconds to sample, 0 = since startup; all user databases by default                                                                      |
-| mt.builds()                  | ALTER TABLE progress           | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                                                |
-+------------------------------+--------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+--------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                          | description                                                                                                                                                                                                                                      |
++------------------------------+--------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.check({quick, issues})    | mysqltuner / pt-summary        | Health check: replication, oplog, cache, connections, long operations and transactions, TTL, redundant / unused indexes and more, each with OK / WARN / CRIT / UNKNOWN and advice; quick skips per-collection checks, issues shows only problems |
+| mt.status({interval})        | SHOW GLOBAL STATUS             | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                                   |
+| mt.host({all})               | SHOW VARIABLES LIKE 'version%' | Machine and process: CPU, memory, OS, open files limit, mongod version and build, storage engine, startup options; all lists every startup option                                                                                                |
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST               | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                             |
+| mt.conns()                   | PROCESSLIST GROUP BY host      | Connections per client IP                                                                                                                                                                                                                        |
+| mt.locks({all})              | sys.innodb_lock_waits          | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                                        |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX  | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                             |
+| mt.top({interval, ns})       | sys.schema_table_statistics    | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                                     |
+| mt.latency('db', {interval}) | sys.statement_analysis         | Average latency (ms) of reads / writes / commands, server-wide and per collection; interval = seconds to sample, 0 = since startup; all user databases by default                                                                                |
+| mt.builds()                  | ALTER TABLE progress           | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                                                          |
++------------------------------+--------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Slow queries and plans ──
 +-------------------------+------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -438,7 +438,7 @@ All of them:
 
 ### mt.check(): health check
 
-Collects common problems into one table: each check gets OK / WARN / CRIT / INFO / SKIP, the value measured, and advice or the command to look closer. Run it first when you take over an unfamiliar instance or start troubleshooting.
+Collects common problems into one table: each check gets OK / WARN / CRIT / UNKNOWN / INFO / SKIP, the value measured, and advice or the command to look closer. Run it first when you take over an unfamiliar instance or start troubleshooting.
 
 ```js
 mt.check()                  // every check
@@ -504,8 +504,10 @@ version: 7.0.48
 CRIT 2, WARN 5, OK 13, INFO 1
 ```
 
-- A check that fails (e.g. no privilege) becomes SKIP with the reason; the others still run.
-- Replica set checks are SKIP on a standalone; it must run on a mongod, and on a mongos it prints a one-line explanation.
+- A check that cannot run (e.g. no privilege) becomes UNKNOWN with the reason; the others still run.
+- When part of a per-database / per-collection check (profiler, TTL overdue, redundant indexes, unused indexes, reusable space) fails: if it found nothing it is UNKNOWN rather than OK, with "40/42 collections checked, 2 failed" as the value and the first failing collection and error as the advice; if it found problems it is WARN as usual with that note added to the value. If the databases cannot be listed (`listDatabases` fails) these checks are all UNKNOWN.
+- SKIP only means not applicable: replica set checks on a standalone, the two cache checks when the storage engine is not WiredTiger. It must run on a mongod; on a mongos it prints a one-line explanation.
+- `{issues: true}` shows WARN, CRIT and UNKNOWN.
 - Per-collection checks scan every user database like `mt.dupIdx()` and friends; use `{quick: true}` with thousands of collections.
 - Thresholds are common rules of thumb and do not fit every workload; a WARN is not necessarily a problem, so look closer with the suggested command.
 
