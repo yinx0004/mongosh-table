@@ -116,6 +116,7 @@ mt.config({tz: 'Asia/Shanghai', maxCol: 60})    // 改本会话默认值
 mt.ps() / mt.slow() / mt.colls() ...            // DBA 常用命令，见下一节
 mt.help()                                       // 帮助：用法、选项（显示当前值）、会话设置；t() / g() 不带参数也是帮助
 mt.cmds()                                       // 按类别列出全部 DBA 命令
+mt.check()                                      // 一键体检：常见问题汇成一张表
 mt.help('ps')                                   // 某个命令的详细用法、选项和输出的每一列
 ```
 
@@ -337,17 +338,18 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 ```
 > mt.cmds()
 ── 运行状态 ──
-+------------------------------+-------------------------------+-----------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                         | description                                                                                                     |
-+------------------------------+-------------------------------+-----------------------------------------------------------------------------------------------------------------+
-| mt.status({interval})        | SHOW GLOBAL STATUS            | 版本、角色、ops/s、连接、缓存等关键指标                                                                         |
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST              | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid' |
-| mt.conns()                   | PROCESSLIST GROUP BY host     | 按客户端 IP 统计连接数                                                                                          |
-| mt.locks({all})              | sys.innodb_lock_waits         | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                    |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                           |
-| mt.top({interval, ns})       | sys.schema_table_statistics   | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                      |
-| mt.builds()                  | ALTER TABLE progress          | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                |
-+------------------------------+-------------------------------+-----------------------------------------------------------------------------------------------------------------+
++------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                         | description                                                                                                                                                |
++------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.check({quick, issues})    | mysqltuner / pt-summary       | 一键体检：复制、oplog、缓存、连接、长操作、长事务、TTL、冗余 / 没用的索引等，每项给 OK / WARN / CRIT 和建议；quick 跳过逐个集合的检查，issues 只看有问题的 |
+| mt.status({interval})        | SHOW GLOBAL STATUS            | 版本、角色、ops/s、连接、缓存等关键指标                                                                                                                    |
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST              | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                            |
+| mt.conns()                   | PROCESSLIST GROUP BY host     | 按客户端 IP 统计连接数                                                                                                                                     |
+| mt.locks({all})              | sys.innodb_lock_waits         | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                               |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                      |
+| mt.top({interval, ns})       | sys.schema_table_statistics   | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                                 |
+| mt.builds()                  | ALTER TABLE progress          | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                                                           |
++------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── 慢查询和执行计划 ──
 +-------------------------+------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -429,6 +431,79 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
 - **大小分逻辑和磁盘**：列名里带 `logical` 的是未压缩的数据量（BSON 大小），带 `disk` 的是磁盘上实际占的（WiredTiger 压缩后），带 `cached` 的是在内存缓存里占的（解压后）。同一份数据三者可以差好几倍。
 - **权限**：需要监控类权限，如 `clusterMonitor` 角色。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()`、在 mongos 上执行 `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` 时，只打印一行说明，不抛异常。
 - **版本**：老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过；分片集群（mongos）还没测过。
+
+### mt.check()：一键体检
+
+把常见问题汇成一张表，每一项给出 OK / WARN / CRIT / INFO / SKIP、测到的值，以及建议或进一步看的命令。接手一个不熟悉的实例、排查问题时，先跑一遍它。
+
+```js
+mt.check()                  // 全部检查
+mt.check({issues: true})    // 只看 WARN / CRIT
+mt.check({quick: true})     // 跳过逐个集合的检查（索引、TTL、磁盘空间），集合很多时用
+```
+
+| 检查项 | 依据 | WARN | CRIT |
+|---|---|---|---|
+| 启动警告 | `getLog: 'startupWarnings'` | 有警告 | |
+| 写入被锁（fsyncLock） | `currentOp` | | 被锁着 |
+| FCV 版本 | `featureCompatibilityVersion` 和二进制版本 | 低于二进制版本（升级后忘了提升） | |
+| 副本集成员 | `rs.status()` | | 有成员不是 PRIMARY / SECONDARY / ARBITER，或 health 不是 1 |
+| 复制延迟 | 最大的 lagSecs | ≥ 10 秒 | ≥ 60 秒 |
+| oplog 窗口 | 最早到最晚一条 | < 24 小时 | < 3 小时 |
+| 缓存使用率 / 缓存脏数据 | WiredTiger 缓存 | ≥ 90% / ≥ 10% | ≥ 95% / ≥ 20% |
+| 读写并发票据 | 已用 / 总数（7.0 之前） | ≥ 80% | ≥ 95% |
+| 等锁队列 | `globalLock.currentQueue` 读 + 写 | ≥ 5 | ≥ 50 |
+| 连接数 | current / (current + available) | ≥ 80% | ≥ 95% |
+| 长时间运行的操作 | 客户端的操作 | 超过 60 秒 | 超过 600 秒 |
+| 等锁的操作 / 长事务 | `waitingForLock` / 开了 30 秒以上 | 有 | |
+| TTL 线程 / profiler | `ttlMonitorEnabled` / 有库是 level 2 | 停了 / 有 | |
+| 正在建的索引 | `currentOp` | INFO | |
+| TTL 超期 | 同 `mt.ttl()` | 超期 1 小时以上 | |
+| 冗余索引 | 同 `mt.dupIdx()` | 有 | |
+| 没被用过的索引 | 同 `mt.unusedIdx()`，不算 unique / ttl | 有（运行不满 7 天只给 INFO） | |
+| 可回收的磁盘空间 | 同 `mt.frag()`，所有用户库合计 | 超过 30% 且超过 1 GB | |
+
+下面是一个有问题的实例：fsyncLock 了没解锁（写入在排队），TTL 线程停了（`sessions` 超期了 5 个多小时），还有一个冗余索引。
+
+```
+> mt.check()
+-- serverStatus, currentOp, replSetGetStatus, getLog, getParameter; every user db: getIndexes, $indexStats, $collStats
+   host: db1
+version: 7.0.48
+   role: PRIMARY (rs0)
+ uptime: 19s
++-----------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
+| check                 | status | value                                                            | advice                                                      |
++-----------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
+| 启动警告              | WARN   | 2 条：Access control is not enabled for the database. Read an... | mt.log({startup: true})                                     |
+| 写入被锁（fsyncLock） | CRIT   | 已锁                                                             | db.fsyncUnlock()                                            |
+| FCV 版本              | OK     | FCV 7.0，二进制 7.0                                              |                                                             |
+| 副本集成员            | OK     | 1 个成员，都正常                                                 | mt.repl()                                                   |
+| 复制延迟              | OK     | 0s                                                               | mt.repl()                                                   |
+| oplog 窗口            | CRIT   | 7s (0.00 h)                                                      | 调大 oplog：replSetResizeOplog；mt.oplog()                  |
+| 缓存使用率            | OK     | 0.2% (15.1 MB / 7.3 GB)                                          | mt.cache()                                                  |
+| 缓存脏数据            | OK     | 0.0% (0 B)                                                       | mt.status()                                                 |
+| 读写并发票据          | OK     | read 1/10, write 1/10                                            | mt.ps()                                                     |
+| 等锁队列              | OK     | readers 0, writers 3                                             | mt.locks()                                                  |
+| 连接数                | OK     | 11 / 8192 (0.1%)                                                 | mt.conns()                                                  |
+| 长时间运行的操作      | OK     | 没有超过 60 秒的                                                 |                                                             |
+| 等锁的操作            | WARN   | 1 个                                                             | mt.locks()                                                  |
+| 长事务                | OK     | 没有开了 30 秒以上的                                             |                                                             |
+| 正在建的索引          | OK     | 0 个                                                             |                                                             |
+| TTL 线程              | WARN   | 已停止                                                           | db.adminCommand({setParameter: 1, ttlMonitorEnabled: true}) |
+| profiler              | OK     | 没有库是 level 2                                                 |                                                             |
+| TTL 超期              | WARN   | 1 个超期 1 小时以上，最多 5h 30m                                 | mt.ttl()                                                    |
+| 冗余索引              | WARN   | 1 个，共 116.0 KB                                                | mt.dupIdx()                                                 |
+| 没被用过的索引        | INFO   | 只运行了 19s，统计不够，满 7 天再看                              | mt.unusedIdx()                                              |
+| 可回收的磁盘空间      | OK     | 0 B / 1.4 MB（0.0%）                                             |                                                             |
++-----------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
+CRIT 2，WARN 5，OK 13，INFO 1
+```
+
+- 某一项失败（比如没有权限）只把这一项标成 SKIP，写上原因，其他项照常检查。
+- 单机上副本集相关的几项是 SKIP；只能连 mongod，在 mongos 上只打印一行说明。
+- 逐个集合的检查和 `mt.dupIdx()` 等一样要扫所有用户库，集合上千个时用 `{quick: true}`。
+- 阈值是常见的经验值，不一定适合每个场景；WARN 不代表一定有问题，按建议列的命令再细看。
 
 ### mt.ps()：正在执行的操作
 
