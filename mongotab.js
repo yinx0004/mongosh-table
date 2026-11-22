@@ -11,8 +11,22 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.1.0';
+  var VERSION = '0.1.1';
   var MARK = '__mongotab__';
+
+  // 老的 mongo shell（MongoDB 4.x 自带的 mongo 命令）不是 mongosh：没有 globalThis / process / Intl。
+  // 在那里只给出提示，不定义任何东西。
+  if (typeof globalThis === 'undefined' || typeof process === 'undefined') {
+    print([
+      'MongoTab 需要 mongosh，不支持老的 mongo shell（MongoDB 4.x 自带的 mongo 命令）。',
+      'MongoDB 4.0 请用 mongosh 1.x，4.2 及以上用 mongosh 1.x 或 2.x，见：',
+      '  https://github.com/yinx0004/mongosh-table#mongodb-40',
+      'MongoTab needs mongosh; the legacy mongo shell is not supported.',
+      'Use mongosh 1.x for MongoDB 4.0, or mongosh 1.x / 2.x for 4.2 and later, see:',
+      '  https://github.com/yinx0004/mongosh-table/blob/main/README.en.md#mongodb-40'
+    ].join('\n'));
+    return;
+  }
 
   // ───────────────────────── 配置 ─────────────────────────
   var cfg = {

@@ -210,7 +210,7 @@ mongosh --nodb test/format.js
 Connect to MongoDB 4.0 with **mongosh 1.x**:
 
 - mongosh 2.x needs MongoDB 4.2 or later; against 4.0 it fails with `requires at least 8 (MongoDB 4.2)`.
-- The legacy `mongo` command that ships with MongoDB 4.x (prompt like `rs0:PRIMARY>`) is not mongosh. MongoTab does not support it, and `load()` fails there.
+- The legacy `mongo` command that ships with MongoDB 5.0 and earlier (prompt like `rs0:PRIMARY>`) is not mongosh, and MongoTab does not support it. Since v0.1.1, `load()` there prints a message pointing to mongosh instead of failing with `root is undefined`; CI checks this with the legacy `mongo` from 3.6, 4.0, 4.2, 4.4 and 5.0.
 
 mongosh 1.x runs straight from the archive, needs no root and leaves the existing `mongo` alone. On Linux x64 (1.10.6 is the last 1.x release):
 
