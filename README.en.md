@@ -465,7 +465,7 @@ mt.check({maxColls: 5000, budgetMs: 120000})   // per-collection checks stop aft
 | Index builds | `currentOp` | INFO | |
 | TTL overdue | as in `mt.ttl()` | overdue by over 1 hour | |
 | Redundant indexes | as in `mt.dupIdx()` | any | |
-| Unused indexes | as in `mt.unusedIdx()`, not unique / ttl | any (only INFO before 7 days of uptime) | |
+| Unused indexes | as in `mt.unusedIdx()`, not unique / ttl / shard key, nor indexes counted for under 7 days | any (only INFO before 7 days of uptime) | |
 | Reusable disk space | as in `mt.frag()`, all user databases | over 30% and over 1 GB | |
 
 An instance with problems: fsyncLock left on (writes queue behind it), the TTL thread stopped (`sessions` over 5 hours overdue), and a redundant index.
@@ -1487,40 +1487,45 @@ It uses `getIndexes()` for the definitions, `$indexStats` for usage and `$collSt
 Like MySQL's `sys.schema_unused_indexes`: indexes that no query has used, candidates for dropping to save disk, cache and write time.
 
 ```js
-mt.unusedIdx()          // every user database (admin, local and config are skipped)
-mt.unusedIdx('shop')    // one database only; a db object works too
+mt.unusedIdx()              // every user database (admin, local and config are skipped)
+mt.unusedIdx('shop')        // one database only; a db object works too
+mt.unusedIdx({days: 30})    // only indexes counted for 30+ days (default 7); 0 lists new ones too
 ```
 
-It runs `$indexStats` for each collection and lists indexes whose `accesses.ops` is 0, largest on disk first. The `uptime` line on top is how long mongod has been running.
+It runs `$indexStats` for each collection and lists indexes whose `accesses.ops` is 0 and whose counting started (`since`) at least 7 days ago, largest on disk first. Indexes that were just built or restarted have not been counted long enough; they are not listed, and a line under the table says how many there are. `node` on top is where the counts come from, `uptime` how long mongod has been running.
 
 | Column | Meaning |
 |---|---|
 | `ns` / `index` / `key` | database.collection, index name, index key |
 | `disk` | Disk space the index takes, i.e. what dropping it would save |
 | `since` | When counting started (mongod startup or when the index was built) |
-| `options` | `unique`, `ttl=seconds`, `partial=filter`, `sparse`, `hidden`, `collation=locale` |
+| `options` | `unique`, `ttl=seconds`, `partial=filter`, `sparse`, `hidden`, `collation=locale`, `shardKey` (starts with the shard key; sharding needs it, it cannot be dropped) |
 
 ```
-> mt.unusedIdx()
+> mt.unusedIdx({days: 0})
 -- every user db: each collection getIndexes() + aggregate([{$indexStats: {}}]) → accesses.ops = 0
-uptime: 14s
+  node: db1
+uptime: 18s
 +-------------+-----------------+---------------------+----------+-------------------------+----------------+
 | ns          | index           | key                 | disk     | since                   | options        |
 +-------------+-----------------+---------------------+----------+-------------------------+----------------+
-| shop.orders | ttl_createdAt   | {createdAt: 1}      | 232.0 KB | 2026-11-22 11:07:23.899 | ttl=315360000s |
-| shop.orders | customer.name_1 | {customer.name: 1}  | 168.0 KB | 2026-11-22 11:07:23.777 |                |
-| shop.orders | status_1        | {status: 1}         | 116.0 KB | 2026-11-22 11:07:23.519 |                |
-| shop.users  | email_1_name_1  | {email: 1, name: 1} |  20.0 KB | 2026-11-22 11:07:24.179 |                |
+| shop.orders | ttl_createdAt   | {createdAt: 1}      | 232.0 KB | 2026-11-23 01:29:50.315 | ttl=315360000s |
+| shop.orders | customer.name_1 | {customer.name: 1}  | 168.0 KB | 2026-11-23 01:29:50.179 |                |
+| shop.orders | status_1        | {status: 1}         | 116.0 KB | 2026-11-23 01:29:49.921 |                |
+| shop.users  | email_1_name_1  | {email: 1, name: 1} |  20.0 KB | 2026-11-23 01:29:50.609 |                |
 +-------------+-----------------+---------------------+----------+-------------------------+----------------+
 4 rows in set
+counts are from this node db1 only: an index used only by secondary reads shows 0 here too; check every replica set member
+once no member uses it, db.coll.hideIndex('name') and watch for a while before dropIndex
 ```
 
 Before dropping one, check:
 
-- **Has it been counting long enough?** Counts reset when mongod restarts or the index is rebuilt. If `uptime` or `since` is only a few days, monthly or yearly reports may not have run yet.
-- **Check every member.** Counts are per node; with reads on secondaries, those queries are counted only there, so run it on each member.
+- **Has it been counting long enough?** Counts reset when mongod restarts or the index is rebuilt, so each index is judged by its own `since`, 7 days by default. For monthly or yearly reports, `{days: 30}` or longer is safer.
+- **Check every member.** Counts are per node; with reads on secondaries, those queries are counted only there. A line under the table names the node the counts come from; run it on each member. Through mongos the counts come from the node each shard routed to (usually the primary).
 - **`unique` indexes** enforce uniqueness even if no query uses them, and **`ttl` indexes** drive expiry; do not drop those.
-- When unsure, hide it first with `db.orders.hideIndex('status_1')` (4.4+) and watch for a while; `unhideIndex` brings it back if queries slow down. That is safer than dropping it.
+- **Shard key indexes** (`shardKey` in `options`) are needed by sharding and cannot be dropped. The shard key is read from `config.collections` through mongos and from `config.cache.collections` on a shard's mongod.
+- When unsure, hide it first with `db.orders.hideIndex('status_1')` (4.4+) and watch for a while; `unhideIndex` brings it back if queries slow down. That is safer than dropping it. The last line under the table gives this advice for your version.
 - The `_id_` index cannot be dropped and is not listed.
 
 ### mt.dupIdx(): redundant indexes
