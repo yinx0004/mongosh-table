@@ -442,8 +442,9 @@ Collects common problems into one table: each check gets OK / WARN / CRIT / UNKN
 
 ```js
 mt.check()                  // every check
-mt.check({issues: true})    // only WARN / CRIT
-mt.check({quick: true})     // skip per-collection checks (indexes, TTL, disk space); for many collections
+mt.check({issues: true})    // only WARN / CRIT / UNKNOWN
+mt.check({quick: true})     // skip per-collection checks (indexes, TTL, disk space)
+mt.check({maxColls: 5000, budgetMs: 120000})   // per-collection checks stop after 5000 collections or 2 minutes; 0 = no limit
 ```
 
 | Check | Based on | WARN | CRIT |
@@ -471,7 +472,7 @@ An instance with problems: fsyncLock left on (writes queue behind it), the TTL t
 
 ```
 > mt.check()
--- serverStatus, currentOp, replSetGetStatus, getLog, getParameter; every user db: getIndexes, $indexStats, $collStats
+-- serverStatus, currentOp, replSetGetStatus, getLog, getParameter; per collection (maxColls 2000, budgetMs 60000): getIndexes, $collStats, $indexStats
    host: db1
 version: 7.0.48
    role: PRIMARY (rs0)
@@ -501,14 +502,16 @@ version: 7.0.48
 | Unused indexes            | INFO   | up only 19s; check again after 7 days                            | mt.unusedIdx()                                              |
 | Reusable disk space       | OK     | 0 B / 1.4 MB (0.0%)                                              |                                                             |
 +---------------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
-CRIT 2, WARN 5, OK 13, INFO 1
+CRIT 2, WARN 5, OK 13, INFO 1 (per-collection checks: 2/2 collections)
 ```
 
 - A check that cannot run (e.g. no privilege) becomes UNKNOWN with the reason; the others still run.
 - When part of a per-database / per-collection check (profiler, TTL overdue, redundant indexes, unused indexes, reusable space) fails: if it found nothing it is UNKNOWN rather than OK, with "40/42 collections checked, 2 failed" as the value and the first failing collection and error as the advice; if it found problems it is WARN as usual with that note added to the value. If the databases cannot be listed (`listDatabases` fails) these checks are all UNKNOWN.
 - SKIP only means not applicable: replica set checks on a standalone, the two cache checks when the storage engine is not WiredTiger. It must run on a mongod; on a mongos it prints a one-line explanation.
 - `{issues: true}` shows WARN, CRIT and UNKNOWN.
-- Per-collection checks scan every user database like `mt.dupIdx()` and friends; use `{quick: true}` with thousands of collections.
+- The four per-collection checks (TTL overdue, redundant indexes, unused indexes, reusable space) share one pass: one `listCollections` per database, one `getIndexes` and one `$collStats` per collection, `$indexStats` only after 7 days of uptime, plus one query for the oldest document per TTL index.
+- By default the pass stops after 2000 collections (`maxColls`) or 60 seconds (`budgetMs`), going through databases and collections in name order. Collections it did not reach are not treated as fine: if these checks found nothing they are UNKNOWN with "only the first 2000/15000 collections checked (maxColls 2000)"; if they found problems they are WARN with that note added. The last line says how many collections were checked.
+- With many collections, start with `{quick: true}` and then look at one database at a time with `mt.dupIdx('db')`, `mt.unusedIdx('db')`, `mt.ttl('db')`, `mt.frag('db')`.
 - Thresholds are common rules of thumb and do not fit every workload; a WARN is not necessarily a problem, so look closer with the suggested command.
 
 ### mt.ps(): running operations

@@ -427,6 +427,19 @@ run('mt.check issues only', function () {
   var o = capOut(function () { mt.check({ issues: true, quick: true }); });
   print(/\| OK\s/.test(o) ? 'has ok' : 'no ok rows');
 }, ['no ok rows']);
+// 逐个集合的检查只遍历一次，超过 maxColls / budgetMs 就停下，没查到的算 UNKNOWN
+run('mt.check maxColls', function () { mt.check({ maxColls: 1, table: true }); }, [
+  'per collection (maxColls 1, budgetMs 60000)', '| 冗余索引 ', 'UNKNOWN | 只查了前 1/', ' 个集合（maxColls 1）', "调大 maxColls / budgetMs", '（逐个集合的检查：1/'
+]);
+run('mt.check budgetMs', function () {
+  var out = capOut(function () { mt.check({ budgetMs: 1, table: true }); });
+  print(/只查了前 \d+\/\d+ 个集合（budgetMs 1）/.test(out) ? 'budget hit' : out);
+}, ['budget hit']);
+run('mt.check no limit', function () {
+  var out = capOut(function () { mt.check({ maxColls: 0, budgetMs: 0, table: true }); });
+  var m = /（逐个集合的检查：(\d+)\/(\d+) 个集合）/.exec(out);
+  print(m && m[1] === m[2] && !/只查了前/.test(out) ? 'all scanned' : out);
+}, ['all scanned']);
 // 查不全时不能显示 OK：用 failCommand 让 aggregate / listDatabases 真的失败（4.0 起才有 failCommand）
 var failCmd = function (cmds) {
   try { return db.adminCommand({ configureFailPoint: 'failCommand', mode: 'alwaysOn', data: { failCommands: cmds, errorCode: 2 } }).ok; } catch (e) { return false; }
