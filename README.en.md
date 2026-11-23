@@ -385,12 +385,13 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 +--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Replication ──
-+------------+-------------------+-------------------------------------------------------------+
-| command    | mysql             | description                                                 |
-+------------+-------------------+-------------------------------------------------------------+
-| mt.repl()  | SHOW SLAVE STATUS | Replica set members, replication lag (seconds), sync source |
-| mt.oplog() | SHOW BINARY LOGS  | Oplog size and how much time it covers                      |
-+------------+-------------------+-------------------------------------------------------------+
++-------------+-------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command     | mysql             | description                                                                                                                                                                                                                         |
++-------------+-------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.repl()   | SHOW SLAVE STATUS | Replica set members, replication lag (seconds), sync source                                                                                                                                                                         |
+| mt.rsconf() | SHOW SLAVE HOSTS  | Replica set configuration (rs.conf()): each member's priority, votes, hidden, delay, tags and current state, election settings, default read/write concern; notes an even number of voters, arbiters, and delayed members that vote |
+| mt.oplog()  | SHOW BINARY LOGS  | Oplog size and how much time it covers                                                                                                                                                                                              |
++-------------+-------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 All accept t() options such as {cols: ...} or {vertical: true}; mt.config({showCmd: false}) hides the native command
 mt.help('ps') shows the detailed usage, options and output columns of one command
@@ -1372,6 +1373,57 @@ date: 2026-11-22 08:06:23.473
 +-----------+-----------+--------+---------+---------------------+------------+--------+-------------------------+------+
 3 rows in set
 ```
+
+### mt.rsconf(): replica set configuration
+
+`rs.conf()` as a table, with each member's current state (`rs.status()`) and the default read/write concern (4.4+); roughly `SHOW SLAVE HOSTS` plus the replication settings.
+
+```js
+mt.rsconf()                                // member configuration and election settings
+mt.rsconf({cols: 'host,priority,votes'})   // only some columns
+```
+
+| Field | Meaning |
+|---|---|
+| header | set, version, term (4.4+), chainingAllowed, election and heartbeat timeouts, `majorityJournalDefault` (`writeConcernMajorityJournalDefault`), custom write concern modes, default read/write concern (4.4+, with the source in parentheses: `implicit`, or `global` if set with setDefaultRWConcern) |
+| `id` / `host` | member id, address |
+| `state` | current state (from `rs.status()`) |
+| `priority` / `votes` | election priority, whether it votes |
+| `arbiter` / `hidden` / `delay` / `buildIndexes` / `tags` | arbiter, hidden, replication delay, no index builds, tags; each column shows only when some member uses it |
+
+Below is a set with 3 data-bearing members and an arbiter; `db3` is a hidden backup member delayed by an hour that still votes. The last three lines point out these configuration problems:
+
+```
+> mt.rsconf()
+-- rs.conf(); rs.status(); db.adminCommand({getDefaultRWConcern: 1})
+                    set: rs0
+                version: 2
+                   term: 1
+        protocolVersion: 1
+        chainingAllowed: true
+  electionTimeoutMillis: 10000
+heartbeatIntervalMillis: 2000
+   catchUpTimeoutMillis: -1
+ majorityJournalDefault: true
+    defaultWriteConcern: {w: 1, wtimeout: 0} (global)
+     defaultReadConcern: {level: local} (implicit)
++----+-----------+-----------+----------+-------+---------+--------+-------+--------------+
+| id | host      | state     | priority | votes | arbiter | hidden | delay | tags         |
++----+-----------+-----------+----------+-------+---------+--------+-------+--------------+
+|  0 | db1:27017 | PRIMARY   |        2 |     1 |         |        |       |              |
+|  1 | db2:27017 | SECONDARY |        1 |     1 |         |        |       |              |
+|  2 | db3:27017 | SECONDARY |        0 |     1 |         | true   | 1h 0m | {dc: backup} |
+|  3 | arb:27017 | ARBITER   |        0 |     1 | true    |        |       |              |
++----+-----------+-----------+----------+-------+---------+--------+-------+--------------+
+4 rows in set
+Note: an even number of voting members (4): it tolerates no more failures than one member fewer would; use an odd number
+Note: there is an arbiter: with one data-bearing member down, w: 'majority' writes cannot be acknowledged and cache pressure grows; a data-bearing member is better
+Note: delayed members can vote (db3:27017): w: 'majority' writes may wait for them; consider votes: 0
+```
+
+- A note is printed at the end when the number of voting members is even, when there is an arbiter (in a PSA set, `w: 'majority'` writes cannot be acknowledged once a data-bearing member is down), or when a delayed member votes.
+- The delay field is `secondaryDelaySecs` since 5.0 and `slaveDelay` before; both show as `delay`.
+- Replica sets only; on a standalone or a mongos it prints a one-line explanation. For each member's replication lag, use `mt.repl()`.
 
 ### mt.dbs(): database sizes
 
