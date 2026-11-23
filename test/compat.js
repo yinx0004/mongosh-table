@@ -86,7 +86,7 @@ run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '─�
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
 var ALL_CMDS = ['host', 'latency', 'desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
-  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine'];
+  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats'];
 run('mt.help each command', function () {
   var bad = [];
   ['zh', 'en'].forEach(function (lang) {
@@ -99,7 +99,7 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 29 ok']);
+}, ['all 30 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
 run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'vars'、'engine'"]);
@@ -452,6 +452,30 @@ run('mt.engine versions', function () {
   print(/checkpoint\.running:/.test(out) === !v8 ? 'running right' : out);
   print(/\/s:/.test(out) ? out : 'totals, no /s');
 }, ['updates/history store right', 'running right', 'totals, no /s', ]);
+// mt.qstats：查询效率计数；全表扫描 4.4 起，排序落盘和计划缓存 7.0 起，maxTimeMS 8.0 起
+var vmaj = Number(db.version().split('.')[0]), v44 = hideOk;
+run('mt.qstats', function () { mt.qstats(); }, [
+  '-- db.serverStatus().metrics，间隔 1 秒采样两次，带 /s 的是每秒的量', 'read.keysExamined/s: ', 'read.docsExamined/s: ', 'read.returned/s: ',
+  'scans.inMemorySorts/s: ', 'write.inserted/s: ', 'write.conflicts/s: ', 'cursors.open: ', 'cursors.timedOut/s: '
+].concat(v44 ? ['scans.collScans/s: ', 'scans.collScansNonTailable/s: '] : []).concat(vmaj >= 7 ? ['scans.sortSpills/s: ', 'planCache.hits/s: '] : [])
+  .concat(vmaj >= 8 ? ['killed.maxTimeMS/s: '] : []));
+run('mt.qstats totals', function () {
+  var qd = db.getSiblingDB('mtqs'); qd.dropDatabase(); qd.t.insertMany([{ a: 1 }, { a: 2 }, { a: 3 }, { a: 4 }]);
+  var before = db.serverStatus().metrics.queryExecutor.scannedObjects;
+  qd.t.find({ a: 3 }).toArray();   // 没有索引：扫 4 条返回 1 条
+  var out = capOut(function () { mt.qstats({ interval: 0, showCmd: false }); });
+  print(/\/s:/.test(out) ? out : 'totals, no /s');
+  print(/read\.docsPerReturned: [\d.]+/.test(out) ? 'has ratio' : out);
+  print(/scans\.collScans:/.test(out) === v44 ? 'collScans right' : out);
+  print(/killed\.maxTimeMS:/.test(out) === (vmaj >= 8) ? 'maxTimeMS right' : out);
+  var m1 = /read\.docsExamined: (\d+)/.exec(out);
+  print(m1 && Number(m1[1]) >= Number(before) + 4 ? 'docsExamined counted' : out);
+  qd.dropDatabase();
+}, ['totals, no /s', 'has ratio', 'collScans right', 'maxTimeMS right', 'docsExamined counted']);
+run('mt.qstats cols', function () {
+  var out = capOut(function () { mt.qstats('read'); });
+  print(/read\.returned\/s:/.test(out) && !/write\./.test(out) && !/cursors\./.test(out) ? 'only read' : out);
+}, ['only read']);
 run('mt.engine cols', function () {
   var out = capOut(function () { mt.engine({ cols: 'checkpoint', interval: 0, showCmd: false }); });
   print(/checkpoint\.count:/.test(out) && !/cache\./.test(out) ? 'only checkpoint' : out);

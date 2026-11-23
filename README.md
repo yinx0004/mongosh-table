@@ -361,6 +361,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 | command                 | mysql                        | description                                                                                                                                          |
 +-------------------------+------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
 | mt.slow({ms, ns, sort}) | mysql.slow_log               | 慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前                      |
+| mt.qstats({interval})   | SHOW STATUS LIKE 'Handler%'  | 查询效率：扫描的键和文档、返回的文档、每返回 1 条扫了几条、全表扫描、内存排序、写冲突、计划缓存命中；interval 采样秒数，0 = 启动以来累计             |
 | mt.log({n, grep, sev})  | performance_schema.error_log | 最近的日志（getLog）；n 行数，grep 关键字或正则，sev: 'W' 只看警告及以上，startup 启动警告                                                           |
 | mt.explain(cursor)      | EXPLAIN [ANALYZE]            | 执行计划排成表：每个阶段的索引、扫描和返回行数、耗时，标出全表扫描、内存排序；默认只看计划、不执行，analyze: true 执行一遍看扫描数和耗时             |
 | mt.explainLog(n | line) | EXPLAIN on a slow log query  | 对慢日志里的查询做 explain：先列出日志里记下的实际执行情况，再看现在的计划，计划变了会提示；n 是 mt.slow() / mt.log() 的行号，也可以传整行日志、命令 |
@@ -719,6 +720,61 @@ Empty set
 - 总会排除读 `system.profile` 本身的操作和 `profile` 命令，否则在 level 2 下会看到 `mt.slow()` 自己。
 - `docsExamined` 远大于 `nreturned`、`plan` 是 `COLLSCAN` 的，通常就是缺索引。用 `mt.explainLog(行号)` 看它的执行计划，见 [mt.explainLog()](#mtexplainlog对慢日志里的查询做-explain)；`mt.logQuery(行号)` 把它转成可以直接运行的查询语句。
 - `system.profile` 是个 1 MB 的 capped 集合，满了会覆盖最早的记录，所以只能看到最近一段时间的。
+
+### mt.qstats()：查询效率
+
+相当于 MySQL 的 `SHOW STATUS LIKE 'Handler_read%'`：整台实例扫了多少、返回了多少、有没有全表扫描和内存排序。执行的是 `db.serverStatus()`，读其中的 `metrics`；默认间隔 1 秒采样两次，按每秒算。
+
+```js
+mt.qstats()                  // 间隔 1 秒采样两次
+mt.qstats({interval: 10})    // 间隔 10 秒，数字更稳
+mt.qstats({interval: 0})     // 只取一次，启动以来的累计值
+mt.qstats('read,scans')      // 只看某几组
+```
+
+| 字段 | 说明 |
+|---|---|
+| `read.keysExamined` / `docsExamined` / `returned` | 扫描的索引键、扫描的文档、返回的文档 |
+| `read.keysPerReturned` / `docsPerReturned` | 平均每返回 1 条文档扫了几个键、几条文档；`docsPerReturned` 远大于 1 说明索引不够好 |
+| `scans.collScans` / `collScansNonTailable` | 全表扫描次数（4.4 起）；后者不算 oplog 这类 tailable 游标 |
+| `scans.inMemorySorts` / `sortSpills` | 没用上索引、在内存里排序的次数；排序用到磁盘的次数（7.0 起） |
+| `write.inserted` / `updated` / `deleted` / `conflicts` | 插入、更新、删除的文档数，写冲突次数 |
+| `planCache.hits` / `misses` | 计划缓存命中、没命中的次数（7.0 起，classic 引擎） |
+| `cursors.*` | 打开的游标数（其中 noTimeout、pinned 的个数），超时被关掉的游标数 |
+| `killed.maxTimeMS` | 因为超过 maxTimeMS 被中止的操作（8.0 起） |
+
+下面这个实例里，有个客户端一直在跑没有索引的查询：每返回 1 条文档要扫 900 多条，每秒 90 次全表扫描，最后两行提示了出来。
+
+```
+> mt.qstats()
+-- db.serverStatus().metrics，间隔 1 秒采样两次，带 /s 的是每秒的量
+         read.keysExamined/s: 90.9
+         read.docsExamined/s: 4545545.5
+             read.returned/s: 4818.2
+        read.keysPerReturned: 0.02
+        read.docsPerReturned: 943.4
+           scans.collScans/s: 90.9
+scans.collScansNonTailable/s: 90.9
+       scans.inMemorySorts/s: 45.5
+          scans.sortSpills/s: 0
+            write.inserted/s: 0
+             write.updated/s: 45.5
+             write.deleted/s: 0
+           write.conflicts/s: 0
+            planCache.hits/s: 0
+          planCache.misses/s: 180.8
+                cursors.open: 0
+           cursors.noTimeout: 0
+              cursors.pinned: 0
+          cursors.timedOut/s: 0
+注意：平均每返回 1 条文档要扫 943.4 条：可能缺索引，用 mt.slow() 或 mt.log('Slow query') 找出具体的查询
+注意：每秒有 90.9 次全表扫描：用 mt.log('COLLSCAN') 或 mt.slow() 找出来
+```
+
+- 这些是整台实例的计数，不分集合。发现问题后，用 `mt.slow()`、`mt.log('Slow query')` 找出具体的查询，再用 `mt.explainLog()` 看执行计划。
+- 采样期间出现这些情况会在最后提示：每返回 1 条文档扫了 100 条以上（并且每秒扫了 1000 条以上），有全表扫描，有排序用到磁盘。`{interval: 0}` 是累计值，不提示。
+- 间隔 1 秒时数字跳动大，看趋势可以用 `{interval: 10}`。
+- 只能连 mongod。
 
 ### mt.explain()：执行计划
 
