@@ -89,12 +89,43 @@ jobs:
       - name: Run test/format.js
         run: test/format.sh mongo:${{ matrix.mongodb }}
 
+  # mt.shards() and the mongos behaviour of the other commands, on a throwaway
+  # sharded cluster (config server, three shards, mongos; see test/shard.sh).
+  sharded:
+    name: sharded ${{ matrix.mongodb }} / ${{ matrix.shell }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mongodb: '3.6'
+            shell: mongo
+            client: mongo:3.6
+          - mongodb: '4.4'
+            shell: mongosh 1.x
+            client: mongo:6.0.4   # mongosh 1.8.0
+          - mongodb: '5.0'
+            shell: mongosh 2.x
+            client: mongo:8.0
+          - mongodb: '7.0'
+            shell: mongosh 2.x
+            client: mongo:8.0
+          - mongodb: '8.0'
+            shell: mongosh 2.x
+            client: mongo:8.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run test/shard.js
+        run: |
+          if [ "${{ matrix.shell }}" = mongo ]; then export MONGO_SHELL=mongo; fi
+          test/shard.sh mongo:${{ matrix.mongodb }} ${{ matrix.client }}
+
   # One stable check name for branch protection, so the jobs above can change
   # without editing the required checks.
   compat:
     name: compat
     if: always()
-    needs: [test, format, legacy]
+    needs: [test, format, legacy, sharded]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs passed
@@ -102,3 +133,4 @@ jobs:
           test "${{ needs.test.result }}" = success
           test "${{ needs.format.result }}" = success
           test "${{ needs.legacy.result }}" = success
+          test "${{ needs.sharded.result }}" = success
