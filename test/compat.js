@@ -86,7 +86,7 @@ run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '─�
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
 var ALL_CMDS = ['host', 'latency', 'desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
-  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log'];
+  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars'];
 run('mt.help each command', function () {
   var bad = [];
   ['zh', 'en'].forEach(function (lang) {
@@ -99,10 +99,10 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 27 ok']);
+}, ['all 28 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
-run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'latency'、'desc'"]);
+run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'vars'、'latency'"]);
 run('mt.ps', function () { mt.ps(); }, ['-- db.adminCommand({currentOp: 1, active: true})']);
 run('mt.ps slow query', function () {
   for (var i = 0; i < 20 && !db.currentOp({ ns: 'mtslow.slow' }).inprog.length; i++) sleep(500);
@@ -423,6 +423,22 @@ var hostExtra = db.adminCommand({ hostInfo: 1 }).extra || {};
 run('mt.host', function () { mt.host(); }, ['-- db.hostInfo()', 'host.hostname: ', 'host.platform: 容器（', 'mongod 是 1 号进程', 'host.cpuCores: ', 'host.memory: ', 'os.type: Linux',
   'mongod.version: ' + db.version(), 'mongod.edition: ', 'mongod.storageEngine: wiredTiger', 'mongod.uptime: ', 'startup.argv: mongod', 'startup.replSet: rs0'].concat(hostExtra.maxOpenFiles != null ? ['os.maxOpenFiles: '] : []));
 run('mt.host cols', function () { mt.host('mongod.version'); }, ['mongod.version: ' + db.version()]);
+// mt.vars：运行参数；4.2 起有 runtime 一列（能不能在运行时改）
+var hasDetails = false;   // 4.2 起；不支持时 mongosh 会抛错，老 shell 返回 ok: 0
+try { hasDetails = !!db.adminCommand({ getParameter: { allParameters: true, showDetails: true } }).ok; } catch (e) { }
+run('mt.vars filter', function () { mt.vars('ttlMonitor'); }, hasDetails
+  ? ['-- db.adminCommand({getParameter: {allParameters: true, showDetails: true}})', '| name ', '| value ', '| runtime |', '| ttlMonitorEnabled ', '| ttlMonitorSleepSecs ']
+  : ["-- db.adminCommand({getParameter: '*'})", '| name ', '| value |', '| ttlMonitorEnabled ', '| ttlMonitorSleepSecs ']);
+run('mt.vars no runtime column before 4.4', function () {
+  var out = capOut(function () { mt.vars('ttlMonitorEnabled'); });
+  print(/\| runtime \|/.test(out) === hasDetails ? 'runtime column right' : out);
+  print(/\| ttlMonitorEnabled\s+\| true\s+\|/.test(out) ? 'value right' : out);
+}, ['runtime column right', 'value right']);
+run('mt.vars wildcard and regex', function () { mt.vars('featureCompat*', { showCmd: false }); mt.vars(/^ttlMonitorSleep/); }, [
+  '| featureCompatibilityVersion | {version: ' + db.version().split('.').slice(0, 2).join('.') + '}', '| ttlMonitorSleepSecs ', '1 row in set'
+]);
+run('mt.vars limit', function () { mt.vars({ limit: 2, showCmd: false }); }, ['2 rows in set  (共 ']);
+run('mt.vars none', function () { mt.vars('noSuchParameterX'); }, ['没有名字里含 noSuchParameterX 的参数']);
 run('mt.host all', function () { mt.host({ all: true, cols: 'parsed' }); }, ['parsed.replication.']);
 run('mt.status', function () { mt.status(); }, ['role: PRIMARY (rs0)', 'ops/s.insert: ', 'connections.current: ']);
 run('mt.status totals', function () { mt.status({ interval: 0, cols: 'opcounters' }); }, ['opcounters.insert: ']);

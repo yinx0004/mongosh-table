@@ -345,6 +345,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 | mt.check({quick, issues})    | mysqltuner / pt-summary        | 一键体检：复制、oplog、缓存、连接、长操作、长事务、TTL、冗余 / 没用的索引等，每项给 OK / WARN / CRIT / UNKNOWN 和建议；quick 跳过逐个集合的检查，issues 只看有问题的 |
 | mt.status({interval})        | SHOW GLOBAL STATUS             | 版本、角色、ops/s、连接、缓存等关键指标                                                                                                                              |
 | mt.host({all})               | SHOW VARIABLES LIKE 'version%' | 机器和进程：CPU、内存、操作系统、文件句柄数、mongod 版本和编译信息、存储引擎、启动参数；all 列出全部启动参数                                                         |
+| mt.vars('pattern')           | SHOW VARIABLES                 | 运行参数（getParameter）：名字、当前值、能不能在运行时改（4.2 起）；可传关键字、通配符或正则过滤，如 mt.vars('ttl')                                                  |
 | mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST               | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                                      |
 | mt.conns()                   | PROCESSLIST GROUP BY host      | 按客户端 IP 统计连接数                                                                                                                                               |
 | mt.locks({all})              | sys.innodb_lock_waits          | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                                         |
@@ -1785,6 +1786,53 @@ mongod 本身不知道自己跑在什么上面，`platform` 是根据下面这�
 - **容器**：`memory`、`cpuCores` 通常是宿主机的，`memLimit`、`cpuAvailable` 才是容器自己的。WiredTiger 缓存默认按（内存 − 1 GB）的一半算：4.4 起认容器的内存限制，**4.4 之前看不到容器的内存限制，会按宿主机内存算，缓存可能比容器内存还大**，这时 `cacheMax` 后面会提示，要用 `--wiredTigerCacheSizeGB` 显式设小。
 
 - 文件句柄数（`ulimit -n`）MongoDB 建议至少 64000，太低时连接数和文件多了会出错。
+
+### mt.vars()：运行参数
+
+相当于 MySQL 的 `SHOW VARIABLES`，执行的是 `db.adminCommand({getParameter: {allParameters: true, showDetails: true}})`（4.2 之前是 `{getParameter: '*'}`）。
+
+```js
+mt.vars()                 // 全部参数，按名字排；默认只显示前 50 行
+mt.vars('ttlMonitor')     // 名字里含 ttlMonitor 的（不分大小写）
+mt.vars('wiredTiger*')    // 通配符：* 任意多个字符，? 一个字符
+mt.vars(/^ttl|^diag/i)    // 正则
+mt.vars({limit: 0})       // 全部列出
+```
+
+| 列 | 说明 |
+|---|---|
+| name | 参数名，setParameter 时用 |
+| value | 当前值；文档写成一行 |
+| runtime | `true`：可以在运行时用 `db.adminCommand({setParameter: 1, 名字: 值})` 改；`false`：只能启动时设。4.2 起才有这一列 |
+
+```
+> mt.vars('ttlMonitor')
+-- db.adminCommand({getParameter: {allParameters: true, showDetails: true}})
++--------------------------------------+-------+---------+
+| name                                 | value | runtime |
++--------------------------------------+-------+---------+
+| ttlMonitorBatchDeletes               | true  | true    |
+| ttlMonitorEnabled                    | true  | true    |
+| ttlMonitorMaxMetadataRecoveryThreads | 5     | false   |
+| ttlMonitorSleepSecs                  | 60    | true    |
+| ttlMonitorSubPassTargetSecs          | 60    | true    |
++--------------------------------------+-------+---------+
+5 rows in set
+```
+
+```
+> mt.vars('featureCompat*')
+-- db.adminCommand({getParameter: {allParameters: true, showDetails: true}})
++-----------------------------+----------------+---------+
+| name                        | value          | runtime |
++-----------------------------+----------------+---------+
+| featureCompatibilityVersion | {version: 7.0} | false   |
++-----------------------------+----------------+---------+
+1 row in set
+```
+
+- 参数很多（7.0 有 600 多个，3.6 有 170 多个），先用关键字过滤。
+- `mt.vars()` 看的是现在生效的值，包括运行时用 setParameter 改过的；启动时用的配置文件和命令行参数用 `mt.host({all: true})` 看。
 
 ### mt.cache()：谁占着缓存
 

@@ -345,6 +345,7 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 | mt.check({quick, issues})    | mysqltuner / pt-summary        | Health check: replication, oplog, cache, connections, long operations and transactions, TTL, redundant / unused indexes and more, each with OK / WARN / CRIT / UNKNOWN and advice; quick skips per-collection checks, issues shows only problems |
 | mt.status({interval})        | SHOW GLOBAL STATUS             | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                                   |
 | mt.host({all})               | SHOW VARIABLES LIKE 'version%' | Machine and process: CPU, memory, OS, open files limit, mongod version and build, storage engine, startup options; all lists every startup option                                                                                                |
+| mt.vars('pattern')           | SHOW VARIABLES                 | Runtime parameters (getParameter): name, current value, whether it can be changed at runtime (4.2+); filter with text, a wildcard or a regex, e.g. mt.vars('ttl')                                                                                |
 | mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST               | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                             |
 | mt.conns()                   | PROCESSLIST GROUP BY host      | Connections per client IP                                                                                                                                                                                                                        |
 | mt.locks({all})              | sys.innodb_lock_waits          | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                                        |
@@ -1785,6 +1786,53 @@ What to watch for in each:
 - **Container**: `memory` and `cpuCores` are usually the host's; `memLimit` and `cpuAvailable` are the container's own. The WiredTiger cache defaults to half of (memory − 1 GB): since 4.4 it honours the container's memory limit, but **before 4.4 the container limit is not visible and the cache is sized from host memory, possibly larger than the container itself**; `cacheMax` then carries a note, and you should set `--wiredTigerCacheSizeGB` explicitly.
 
 - MongoDB recommends at least 64000 open files (`ulimit -n`); too few causes errors once there are many connections and files.
+
+### mt.vars(): runtime parameters
+
+Like `SHOW VARIABLES`. It runs `db.adminCommand({getParameter: {allParameters: true, showDetails: true}})` (`{getParameter: '*'}` before 4.2).
+
+```js
+mt.vars()                 // every parameter, by name; first 50 rows by default
+mt.vars('ttlMonitor')     // names containing ttlMonitor (case-insensitive)
+mt.vars('wiredTiger*')    // wildcards: * any characters, ? one character
+mt.vars(/^ttl|^diag/i)    // a regex
+mt.vars({limit: 0})       // list them all
+```
+
+| Column | Meaning |
+|---|---|
+| name | parameter name, as used by setParameter |
+| value | current value; documents on one line |
+| runtime | `true`: can be changed at runtime with `db.adminCommand({setParameter: 1, name: value})`; `false`: startup only. 4.2+ only |
+
+```
+> mt.vars('ttlMonitor')
+-- db.adminCommand({getParameter: {allParameters: true, showDetails: true}})
++--------------------------------------+-------+---------+
+| name                                 | value | runtime |
++--------------------------------------+-------+---------+
+| ttlMonitorBatchDeletes               | true  | true    |
+| ttlMonitorEnabled                    | true  | true    |
+| ttlMonitorMaxMetadataRecoveryThreads | 5     | false   |
+| ttlMonitorSleepSecs                  | 60    | true    |
+| ttlMonitorSubPassTargetSecs          | 60    | true    |
++--------------------------------------+-------+---------+
+5 rows in set
+```
+
+```
+> mt.vars('featureCompat*')
+-- db.adminCommand({getParameter: {allParameters: true, showDetails: true}})
++-----------------------------+----------------+---------+
+| name                        | value          | runtime |
++-----------------------------+----------------+---------+
+| featureCompatibilityVersion | {version: 7.0} | false   |
++-----------------------------+----------------+---------+
+1 row in set
+```
+
+- There are many parameters (600+ on 7.0, 170+ on 3.6), so filter by name first.
+- `mt.vars()` shows the values in effect now, including any changed at runtime with setParameter; for the config file and command line options it started with, use `mt.host({all: true})`.
 
 ### mt.cache(): what is in the cache
 
