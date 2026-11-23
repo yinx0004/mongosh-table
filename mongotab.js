@@ -2802,7 +2802,11 @@
     doc.cache['read' + sfx] = sizeText(per('cache', 'bytes read into cache'));
     doc.cache['written' + sfx] = sizeText(per('cache', 'bytes written from cache'));
     doc.cache['evicted' + sfx] = (per('cache', 'unmodified pages evicted') || 0) + (per('cache', 'modified pages evicted') || 0);
+    // 应用线程驱逐的页面：8.0 后来的版本拆成了尝试次数和失败次数，相减就是驱逐成功的
     var appEv = per('cache', 'pages evicted by application threads');
+    if (appEv === null && c['page evict attempts by application threads'] != null) {
+      appEv = Math.max(0, Math.round((per('cache', 'page evict attempts by application threads') - (per('cache', 'page evict failures by application threads') || 0)) * 10) / 10);
+    }
     doc.cache['appEvicted' + sfx] = appEv;
     doc.cache.aggressive = toNum(c['eviction currently operating in aggressive mode']) > 0;
     // 检查点：8.0 起在 wiredTiger.checkpoint，之前在 transaction 里（键名前面多了 transaction checkpoint）
