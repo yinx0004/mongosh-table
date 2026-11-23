@@ -457,6 +457,44 @@ run('mt.check no limit', function () {
   var m = /（逐个集合的检查：(\d+)\/(\d+) 个集合）/.exec(out);
   print(m && m[1] === m[2] && !/只查了前/.test(out) ? 'all scanned' : out);
 }, ['all scanned']);
+// 阈值：这一次改、本会话改；值不对时报错，不跑检查
+run('mt.check thresholds', function () {
+  var dflt = capOut(function () { mt.check({ quick: true, table: true }); });
+  var out = capOut(function () { mt.check({ quick: true, table: true, thresholds: { queue: [0, 0], oplog: [0, 0], longOps: [7200, 7200], txns: 90 } }); });
+  // 测试实例刚建，oplog 窗口默认是 CRIT，阈值改成 0 就 OK；等锁队列默认 OK，阈值改成 0 就 CRIT
+  print(/oplog 窗口\s*\|\s*CRIT/.test(dflt) && /oplog 窗口\s*\|\s*OK/.test(out) ? 'oplog follows' : dflt + out);
+  print(/等锁队列\s*\|\s*OK/.test(dflt) && /等锁队列\s*\|\s*CRIT/.test(out) ? 'queue follows' : dflt + out);
+  print(/没有超过 60 秒的/.test(dflt) && /没有超过 2 小时的/.test(out) && /开了 90 秒以上/.test(out) ? 'texts follow' : dflt + out);
+  print(/改过的阈值/.test(dflt) ? 'default lists changes' : 'default lists none');
+  print(out.split('\n').filter(function (l) { return /^改过的阈值/.test(l); }).join('\n'));
+}, ['oplog follows', 'queue follows', 'texts follow', 'default lists none',
+  '改过的阈值：oplog 0 / 0 小时，queue 0 / 0 个，longOps 7200 / 7200 秒，txns 90 秒']);
+run('mt.check bad thresholds', function () {
+  var out = capOut(function () {
+    mt.check({ thresholds: { lag: 5 } });
+    mt.check({ thresholds: { nope: 1 } });
+    mt.check({ thresholds: { txns: [1, 2] } });
+    mt.check({ thresholds: { lag: [60, 10] } });
+    mt.check({ thresholds: { oplog: [3, 24] } });
+    mt.check({ thresholds: { conns: [90, 101] } });
+    mt.check({ thresholds: { lag: ['10', 60] } });
+    mt.check({ thresholds: { lag: [-1, 60] } });
+    mt.check({ thresholds: [1] });
+  });
+  print(out);
+  print(/serverStatus|\| check/.test(out) ? 'ran anyway' : 'nothing ran');
+}, ['mongotab: lag 要写成 [WARN, CRIT]，如 [10, 60]', 'mongotab: 没有叫 nope 的阈值，可以用：lag、oplog、', 'mongotab: txns 只有 WARN 一档，写一个数，如 30',
+  'mongotab: lag 的 WARN 不能大于 CRIT', 'mongotab: oplog 越低越坏，WARN 要大于等于 CRIT', 'mongotab: conns 是百分比，不能超过 100',
+  'mongotab: lag 的值要是 ≥ 0 的数字', 'mongotab: thresholds 要写成对象', 'nothing ran']);
+run('mt.config checkThresholds', function () {
+  mt.config({ checkThresholds: { lag: [30, 300], txns: 120 } });
+  mt.config({ checkThresholds: { lag: null, queue: [0, 0] } });   // 按键合并，null 恢复默认
+  mt.config();
+  try { mt.config({ checkThresholds: { x: 1 } }); } catch (e) { print(e.message); }
+  try { mt.check({ quick: true, issues: true, table: true, showCmd: false }); mt.help('check'); } finally { mt.config({ checkThresholds: null }); }
+  mt.config();
+}, ['"checkThresholds":{"txns":[120],"queue":[0,0]}', 'mongotab: 没有叫 x 的阈值', '| 等锁队列 ', '| CRIT ', '改过的阈值：queue 0 / 0 个，txns 120 秒',
+  '阈值（WARN / CRIT；只有一个数的只报 WARN）：', 'queue       0 / 0 个（默认 5 / 50 个）', 'lag         10 / 60 秒', 'oplog 窗口（越低越坏）', '"checkThresholds":null']);
 // 查不全时不能显示 OK：用 failCommand 让 aggregate / listDatabases 真的失败（4.0 起才有 failCommand）
 var failCmd = function (cmds) {
   try { return db.adminCommand({ configureFailPoint: 'failCommand', mode: 'alwaysOn', data: { failCommands: cmds, errorCode: 2 } }).ok; } catch (e) { return false; }

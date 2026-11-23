@@ -312,6 +312,7 @@ SO20240101002,Bob,2.5,(无字段)
 | `missingText` | 跟随语言 | 没有这个字段时显示什么，默认 `(无字段)` / `(missing)` |
 | `lang` | 自动 | `'zh'` / `'en'`：提示和帮助的语言 |
 | `showCmd` | `true` | DBA 命令先打印等价的原生命令 |
+| `checkThresholds` | `null` | `mt.check()` 的阈值，如 `{lag: [30, 300]}`，按键合并，见 [mt.check()](#mtcheck一键体检) |
 
 DBA 命令另有自己的选项（`secs`、`ns`、`sort`、`interval`...），见下一节各命令。
 
@@ -324,7 +325,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 
 ```
 > mt.config()
-{"limit":50,"maxCol":40,"tz":"UTC","nullText":"NULL","missingText":null,"color":null,"width":200,"depth":null,"showCmd":true,"lang":"zh"}
+{"limit":50,"maxCol":40,"tz":"UTC","nullText":"NULL","missingText":null,"color":null,"width":200,"depth":null,"showCmd":true,"checkThresholds":null,"lang":"zh"}
 ```
 
 - 设置只在当前 mongosh 会话里有效，退出就没了；重新 `load()` 也会回到默认值。
@@ -445,28 +446,30 @@ mt.check()                  // 全部检查
 mt.check({issues: true})    // 只看 WARN / CRIT / UNKNOWN
 mt.check({quick: true})     // 跳过逐个集合的检查（索引、TTL、磁盘空间）
 mt.check({maxColls: 5000, budgetMs: 120000})   // 逐个集合的检查最多查 5000 个集合、2 分钟；0 = 不限
+mt.check({thresholds: {lag: [30, 300], oplog: [48, 6]}})   // 这一次用别的阈值
+mt.config({checkThresholds: {longOps: [600, 3600]}})      // 改本会话的默认阈值
 ```
 
-| 检查项 | 依据 | WARN | CRIT |
-|---|---|---|---|
-| 启动警告 | `getLog: 'startupWarnings'` | 有警告 | |
-| 写入被锁（fsyncLock） | `currentOp` | | 被锁着 |
-| FCV 版本 | `featureCompatibilityVersion` 和二进制版本 | 低于二进制版本（升级后忘了提升） | |
-| 副本集成员 | `rs.status()` | | 有成员不是 PRIMARY / SECONDARY / ARBITER，或 health 不是 1 |
-| 复制延迟 | 最大的 lagSecs | ≥ 10 秒 | ≥ 60 秒 |
-| oplog 窗口 | 最早到最晚一条 | < 24 小时 | < 3 小时 |
-| 缓存使用率 / 缓存脏数据 | WiredTiger 缓存 | ≥ 90% / ≥ 10% | ≥ 95% / ≥ 20% |
-| 读写并发票据 | 已用 / 总数（7.0 之前） | ≥ 80% | ≥ 95% |
-| 等锁队列 | `globalLock.currentQueue` 读 + 写 | ≥ 5 | ≥ 50 |
-| 连接数 | current / (current + available) | ≥ 80% | ≥ 95% |
-| 长时间运行的操作 | 客户端的操作 | 超过 60 秒 | 超过 600 秒 |
-| 等锁的操作 / 长事务 | `waitingForLock` / 开了 30 秒以上 | 有 | |
-| TTL 线程 / profiler | `ttlMonitorEnabled` / 有库是 level 2 | 停了 / 有 | |
-| 正在建的索引 | `currentOp` | INFO | |
-| TTL 超期 | 同 `mt.ttl()` | 超期 1 小时以上 | |
-| 冗余索引 | 同 `mt.dupIdx()` | 有 | |
-| 没被用过的索引 | 同 `mt.unusedIdx()`，不算 unique / ttl / 分片键，计数不满 7 天的也不算 | 有（运行不满 7 天只给 INFO） | |
-| 可回收的磁盘空间 | 同 `mt.frag()`，所有用户库合计 | 超过 30% 且超过 1 GB | |
+| 检查项 | 依据 | WARN | CRIT | 阈值键 |
+|---|---|---|---|---|
+| 启动警告 | `getLog: 'startupWarnings'` | 有警告 | | |
+| 写入被锁（fsyncLock） | `currentOp` | | 被锁着 | |
+| FCV 版本 | `featureCompatibilityVersion` 和二进制版本 | 低于二进制版本（升级后忘了提升） | | |
+| 副本集成员 | `rs.status()` | | 有成员不是 PRIMARY / SECONDARY / ARBITER，或 health 不是 1 | |
+| 复制延迟 | 最大的 lagSecs | ≥ 10 秒 | ≥ 60 秒 | `lag` |
+| oplog 窗口 | 最早到最晚一条 | < 24 小时 | < 3 小时 | `oplog`（小时，越低越坏） |
+| 缓存使用率 / 缓存脏数据 | WiredTiger 缓存 | ≥ 90% / ≥ 10% | ≥ 95% / ≥ 20% | `cacheUsed` / `cacheDirty` |
+| 读写并发票据 | 已用 / 总数（7.0 之前） | ≥ 80% | ≥ 95% | `tickets` |
+| 等锁队列 | `globalLock.currentQueue` 读 + 写 | ≥ 5 | ≥ 50 | `queue` |
+| 连接数 | current / (current + available) | ≥ 80% | ≥ 95% | `conns` |
+| 长时间运行的操作 | 客户端的操作 | 超过 60 秒 | 超过 600 秒 | `longOps`（秒） |
+| 等锁的操作 / 长事务 | `waitingForLock` / 开了 30 秒以上 | 有 | | 长事务：`txns`（秒） |
+| TTL 线程 / profiler | `ttlMonitorEnabled` / 有库是 level 2 | 停了 / 有 | | |
+| 正在建的索引 | `currentOp` | INFO | | |
+| TTL 超期 | 同 `mt.ttl()` | 超期 1 小时以上 | | `ttlOverdue`（秒） |
+| 冗余索引 | 同 `mt.dupIdx()` | 有 | | |
+| 没被用过的索引 | 同 `mt.unusedIdx()`，不算 unique / ttl / 分片键，计数不满 7 天的也不算 | 有（运行不满 7 天只给 INFO） | | |
+| 可回收的磁盘空间 | 同 `mt.frag()`，所有用户库合计 | 超过 30% 且超过 1 GB | | `frag`（%）、`fragMinGB` |
 
 下面是一个有问题的实例：fsyncLock 了没解锁（写入在排队），TTL 线程停了（`sessions` 超期了 5 个多小时），还有一个冗余索引。
 
@@ -512,7 +515,10 @@ CRIT 2，WARN 5，OK 13，INFO 1 （逐个集合的检查：2/2 个集合）
 - 逐个集合的四项（TTL 超期、冗余索引、没被用过的索引、可回收空间）共用一次遍历：每个库一次 `listCollections`，每个集合一次 `getIndexes`、一次 `$collStats`；运行满 7 天才查 `$indexStats`；每个 TTL 索引再查一次最老的文档。
 - 默认最多查 2000 个集合（`maxColls`）、60 秒（`budgetMs`），按库名、集合名的顺序，到了就停下。没查到的集合不能算没问题：这几项没发现问题时是 UNKNOWN，value 写“只查了前 2000/15000 个集合（maxColls 2000）”；有发现时照常 WARN 并附上这句。最后一行写实际查了几个集合。
 - 集合很多时可以先 `{quick: true}`，再用 `mt.dupIdx('库')`、`mt.unusedIdx('库')`、`mt.ttl('库')`、`mt.frag('库')` 逐个库看。
-- 阈值是常见的经验值，不一定适合每个场景；WARN 不代表一定有问题，按建议列的命令再细看。
+- 表里的阈值是默认值，是常见的经验值，不一定适合每个场景（比如离线分析库的长操作、跨机房副本的复制延迟）；WARN 不代表一定有问题，按建议列的命令再细看。
+- 阈值可以改：`mt.check({thresholds: {...}})` 只改这一次；`mt.config({checkThresholds: {...}})` 改本会话的默认值，重新 `load()` 会恢复。键见上表的“阈值键”，有 CRIT 的写 `[WARN, CRIT]`，只有 WARN 的写一个数；`oplog` 越低越坏，WARN 要大于等于 CRIT，其余 WARN 不能大于 CRIT；百分比不能超过 100。`mt.help('check')` 列出全部键、默认值和本会话改过的值。
+- `mt.config({checkThresholds: ...})` 按键合并：再设一次只改给出的键，某个键给 `null` 恢复默认，`checkThresholds: null` 全部恢复。改过的阈值会列在结果最后一行之前，比如 `改过的阈值：lag 30 / 300 秒，oplog 48 / 6 小时`。
+- 值不对（没有这个键、个数不对、顺序反了、不是数字）时只打印一行说明，不跑检查。
 
 ### mt.ps()：正在执行的操作
 
