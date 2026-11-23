@@ -357,16 +357,17 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 +------------------------------+--------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Slow queries and plans ──
-+-------------------------+------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                 | mysql                        | description                                                                                                                                                                                                   |
-+-------------------------+------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.slow({ms, ns, sort}) | mysql.slow_log               | Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first                            |
-| mt.log({n, grep, sev})  | performance_schema.error_log | Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings                                                                                         |
-| mt.explain(cursor)      | EXPLAIN [ANALYZE]            | Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; plan only by default, nothing runs; analyze: true runs it for rows scanned and time        |
-| mt.explainLog(n | line) | EXPLAIN on a slow log query  | Explain a query from a slow log: first what the log recorded about the real run, then the current plan, noting if the plan changed; n is a row of mt.slow() / mt.log(), or pass a whole log line or a command |
-| mt.logQuery(n | line)   | slow log → SQL               | Turn a query from a slow log into a mongosh statement you can run (nothing runs), keeping the types                                                                                                           |
-| mt.planCache('coll')    | performance_schema digests   | Plan cache of a collection: the cached plan per query shape, whether it is active, works; hash filters by queryHash / planCacheKey                                                                            |
-+-------------------------+------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++-------------------------+------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                 | mysql                        | description                                                                                                                                                                                                           |
++-------------------------+------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.slow({ms, ns, sort}) | mysql.slow_log               | Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first                                    |
+| mt.qstats({interval})   | SHOW STATUS LIKE 'Handler%'  | Query efficiency: keys and documents examined, documents returned, examined per returned, collection scans, in-memory sorts, write conflicts, plan cache hits; interval = seconds to sample, 0 = totals since startup |
+| mt.log({n, grep, sev})  | performance_schema.error_log | Recent log lines (getLog); n = lines, grep = text or regex, sev: 'W' = warnings and worse, startup = startup warnings                                                                                                 |
+| mt.explain(cursor)      | EXPLAIN [ANALYZE]            | Query plan as a table: index, rows scanned and returned, and time per stage; flags full scans and in-memory sorts; plan only by default, nothing runs; analyze: true runs it for rows scanned and time                |
+| mt.explainLog(n | line) | EXPLAIN on a slow log query  | Explain a query from a slow log: first what the log recorded about the real run, then the current plan, noting if the plan changed; n is a row of mt.slow() / mt.log(), or pass a whole log line or a command         |
+| mt.logQuery(n | line)   | slow log → SQL               | Turn a query from a slow log into a mongosh statement you can run (nothing runs), keeping the types                                                                                                                   |
+| mt.planCache('coll')    | performance_schema digests   | Plan cache of a collection: the cached plan per query shape, whether it is active, works; hash filters by queryHash / planCacheKey                                                                                    |
++-------------------------+------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Storage and indexes ──
 +--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -719,6 +720,61 @@ How it works:
 - Reads of `system.profile` itself and `profile` commands are always left out, so at level 2 you do not see `mt.slow()` itself.
 - `docsExamined` far above `nreturned`, or a `COLLSCAN` plan, usually means a missing index. Run `mt.explainLog(n)` on that row to see its plan, see [mt.explainLog()](#mtexplainlog-explain-a-query-from-a-slow-log); `mt.logQuery(n)` turns it into a statement you can run.
 - `system.profile` is a 1 MB capped collection that overwrites its oldest entries when full, so it only covers recent activity.
+
+### mt.qstats(): query efficiency
+
+Like `SHOW STATUS LIKE 'Handler_read%'`: how much the whole instance examined and returned, and whether there are collection scans and in-memory sorts. It runs `db.serverStatus()` and reads its `metrics`; by default it samples twice 1 second apart and shows rates per second.
+
+```js
+mt.qstats()                  // sampled twice 1 s apart
+mt.qstats({interval: 10})    // 10 s apart, steadier numbers
+mt.qstats({interval: 0})     // one snapshot, totals since startup
+mt.qstats('read,scans')      // only some groups
+```
+
+| Field | Meaning |
+|---|---|
+| `read.keysExamined` / `docsExamined` / `returned` | index keys examined, documents examined, documents returned |
+| `read.keysPerReturned` / `docsPerReturned` | keys and documents examined per document returned; `docsPerReturned` far above 1 means the indexes do not fit the queries |
+| `scans.collScans` / `collScansNonTailable` | collection scans (4.4+); the latter leaves out tailable cursors such as the oplog's |
+| `scans.inMemorySorts` / `sortSpills` | sorts done in memory without an index; sorts that spilled to disk (7.0+) |
+| `write.inserted` / `updated` / `deleted` / `conflicts` | documents inserted, updated, deleted; write conflicts |
+| `planCache.hits` / `misses` | plan cache hits and misses (7.0+, classic engine) |
+| `cursors.*` | open cursors (and how many are noTimeout or pinned), cursors closed for timing out |
+| `killed.maxTimeMS` | operations stopped for exceeding maxTimeMS (8.0+) |
+
+Below, a client keeps running queries with no index: over 900 documents are examined per document returned, with 90 collection scans a second, and the last two lines point that out.
+
+```
+> mt.qstats()
+-- db.serverStatus().metrics; sampled twice 1 s apart, /s values are per second
+         read.keysExamined/s: 90.6
+         read.docsExamined/s: 4532110.3
+             read.returned/s: 4803.9
+        read.keysPerReturned: 0.02
+        read.docsPerReturned: 943.4
+           scans.collScans/s: 90.6
+scans.collScansNonTailable/s: 90.6
+       scans.inMemorySorts/s: 45.3
+          scans.sortSpills/s: 0
+            write.inserted/s: 0
+             write.updated/s: 45.3
+             write.deleted/s: 0
+           write.conflicts/s: 0
+            planCache.hits/s: 0
+          planCache.misses/s: 181.3
+                cursors.open: 0
+           cursors.noTimeout: 0
+              cursors.pinned: 0
+          cursors.timedOut/s: 0
+Note: 943.4 documents examined per document returned: an index may be missing; find the queries with mt.slow() or mt.log('Slow query')
+Note: 90.6 collection scans per second: find them with mt.log('COLLSCAN') or mt.slow()
+```
+
+- These are server-wide counters, not split by collection. Once something looks wrong, find the queries with `mt.slow()` or `mt.log('Slow query')`, then look at their plans with `mt.explainLog()`.
+- A note is printed at the end when, while sampling, over 100 documents were examined per document returned (and over 1000 per second), there were collection scans, or sorts spilled to disk. `{interval: 0}` shows totals and prints no notes.
+- One-second samples jump around; for trends use `{interval: 10}`.
+- Must run on a mongod.
 
 ### mt.explain(): query plans
 
