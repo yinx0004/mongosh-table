@@ -86,7 +86,7 @@ run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '─�
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
 var ALL_CMDS = ['host', 'latency', 'desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
-  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars'];
+  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine'];
 run('mt.help each command', function () {
   var bad = [];
   ['zh', 'en'].forEach(function (lang) {
@@ -99,10 +99,10 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 28 ok']);
+}, ['all 29 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
-run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'vars'、'latency'"]);
+run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'vars'、'engine'"]);
 run('mt.ps', function () { mt.ps(); }, ['-- db.adminCommand({currentOp: 1, active: true})']);
 run('mt.ps slow query', function () {
   for (var i = 0; i < 20 && !db.currentOp({ ns: 'mtslow.slow' }).inprog.length; i++) sleep(500);
@@ -439,6 +439,25 @@ run('mt.vars wildcard and regex', function () { mt.vars('featureCompat*', { show
 ]);
 run('mt.vars limit', function () { mt.vars({ limit: 2, showCmd: false }); }, ['2 rows in set  (共 ']);
 run('mt.vars none', function () { mt.vars('noSuchParameterX'); }, ['没有名字里含 noSuchParameterX 的参数']);
+// mt.engine：WiredTiger 的状态；4.4 起有 updates 和 history store，8.0 起检查点没有 running
+var v8 = Number(db.version().split('.')[0]) >= 8;
+run('mt.engine', function () { mt.engine(); }, [
+  '-- db.serverStatus().wiredTiger，间隔 1 秒采样两次，带 /s 的是每秒的量', 'cache.max: ', 'cache.used: ', '%)', 'cache.dirty: ', 'cache.read/s: ',
+  'cache.evicted/s: ', 'cache.appEvicted/s: 0', 'cache.aggressive: ', 'checkpoint.count: ', 'checkpoint.lastMs: ', 'tickets.read: ', 'tickets.write: ',
+  'journal.syncs/s: ', 'disk.written/s: ', 'handles.data: ', 'handles.files: '
+].concat(hideOk ? ['cache.updates: ', 'historyStore.disk: '] : []).concat(v8 ? [] : ['checkpoint.running: ']));
+run('mt.engine versions', function () {
+  var out = capOut(function () { mt.engine({ interval: 0 }); });
+  print(/cache\.updates:/.test(out) === hideOk && /historyStore\.disk:/.test(out) === hideOk ? 'updates/history store right' : out);
+  print(/checkpoint\.running:/.test(out) === !v8 ? 'running right' : out);
+  print(/\/s:/.test(out) ? out : 'totals, no /s');
+}, ['updates/history store right', 'running right', 'totals, no /s', ]);
+run('mt.engine cols', function () {
+  var out = capOut(function () { mt.engine({ cols: 'checkpoint', interval: 0, showCmd: false }); });
+  print(/checkpoint\.count:/.test(out) && !/cache\./.test(out) ? 'only checkpoint' : out);
+  var out2 = capOut(function () { mt.engine('cache,checkpoint'); });   // 字符串就是 cols
+  print(/cache\.used:/.test(out2) && /checkpoint\.count:/.test(out2) && !/tickets\./.test(out2) ? 'string cols' : out2);
+}, ['only checkpoint', 'string cols']);
 run('mt.host all', function () { mt.host({ all: true, cols: 'parsed' }); }, ['parsed.replication.']);
 run('mt.status', function () { mt.status(); }, ['role: PRIMARY (rs0)', 'ops/s.insert: ', 'connections.current: ']);
 run('mt.status totals', function () { mt.status({ interval: 0, cols: 'opcounters' }); }, ['opcounters.insert: ']);

@@ -344,6 +344,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 +------------------------------+--------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | mt.check({quick, issues})    | mysqltuner / pt-summary        | 一键体检：复制、oplog、缓存、连接、长操作、长事务、TTL、冗余 / 没用的索引等，每项给 OK / WARN / CRIT / UNKNOWN 和建议；quick 跳过逐个集合的检查，issues 只看有问题的 |
 | mt.status({interval})        | SHOW GLOBAL STATUS             | 版本、角色、ops/s、连接、缓存等关键指标                                                                                                                              |
+| mt.engine({interval})        | SHOW ENGINE INNODB STATUS      | 存储引擎（WiredTiger）：缓存用量、脏数据、驱逐、检查点、读写票据、日志和磁盘读写；interval 采样秒数，0 = 启动以来累计                                                |
 | mt.host({all})               | SHOW VARIABLES LIKE 'version%' | 机器和进程：CPU、内存、操作系统、文件句柄数、mongod 版本和编译信息、存储引擎、启动参数；all 列出全部启动参数                                                         |
 | mt.vars('pattern')           | SHOW VARIABLES                 | 运行参数（getParameter）：名字、当前值、能不能在运行时改（4.2 起）；可传关键字、通配符或正则过滤，如 mt.vars('ttl')                                                  |
 | mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST               | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                                      |
@@ -1833,6 +1834,66 @@ mt.vars({limit: 0})       // 全部列出
 
 - 参数很多（7.0 有 600 多个，3.6 有 170 多个），先用关键字过滤。
 - `mt.vars()` 看的是现在生效的值，包括运行时用 setParameter 改过的；启动时用的配置文件和命令行参数用 `mt.host({all: true})` 看。
+
+### mt.engine()：存储引擎状态
+
+相当于 MySQL 的 `SHOW ENGINE INNODB STATUS`，看 WiredTiger 的缓存、驱逐、检查点和读写票据。执行的是 `db.serverStatus()`，读其中的 `wiredTiger`；默认间隔 1 秒采样两次，读写量和驱逐按每秒算。
+
+```js
+mt.engine()                     // 间隔 1 秒采样两次
+mt.engine({interval: 5})        // 间隔 5 秒
+mt.engine({interval: 0})        // 只取一次，显示启动以来的累计值
+mt.engine('cache,checkpoint')   // 只看某几组
+```
+
+| 字段 | 说明 |
+|---|---|
+| `cache.max` / `used` / `dirty` / `updates` | 缓存上限、已用、脏数据、更新占用（4.4 起），括号里是占上限的比例 |
+| `cache.read` / `written` | 读进缓存、从缓存写出的字节数 |
+| `cache.evicted` / `appEvicted` | 驱逐的页面数；`appEvicted` 是处理请求的应用线程驱逐的，正常应该是 0 |
+| `cache.aggressive` | 驱逐是否处于激进模式 |
+| `checkpoint.*` | 检查点次数、是否正在做（8.0 起没有这项）、最近一次 / 最长 / 平均耗时（毫秒） |
+| `historyStore.disk` | 历史存储占的磁盘（4.4 起），长事务、快照读会让它变大 |
+| `tickets.read` / `write` | 读写票据：在用 / 总数；7.0 起总数会自动调整 |
+| `journal.syncs` / `written` | 日志刷盘次数、写入的字节数 |
+| `disk.read` / `written` | 存储引擎读写磁盘的字节数 |
+| `handles.data` / `files` | 打开的数据句柄数、文件数 |
+
+下面是缓存只有 256 MB、一直在批量写入的实例：应用线程也在驱逐页面，最后一行提示了这一点。
+
+```
+> mt.engine()
+-- db.serverStatus().wiredTiger，间隔 1 秒采样两次，带 /s 的是每秒的量
+         cache.max: 256.0 MB
+        cache.used: 192.3 MB (75.1%)
+       cache.dirty: 4.8 MB (1.9%)
+     cache.updates: 4.2 MB (1.6%)
+      cache.read/s: 20.3 KB
+   cache.written/s: 181.4 MB
+   cache.evicted/s: 582.2
+cache.appEvicted/s: 17.8
+  cache.aggressive: false
+  checkpoint.count: 4
+checkpoint.running: false
+ checkpoint.lastMs: 124
+  checkpoint.maxMs: 154
+  checkpoint.avgMs: 119
+ historyStore.disk: 4.0 KB
+      tickets.read: 0 / 10
+     tickets.write: 1 / 10
+   journal.syncs/s: 9.9
+ journal.written/s: 11.4 MB
+       disk.read/s: 23.8 KB
+    disk.written/s: 14.5 MB
+      handles.data: 27
+     handles.files: 16
+注意：应用线程每秒驱逐 17.8 个页面：缓存压力大，请求在帮着腾地方
+```
+
+- 这些情况会在最后提示：缓存用到 95%、脏数据到 20%、更新到 10%（4.4 起），这几个是 WiredTiger 默认的触发线（`eviction_trigger`、`eviction_dirty_trigger`、`eviction_updates_trigger`），到了以后处理请求的线程也要帮忙驱逐，读写会变慢；采样期间应用线程驱逐了页面；最近一次检查点超过 60 秒（默认的检查点间隔）。
+- 带 `/s` 的是两次采样的差除以间隔；`{interval: 0}` 时没有 `/s`，是启动以来的累计值。
+- 8.0 起检查点的统计挪到了 `wiredTiger.checkpoint`，票据挪到了 `serverStatus().queues.execution`，这两处都已经按版本处理。
+- 只能连 mongod；mongos 上没有存储引擎，只打印一行说明。`mt.status()` 里也有缓存的三项，`mt.cache()` 看各集合占了多少缓存。
 
 ### mt.cache()：谁占着缓存
 
