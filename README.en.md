@@ -312,6 +312,7 @@ Every option can be passed to a single call (`t(x, {maxCol: 80})`) or set as the
 | `missingText` | follows `lang` | What a missing field shows as: `(missing)` / `(无字段)` by default |
 | `lang` | auto | `'en'` / `'zh'`: language of messages and help |
 | `showCmd` | `true` | DBA commands print the native command first |
+| `checkThresholds` | `null` | `mt.check()` thresholds, e.g. `{lag: [30, 300]}`, merged by key; see [mt.check()](#mtcheck-health-check) |
 
 DBA commands have their own options too (`secs`, `ns`, `sort`, `interval`...); see each command in the next section.
 
@@ -324,7 +325,7 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 
 ```
 > mt.config()
-{"limit":50,"maxCol":40,"tz":"UTC","nullText":"NULL","missingText":null,"color":null,"width":200,"depth":null,"showCmd":true,"lang":"en"}
+{"limit":50,"maxCol":40,"tz":"UTC","nullText":"NULL","missingText":null,"color":null,"width":200,"depth":null,"showCmd":true,"checkThresholds":null,"lang":"en"}
 ```
 
 - Settings last for the current shell session only; running `load()` again also resets them.
@@ -445,28 +446,30 @@ mt.check()                  // every check
 mt.check({issues: true})    // only WARN / CRIT / UNKNOWN
 mt.check({quick: true})     // skip per-collection checks (indexes, TTL, disk space)
 mt.check({maxColls: 5000, budgetMs: 120000})   // per-collection checks stop after 5000 collections or 2 minutes; 0 = no limit
+mt.check({thresholds: {lag: [30, 300], oplog: [48, 6]}})   // other thresholds for this run
+mt.config({checkThresholds: {longOps: [600, 3600]}})      // change the session's default thresholds
 ```
 
-| Check | Based on | WARN | CRIT |
-|---|---|---|---|
-| Startup warnings | `getLog: 'startupWarnings'` | any | |
-| Writes locked (fsyncLock) | `currentOp` | | locked |
-| FCV | `featureCompatibilityVersion` vs the binary | below the binary version (not raised after an upgrade) | |
-| Replica set members | `rs.status()` | | a member not PRIMARY / SECONDARY / ARBITER, or health != 1 |
-| Replication lag | largest lagSecs | >= 10 s | >= 60 s |
-| Oplog window | oldest to newest entry | < 24 h | < 3 h |
-| Cache used / cache dirty | WiredTiger cache | >= 90% / >= 10% | >= 95% / >= 20% |
-| Read/write tickets | in use / total (before 7.0) | >= 80% | >= 95% |
-| Lock queue | `globalLock.currentQueue` readers + writers | >= 5 | >= 50 |
-| Connections | current / (current + available) | >= 80% | >= 95% |
-| Long-running operations | client operations | over 60 s | over 600 s |
-| Lock waits / long transactions | `waitingForLock` / open 30+ s | any | |
-| TTL thread / profiler | `ttlMonitorEnabled` / a database at level 2 | stopped / any | |
-| Index builds | `currentOp` | INFO | |
-| TTL overdue | as in `mt.ttl()` | overdue by over 1 hour | |
-| Redundant indexes | as in `mt.dupIdx()` | any | |
-| Unused indexes | as in `mt.unusedIdx()`, not unique / ttl / shard key, nor indexes counted for under 7 days | any (only INFO before 7 days of uptime) | |
-| Reusable disk space | as in `mt.frag()`, all user databases | over 30% and over 1 GB | |
+| Check | Based on | WARN | CRIT | Threshold key |
+|---|---|---|---|---|
+| Startup warnings | `getLog: 'startupWarnings'` | any | | |
+| Writes locked (fsyncLock) | `currentOp` | | locked | |
+| FCV | `featureCompatibilityVersion` vs the binary | below the binary version (not raised after an upgrade) | | |
+| Replica set members | `rs.status()` | | a member not PRIMARY / SECONDARY / ARBITER, or health != 1 | |
+| Replication lag | largest lagSecs | >= 10 s | >= 60 s | `lag` |
+| Oplog window | oldest to newest entry | < 24 h | < 3 h | `oplog` (hours, lower is worse) |
+| Cache used / cache dirty | WiredTiger cache | >= 90% / >= 10% | >= 95% / >= 20% | `cacheUsed` / `cacheDirty` |
+| Read/write tickets | in use / total (before 7.0) | >= 80% | >= 95% | `tickets` |
+| Lock queue | `globalLock.currentQueue` readers + writers | >= 5 | >= 50 | `queue` |
+| Connections | current / (current + available) | >= 80% | >= 95% | `conns` |
+| Long-running operations | client operations | over 60 s | over 600 s | `longOps` (seconds) |
+| Lock waits / long transactions | `waitingForLock` / open 30+ s | any | | long transactions: `txns` (seconds) |
+| TTL thread / profiler | `ttlMonitorEnabled` / a database at level 2 | stopped / any | | |
+| Index builds | `currentOp` | INFO | | |
+| TTL overdue | as in `mt.ttl()` | overdue by over 1 hour | | `ttlOverdue` (seconds) |
+| Redundant indexes | as in `mt.dupIdx()` | any | | |
+| Unused indexes | as in `mt.unusedIdx()`, not unique / ttl / shard key, nor indexes counted for under 7 days | any (only INFO before 7 days of uptime) | | |
+| Reusable disk space | as in `mt.frag()`, all user databases | over 30% and over 1 GB | | `frag` (%), `fragMinGB` |
 
 An instance with problems: fsyncLock left on (writes queue behind it), the TTL thread stopped (`sessions` over 5 hours overdue), and a redundant index.
 
@@ -512,7 +515,10 @@ CRIT 2, WARN 5, OK 13, INFO 1 (per-collection checks: 2/2 collections)
 - The four per-collection checks (TTL overdue, redundant indexes, unused indexes, reusable space) share one pass: one `listCollections` per database, one `getIndexes` and one `$collStats` per collection, `$indexStats` only after 7 days of uptime, plus one query for the oldest document per TTL index.
 - By default the pass stops after 2000 collections (`maxColls`) or 60 seconds (`budgetMs`), going through databases and collections in name order. Collections it did not reach are not treated as fine: if these checks found nothing they are UNKNOWN with "only the first 2000/15000 collections checked (maxColls 2000)"; if they found problems they are WARN with that note added. The last line says how many collections were checked.
 - With many collections, start with `{quick: true}` and then look at one database at a time with `mt.dupIdx('db')`, `mt.unusedIdx('db')`, `mt.ttl('db')`, `mt.frag('db')`.
-- Thresholds are common rules of thumb and do not fit every workload; a WARN is not necessarily a problem, so look closer with the suggested command.
+- The thresholds in the table are defaults, common rules of thumb that do not fit every workload (long operations on an analytics database, lag on a replica in another data center); a WARN is not necessarily a problem, so look closer with the suggested command.
+- Thresholds can be changed: `mt.check({thresholds: {...}})` for one run; `mt.config({checkThresholds: {...}})` for the session, until the next `load()`. Keys are in the "Threshold key" column; keys with a CRIT level take `[WARN, CRIT]`, WARN-only keys take one number. For `oplog` lower is worse, so WARN must be >= CRIT; for the others WARN cannot exceed CRIT; percentages cannot exceed 100. `mt.help('check')` lists every key, its default and any value changed in this session.
+- `mt.config({checkThresholds: ...})` merges by key: setting it again changes only the keys given, a key set to `null` goes back to its default, and `checkThresholds: null` resets all. Changed thresholds are listed just before the last line of the output, e.g. `Changed thresholds: lag 30 / 300 s, oplog 48 / 6 h`.
+- Bad values (unknown key, wrong count, wrong order, not a number) print one line of explanation and no check runs.
 
 ### mt.ps(): running operations
 
