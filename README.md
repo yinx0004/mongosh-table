@@ -442,8 +442,9 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
 
 ```js
 mt.check()                  // 全部检查
-mt.check({issues: true})    // 只看 WARN / CRIT
-mt.check({quick: true})     // 跳过逐个集合的检查（索引、TTL、磁盘空间），集合很多时用
+mt.check({issues: true})    // 只看 WARN / CRIT / UNKNOWN
+mt.check({quick: true})     // 跳过逐个集合的检查（索引、TTL、磁盘空间）
+mt.check({maxColls: 5000, budgetMs: 120000})   // 逐个集合的检查最多查 5000 个集合、2 分钟；0 = 不限
 ```
 
 | 检查项 | 依据 | WARN | CRIT |
@@ -471,11 +472,11 @@ mt.check({quick: true})     // 跳过逐个集合的检查（索引、TTL、磁�
 
 ```
 > mt.check()
--- serverStatus, currentOp, replSetGetStatus, getLog, getParameter; every user db: getIndexes, $indexStats, $collStats
+-- serverStatus, currentOp, replSetGetStatus, getLog, getParameter; per collection (maxColls 2000, budgetMs 60000): getIndexes, $collStats, $indexStats
    host: db1
 version: 7.0.48
    role: PRIMARY (rs0)
- uptime: 19s
+ uptime: 20s
 +-----------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
 | check                 | status | value                                                            | advice                                                      |
 +-----------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
@@ -498,17 +499,19 @@ version: 7.0.48
 | profiler              | OK     | 没有库是 level 2                                                 |                                                             |
 | TTL 超期              | WARN   | 1 个超期 1 小时以上，最多 5h 30m                                 | mt.ttl()                                                    |
 | 冗余索引              | WARN   | 1 个，共 116.0 KB                                                | mt.dupIdx()                                                 |
-| 没被用过的索引        | INFO   | 只运行了 19s，统计不够，满 7 天再看                              | mt.unusedIdx()                                              |
+| 没被用过的索引        | INFO   | 只运行了 20s，统计不够，满 7 天再看                              | mt.unusedIdx()                                              |
 | 可回收的磁盘空间      | OK     | 0 B / 1.4 MB（0.0%）                                             |                                                             |
 +-----------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
-CRIT 2，WARN 5，OK 13，INFO 1
+CRIT 2，WARN 5，OK 13，INFO 1 （逐个集合的检查：2/2 个集合）
 ```
 
 - 某一项查不了（比如没有权限）只把这一项标成 UNKNOWN，写上原因，其他项照常检查。
 - 逐库 / 逐集合的检查（profiler、TTL 超期、冗余索引、没被用过的索引、可回收空间）有一部分失败时：没发现问题也不报 OK，而是 UNKNOWN，value 写“查了 40/42 个集合，2 个失败”，advice 写第一个失败的集合和原因；有发现时照常 WARN，value 后面附上覆盖情况。列不出库（`listDatabases` 失败）时这几项都是 UNKNOWN。
 - SKIP 只表示不适用：单机上副本集相关的几项、存储引擎不是 WiredTiger 时的缓存两项。只能连 mongod，在 mongos 上只打印一行说明。
 - `{issues: true}` 显示 WARN、CRIT 和 UNKNOWN。
-- 逐个集合的检查和 `mt.dupIdx()` 等一样要扫所有用户库，集合上千个时用 `{quick: true}`。
+- 逐个集合的四项（TTL 超期、冗余索引、没被用过的索引、可回收空间）共用一次遍历：每个库一次 `listCollections`，每个集合一次 `getIndexes`、一次 `$collStats`；运行满 7 天才查 `$indexStats`；每个 TTL 索引再查一次最老的文档。
+- 默认最多查 2000 个集合（`maxColls`）、60 秒（`budgetMs`），按库名、集合名的顺序，到了就停下。没查到的集合不能算没问题：这几项没发现问题时是 UNKNOWN，value 写“只查了前 2000/15000 个集合（maxColls 2000）”；有发现时照常 WARN 并附上这句。最后一行写实际查了几个集合。
+- 集合很多时可以先 `{quick: true}`，再用 `mt.dupIdx('库')`、`mt.unusedIdx('库')`、`mt.ttl('库')`、`mt.frag('库')` 逐个库看。
 - 阈值是常见的经验值，不一定适合每个场景；WARN 不代表一定有问题，按建议列的命令再细看。
 
 ### mt.ps()：正在执行的操作
