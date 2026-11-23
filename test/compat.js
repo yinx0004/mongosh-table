@@ -86,7 +86,7 @@ run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '─�
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
 var ALL_CMDS = ['host', 'latency', 'desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
-  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats'];
+  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf'];
 run('mt.help each command', function () {
   var bad = [];
   ['zh', 'en'].forEach(function (lang) {
@@ -99,7 +99,7 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 30 ok']);
+}, ['all 31 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
 run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'vars'、'engine'"]);
@@ -476,6 +476,18 @@ run('mt.qstats cols', function () {
   var out = capOut(function () { mt.qstats('read'); });
   print(/read\.returned\/s:/.test(out) && !/write\./.test(out) && !/cursors\./.test(out) ? 'only read' : out);
 }, ['only read']);
+// mt.rsconf：测试用的单节点副本集，一个成员、一票：没有可选的列，也没有提示
+run('mt.rsconf', function () { mt.rsconf(); }, [
+  '-- rs.conf(); rs.status(); db.adminCommand({getDefaultRWConcern: 1})', 'set: rs0', 'version: ', 'protocolVersion: 1', 'chainingAllowed: true',
+  'electionTimeoutMillis: 10000', '| id | host ', '| state   | priority | votes |', '| PRIMARY |        1 |     1 |', '1 row in set'
+]);
+run('mt.rsconf versions', function () {
+  var conf = rs.conf(), out = capOut(function () { mt.rsconf({ showCmd: false }); });
+  print(/term: \d+/.test(out) === (conf.term != null) ? 'term right' : out);
+  print(/majorityJournalDefault: true/.test(out) === (conf.writeConcernMajorityJournalDefault === true) ? 'journal right' : out);
+  print(/defaultWriteConcern: \{w: majority, wtimeout: 0\} \(implicit\)/.test(out) === (vmaj >= 5) ? 'rwc right' : out);
+  print(/\| (arbiter|hidden|delay|tags) /.test(out) || /注意：/.test(out) ? out : 'no optional columns, no notes');
+}, ['term right', 'journal right', 'rwc right', 'no optional columns, no notes']);
 run('mt.engine cols', function () {
   var out = capOut(function () { mt.engine({ cols: 'checkpoint', interval: 0, showCmd: false }); });
   print(/checkpoint\.count:/.test(out) && !/cache\./.test(out) ? 'only checkpoint' : out);
