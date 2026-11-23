@@ -86,7 +86,7 @@ run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '─�
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
 var ALL_CMDS = ['host', 'latency', 'desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
-  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf'];
+  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile'];
 run('mt.help each command', function () {
   var bad = [];
   ['zh', 'en'].forEach(function (lang) {
@@ -99,7 +99,7 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 31 ok']);
+}, ['all 32 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
 run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'vars'、'engine'"]);
@@ -181,9 +181,32 @@ run('mt.explainLog log row', function () { mt.log(/Zed/, { n: 1, cols: '#,msg' }
   ['| 1 | ', '慢日志里记录的执行情况', 'planSummary: IXSCAN', "-- db.getSiblingDB('mtest').runCommand({explain: {find: orders, filter: {customer.name: Zed}", 'IXSCAN']
     .concat(V44 ? ['durationMillis: '] : []));
 run('mt.slow ms filter', function () { mt.slow('mtprof', { ms: 100000000 }); }, ['.find({millis: {$gte: 100000000}})', 'Empty set']);
+// mt.profile：mtprof 开着 level 1、slowms 0
+run('mt.profile', function () {
+  var out = capOut(function () { mt.profile('mtprof'); });
+  print(out);
+  print(/\| mtprof \|\s+1 \|/.test(out) ? 'level 1' : 'no level row');
+}, ["-- db.getSiblingDB('mtprof'): db.getProfilingStatus()", 'slowms: 0', 'sampleRate: 1', '| db ', '| level |', '| docs ', ' / 1.0 MB', '| oldest ',
+  'level 1', '注意：slowms 是 0：所有操作都算慢操作']);
+// level 2、system.profile 很小很快写满：两条提示
+run('mt.profile notes', function () {
+  var p2 = db.getSiblingDB('mtprof2'); p2.dropDatabase(); p2.c.insertOne({ a: 1 });
+  p2.createCollection('system.profile', { capped: true, size: 8192 });
+  p2.runCommand({ profile: 2 });
+  for (var i = 0; i < 100; i++) p2.c.find({ a: i }).toArray();
+  var out = capOut(function () { mt.profile('mtprof2', { showCmd: false }); });
+  p2.runCommand({ profile: 0 }); p2.dropDatabase();
+  print(/level 2 的库（mtprof2）/.test(out) ? 'level2 note' : out);
+  print(/system\.profile 已经满了、只存了不到 1 小时（mtprof2/.test(out) ? 'short note' : out);
+}, ['level2 note', 'short note']);
 pdb.runCommand({ profile: 0, slowms: 100 });
 pdb.dropDatabase();
 run('mt.slow profiler off', function () { mt.slow('mtnoprof'); }, ['level: 0', 'Empty set', '没有开 profiler']);
+run('mt.profile all', function () {
+  var out = capOut(function () { mt.profile(); });
+  print(/slowms: 100/.test(out) && !/slowms 是 0/.test(out) ? 'slowms 100, no note' : out);
+  print(/\| admin /.test(out) && /\| local /.test(out) ? 'all dbs' : out);
+}, ['slowms 100, no note', 'all dbs']);
 run('mt.top totals', function () { mt.top({ interval: 0, ns: 'mtest' }); }, ['-- db.adminCommand({top: 1})，启动以来累计', '| mtest.orders ', '| totalMs |']);
 // mt.latency：采样时 run.sh 起的写入循环会往 mtlock.c 写；累计模式下 mtest.orders 有读
 run('mt.latency', function () { mt.latency({ table: true }); }, ['-- db.serverStatus().opLatencies; every user db', '间隔 1 秒采样两次', 'writes.avgMs: ', 'writes.ops/s: ', '| mtlock.c ', '| writeOps ']);
