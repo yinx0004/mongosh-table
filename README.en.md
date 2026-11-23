@@ -344,6 +344,7 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 +------------------------------+--------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | mt.check({quick, issues})    | mysqltuner / pt-summary        | Health check: replication, oplog, cache, connections, long operations and transactions, TTL, redundant / unused indexes and more, each with OK / WARN / CRIT / UNKNOWN and advice; quick skips per-collection checks, issues shows only problems |
 | mt.status({interval})        | SHOW GLOBAL STATUS             | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                                   |
+| mt.engine({interval})        | SHOW ENGINE INNODB STATUS      | Storage engine (WiredTiger): cache usage, dirty data, eviction, checkpoints, read/write tickets, journal and disk I/O; interval = seconds to sample, 0 = totals since startup                                                                    |
 | mt.host({all})               | SHOW VARIABLES LIKE 'version%' | Machine and process: CPU, memory, OS, open files limit, mongod version and build, storage engine, startup options; all lists every startup option                                                                                                |
 | mt.vars('pattern')           | SHOW VARIABLES                 | Runtime parameters (getParameter): name, current value, whether it can be changed at runtime (4.2+); filter with text, a wildcard or a regex, e.g. mt.vars('ttl')                                                                                |
 | mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST               | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                             |
@@ -1833,6 +1834,66 @@ mt.vars({limit: 0})       // list them all
 
 - There are many parameters (600+ on 7.0, 170+ on 3.6), so filter by name first.
 - `mt.vars()` shows the values in effect now, including any changed at runtime with setParameter; for the config file and command line options it started with, use `mt.host({all: true})`.
+
+### mt.engine(): storage engine status
+
+Like `SHOW ENGINE INNODB STATUS`: the WiredTiger cache, eviction, checkpoints and read/write tickets. It runs `db.serverStatus()` and reads its `wiredTiger` section; by default it samples twice 1 second apart and shows I/O and eviction per second.
+
+```js
+mt.engine()                     // sampled twice 1 s apart
+mt.engine({interval: 5})        // 5 s apart
+mt.engine({interval: 0})        // one snapshot, totals since startup
+mt.engine('cache,checkpoint')   // only some groups
+```
+
+| Field | Meaning |
+|---|---|
+| `cache.max` / `used` / `dirty` / `updates` | cache limit, used, dirty data, updates (4.4+), with the share of the limit in parentheses |
+| `cache.read` / `written` | bytes read into and written from the cache |
+| `cache.evicted` / `appEvicted` | pages evicted; `appEvicted` counts those evicted by application threads serving requests, normally 0 |
+| `cache.aggressive` | whether eviction is in aggressive mode |
+| `checkpoint.*` | checkpoint count, whether one is running (not on 8.0+), last / longest / average duration (ms) |
+| `historyStore.disk` | disk used by the history store (4.4+); long transactions and snapshot reads make it grow |
+| `tickets.read` / `write` | read/write tickets: in use / total; the total adjusts itself since 7.0 |
+| `journal.syncs` / `written` | journal syncs, bytes written |
+| `disk.read` / `written` | bytes the storage engine read from and wrote to disk |
+| `handles.data` / `files` | open data handles and files |
+
+Below is an instance with a 256 MB cache under a steady bulk insert: application threads are evicting pages too, and the last line points that out.
+
+```
+> mt.engine()
+-- db.serverStatus().wiredTiger; sampled twice 1 s apart, /s values are per second
+         cache.max: 256.0 MB
+        cache.used: 189.7 MB (74.1%)
+       cache.dirty: 9.4 MB (3.7%)
+     cache.updates: 8.8 MB (3.5%)
+      cache.read/s: 47.2 KB
+   cache.written/s: 139.3 MB
+   cache.evicted/s: 379.6
+cache.appEvicted/s: 12.8
+  cache.aggressive: false
+  checkpoint.count: 4
+checkpoint.running: false
+ checkpoint.lastMs: 164
+  checkpoint.maxMs: 164
+  checkpoint.avgMs: 128
+ historyStore.disk: 4.0 KB
+      tickets.read: 0 / 10
+     tickets.write: 0 / 10
+   journal.syncs/s: 7.9
+ journal.written/s: 9.5 MB
+       disk.read/s: 55.1 KB
+    disk.written/s: 11.3 MB
+      handles.data: 27
+     handles.files: 16
+Note: application threads evict 12.8 pages per second: the cache is under pressure and requests are making room
+```
+
+- A note is printed at the end when the cache is 95% full, dirty data reaches 20% or updates reach 10% (4.4+): these are WiredTiger's default triggers (`eviction_trigger`, `eviction_dirty_trigger`, `eviction_updates_trigger`), past which the threads serving requests must help evict and reads and writes slow down; when application threads evicted pages while sampling; and when the last checkpoint took over 60 s (the default checkpoint interval).
+- `/s` values are the difference between the two samples divided by the interval; with `{interval: 0}` there is no `/s` and the values are totals since startup.
+- Since 8.0 the checkpoint statistics moved to `wiredTiger.checkpoint` and the tickets to `serverStatus().queues.execution`; both are handled per version.
+- Must run on a mongod; a mongos has no storage engine, so it prints a one-line explanation. `mt.status()` also shows the three cache figures, and `mt.cache()` shows how much of the cache each collection uses.
 
 ### mt.cache(): what is in the cache
 
