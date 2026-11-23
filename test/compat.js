@@ -275,13 +275,30 @@ run('mt.dupIdx rows', function () {
   var got = idxNames(function () { mt.dupIdx('mtidx', { cols: 'ns,index', showCmd: false }); });
   print(got === 'a_1,a_1_b_1' ? 'dup ok' : 'dup bad ' + got);
 }, ['dup ok']);
-run('mt.unusedIdx', function () { mt.unusedIdx(ixd, { table: true }); }, ["-- db.getSiblingDB('mtidx'): each collection", 'uptime: ', '| u_1 ', 'unique']);
+// 刚建的索引计数开始（since）不到 7 天：默认不列，{days: 0} 才列出来
+var hideOk = Number(db.version().split('.')[0]) > 4 || db.version().indexOf('4.4') === 0;
+run('mt.unusedIdx', function () { mt.unusedIdx(ixd, { table: true, days: 0 }); }, [
+  "-- db.getSiblingDB('mtidx'): each collection", 'accesses.ops = 0', 'node: ', 'uptime: ', '| u_1 ', 'unique',
+  '计数只是本节点 ', hideOk ? "先 db.集合.hideIndex('名字') 观察一段时间，再 dropIndex" : '再 dropIndex（4.4 起可以先 hideIndex 观察）'
+]);
+run('mt.unusedIdx young', function () { mt.unusedIdx(ixd, { table: true }); }, [
+  'accesses.since ≥ 7 days ago', 'Empty set', '没有没被用过的索引', '另有 8 个索引计数开始不到 7 天（since 太近），没列出；{days: 0} 全部列出'
+]);
 run('mt.unusedIdx rows', function () {
-  var got = idxNames(function () { mt.unusedIdx('mtidx', { cols: 'ns,index', showCmd: false }); });
+  var got = idxNames(function () { mt.unusedIdx('mtidx', { cols: 'ns,index', showCmd: false, days: 0 }); });
   print(got === 'a_1,a_1_b_1,d_-1,d_1_e_1,p_1,p_1_q_1,u_1,u_1_v_1' ? 'unused ok' : 'unused bad ' + got);
 }, ['unused ok']);
+// 分片键：在分片的 mongod 上从 config.cache.collections 读，这里假造一条；以分片键开头的索引标 shardKey
+run('mt.unusedIdx shard key', function () {
+  var cc = db.getSiblingDB('config').getCollection('cache.collections');
+  cc.insertOne({ _id: 'mtidx.c', key: { p: 1 }, unique: false });
+  var out;
+  try { out = capOut(function () { mt.unusedIdx('mtidx', { cols: 'index,options', days: 0, showCmd: false }); }); } finally { cc.deleteOne({ _id: 'mtidx.c' }); }
+  var flagged = out.split('\n').filter(function (l) { return /shardKey/.test(l); }).map(function (l) { return l.split('|')[1].trim(); }).sort().join(',');
+  print(flagged === 'p_1,p_1_q_1' ? 'shard key ok' : 'shard key bad ' + flagged + '\n' + out);
+}, ['shard key ok']);
 run('mt.dupIdx all dbs', function () { mt.dupIdx({ cols: 'ns,index' }); }, ['| mtidx.c ']);
-run('mt.unusedIdx all dbs', function () { mt.unusedIdx({ cols: 'ns,index' }); }, ['| mtidx.c ']);
+run('mt.unusedIdx all dbs', function () { mt.unusedIdx({ cols: 'ns,index', days: 0 }); }, ['| mtidx.c ']);
 run('mt.dupIdx none', function () { mt.dupIdx('mtest'); }, ['Empty set', '没有冗余索引']);
 ixd.dropDatabase();
 // mt.explain：mtest.orders 上有 customer.name_1_createdAt_-1 索引；amount / qty 上没有索引

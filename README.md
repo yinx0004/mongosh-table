@@ -465,7 +465,7 @@ mt.check({maxColls: 5000, budgetMs: 120000})   // 逐个集合的检查最多查
 | 正在建的索引 | `currentOp` | INFO | |
 | TTL 超期 | 同 `mt.ttl()` | 超期 1 小时以上 | |
 | 冗余索引 | 同 `mt.dupIdx()` | 有 | |
-| 没被用过的索引 | 同 `mt.unusedIdx()`，不算 unique / ttl | 有（运行不满 7 天只给 INFO） | |
+| 没被用过的索引 | 同 `mt.unusedIdx()`，不算 unique / ttl / 分片键，计数不满 7 天的也不算 | 有（运行不满 7 天只给 INFO） | |
 | 可回收的磁盘空间 | 同 `mt.frag()`，所有用户库合计 | 超过 30% 且超过 1 GB | |
 
 下面是一个有问题的实例：fsyncLock 了没解锁（写入在排队），TTL 线程停了（`sessions` 超期了 5 个多小时），还有一个冗余索引。
@@ -1487,40 +1487,45 @@ mt.idx(db.orders)         // 集合对象
 相当于 MySQL 的 `sys.schema_unused_indexes`：哪些索引一直没被查询用过，可以考虑删掉，省磁盘、省缓存、也让写入更快。
 
 ```js
-mt.unusedIdx()          // 所有用户库（跳过 admin、local、config）
-mt.unusedIdx('shop')    // 只看一个库，也可以传 db 对象
+mt.unusedIdx()              // 所有用户库（跳过 admin、local、config）
+mt.unusedIdx('shop')        // 只看一个库，也可以传 db 对象
+mt.unusedIdx({days: 30})    // 计数开始满 30 天的才算（默认 7）；0 = 刚建的也列
 ```
 
-对每个集合执行 `$indexStats`，列出 `accesses.ops` 为 0 的索引，按磁盘占用从大到小排。上面一行 `uptime` 是 mongod 已经运行了多久。
+对每个集合执行 `$indexStats`，列出 `accesses.ops` 为 0、并且计数开始（`since`）已经满 7 天的索引，按磁盘占用从大到小排。刚建或者刚重启过的索引计数还不够，不列出来，只在表下面说一句“另有 N 个索引计数开始不到 7 天”。上面 `node` 是这些计数来自哪个节点，`uptime` 是 mongod 已经运行了多久。
 
 | 列 | 说明 |
 |---|---|
 | `ns` / `index` / `key` | 库.集合、索引名、索引键 |
 | `disk` | 索引占的磁盘空间，删掉能省下的就是这么多 |
 | `since` | 从什么时候开始计数（mongod 启动或索引建好的时间） |
-| `options` | `unique`、`ttl=秒`、`partial=条件`、`sparse`、`hidden`、`collation=语言` |
+| `options` | `unique`、`ttl=秒`、`partial=条件`、`sparse`、`hidden`、`collation=语言`、`shardKey`（以分片键开头，分片要用，不能删） |
 
 ```
-> mt.unusedIdx()
+> mt.unusedIdx({days: 0})
 -- every user db: each collection getIndexes() + aggregate([{$indexStats: {}}]) → accesses.ops = 0
-uptime: 15s
+  node: db1
+uptime: 17s
 +-------------+-----------------+---------------------+----------+-------------------------+----------------+
 | ns          | index           | key                 | disk     | since                   | options        |
 +-------------+-----------------+---------------------+----------+-------------------------+----------------+
-| shop.orders | ttl_createdAt   | {createdAt: 1}      | 232.0 KB | 2026-11-22 11:07:07.525 | ttl=315360000s |
-| shop.orders | customer.name_1 | {customer.name: 1}  | 168.0 KB | 2026-11-22 11:07:07.383 |                |
-| shop.orders | status_1        | {status: 1}         | 116.0 KB | 2026-11-22 11:07:07.131 |                |
-| shop.users  | email_1_name_1  | {email: 1, name: 1} |  20.0 KB | 2026-11-22 11:07:07.775 |                |
+| shop.orders | ttl_createdAt   | {createdAt: 1}      | 232.0 KB | 2026-11-23 01:29:31.539 | ttl=315360000s |
+| shop.orders | customer.name_1 | {customer.name: 1}  | 168.0 KB | 2026-11-23 01:29:31.415 |                |
+| shop.orders | status_1        | {status: 1}         | 116.0 KB | 2026-11-23 01:29:31.147 |                |
+| shop.users  | email_1_name_1  | {email: 1, name: 1} |  20.0 KB | 2026-11-23 01:29:31.814 |                |
 +-------------+-----------------+---------------------+----------+-------------------------+----------------+
 4 rows in set
+计数只是本节点 db1 的：只被从节点读用到的索引在这里也是 0 次，副本集每个成员都要各查一次
+确认各成员都没用后，先 db.集合.hideIndex('名字') 观察一段时间，再 dropIndex
 ```
 
 删之前先确认：
 
-- **统计时间够不够长**：计数在 mongod 重启、索引重建后清零。`uptime` 或 `since` 只有几天的话，月报、年报这类偶尔才跑的查询可能还没来得及用到。
-- **每个成员都要看**：计数是每个节点自己的。读写分离时，从节点上的查询只记在从节点上，要连到每个成员上分别执行。
+- **统计时间够不够长**：计数在 mongod 重启、索引重建后清零，所以按每个索引自己的 `since` 判断，默认要满 7 天。月报、年报这类偶尔才跑的查询，用 `{days: 30}` 甚至更长更稳。
+- **每个成员都要看**：计数是每个节点自己的。读写分离时，从节点上的查询只记在从节点上，表下面会提示计数来自哪个节点，要连到每个成员上分别执行。经 mongos 时是各分片接到请求的那个节点（通常是主节点）的计数。
 - **`unique` 索引**即使没被查询用过，也在保证唯一性，不能随便删；**`ttl` 索引**在负责过期删除，同样不能删。
-- 不确定的话，可以先 `db.orders.hideIndex('status_1')`（4.4 起）把它藏起来观察一段时间，查询变慢了再 `unhideIndex` 恢复，比直接删安全。
+- **分片键索引**（`options` 里的 `shardKey`）分片要用，删不掉。经 mongos 时从 `config.collections` 读分片键，在分片的 mongod 上从 `config.cache.collections` 读。
+- 不确定的话，可以先 `db.orders.hideIndex('status_1')`（4.4 起）把它藏起来观察一段时间，查询变慢了再 `unhideIndex` 恢复，比直接删安全。表下面的最后一句按版本给出这条建议。
 - `_id_` 索引删不掉，不列出来。
 
 ### mt.dupIdx()：冗余索引
