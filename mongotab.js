@@ -10,6 +10,11 @@
 //
 // 只新增三个全局函数 t、g、mt（名字已被占用就跳过，并提示改用 mongotab.xxx），
 // 不改 shell 的任何对象、prototype 和配置；退出会话即失效。
+//
+// 写法约定：mongosh 加载脚本时要改写其中每个函数（让数据库调用能同步地写），这一步的耗时
+// 随文件里函数个数的平方增长（680 个函数约 5 秒，410 个约 2.4 秒；老 mongo shell 不受影响）。
+// 所以尽量少写函数：遍历用 for 循环而不是 forEach / map 回调；提示信息写成带 {0} 的字符串；
+// 常用操作用 pluck、attempt、matchAny、dropBlank 这些现成的小工具。
 (function () {
   'use strict';
 
@@ -43,6 +48,27 @@
   // mongosh 的异步改写下，try 里直接 return 一个调用的结果，失败时 catch 接不住（返回的是还没完成的 Promise），
   // 所以先赋值再 return：改写后赋值处会 await，错误在 try 里抛出
   function safe(fn, dflt) { try { var r = fn(); return r; } catch (e) { return dflt; } }
+  // safe 的不用写回调的版本：attempt(runCmd, a, cmd)、attempt(JSON.parse, s)、attempt(getProp, v, '_bsontype')
+  function attempt(fn, a, b) { try { var r = fn(a, b); return r; } catch (e) { return undefined; } }
+  function getProp(o, k) { return o[k]; }
+  // 常用的几个数组操作写成循环，省掉回调（mongosh 加载时每个函数都要改写，函数越少越快）
+  function pluck(arr, k) { var out = []; for (var i = 0; i < arr.length; i++) out.push(arr[i][k]); return out; }
+  function fill(n, v) { var out = []; for (var i = 0; i < n; i++) out.push(v); return out; }
+  function matchAny(key, pats) { for (var i = 0; pats && i < pats.length; i++) if (matchCol(key, pats[i])) return true; return false; }
+  // 子表 key 下的列：['members.name', 'x'] → ['name']
+  function childPats(key, pats) {
+    var out = [];
+    for (var i = 0; pats && i < pats.length; i++) if (pats[i].indexOf(key + '.') === 0) out.push(pats[i].slice(key.length + 1));
+    return out;
+  }
+  // 某一列在所有行里都是 ''（这个版本没有这项）就去掉
+  function dropBlank(rows, keys) {
+    for (var i = 0; i < keys.length; i++) {
+      var blank = true;
+      for (var j = 0; j < rows.length && blank; j++) if (rows[j][keys[i]] !== '') blank = false;
+      if (blank) for (j = 0; j < rows.length; j++) delete rows[j][keys[i]];
+    }
+  }
 
   // ───────────────────────── 提示信息（中 / 英） ─────────────────────────
   function normLang(l) { return /^zh/i.test(String(l || '')) ? 'zh' : 'en'; }
@@ -62,25 +88,25 @@
   ];
   var MSG = {
     zh: {
-      badTz: function (s) { return "mongotab: 无法识别的时区 '" + s + "'，可用 'UTC'、'local'、'+08:00'、'Asia/Shanghai'"; },
-      noIntl: function (s) { return "mongotab: 老的 mongo shell 不支持时区名 '" + s + "'，请用 'UTC'、'local' 或 '+08:00' 这样的偏移"; },
-      more: function (n, next, fn) { return '(只显示前 ' + n + ' 行，还有更多；用 ' + fn + '(x, {limit: ' + next + '}) 看更多)'; },
-      partial: function (n, total) { return '(共 ' + total + ' 行，只显示前 ' + n + ' 行)'; },
+      badTz: "mongotab: 无法识别的时区 '{0}'，可用 'UTC'、'local'、'+08:00'、'Asia/Shanghai'",
+      noIntl: "mongotab: 老的 mongo shell 不支持时区名 '{0}'，请用 'UTC'、'local' 或 '+08:00' 这样的偏移",
+      more: '(只显示前 {0} 行，还有更多；用 {2}(x, {limit: {1}}) 看更多)',
+      partial: '(共 {1} 行，只显示前 {0} 行)',
       missing: '(无字段)',
       noDb: '没有连接数据库',
-      unauthorized: function (c) { return '没有执行 ' + c + ' 的权限，需要 clusterMonitor 角色（或 root）'; },
-      cmdFailed: function (c, err) { return c + ' 执行失败：' + err; },
-      onMongos: function (n) { return n + ' 要连到副本集成员上执行，当前连的是 mongos'; },
-      notRs: function (n) { return n + ' 只适用于副本集，当前是单机（standalone）'; },
+      unauthorized: '没有执行 {0} 的权限，需要 clusterMonitor 角色（或 root）',
+      cmdFailed: '{0} 执行失败：{1}',
+      onMongos: '{0} 要连到副本集成员上执行，当前连的是 mongos',
+      notRs: '{0} 只适用于副本集，当前是单机（standalone）',
       needColl: "mt.idx() 需要集合名，例如 mt.idx('orders')、mt.idx('shop.orders') 或 mt.idx(db.orders)",
-      noColl: function (ns) { return '集合 ' + ns + ' 不存在'; },
+      noColl: '集合 {0} 不存在',
       noOplog: 'local.oplog.rs 是空的',
-      total: function (s) { return '合计 ' + s; },
-      sampled: function (n) { return '，间隔 ' + n + ' 秒采样两次算 ops/s'; },
-      topSampled: function (n) { return '，间隔 ' + n + ' 秒采样两次，显示这段时间内的耗时（毫秒）'; },
+      total: '合计 {0}',
+      sampled: '，间隔 {0} 秒采样两次算 ops/s',
+      topSampled: '，间隔 {0} 秒采样两次，显示这段时间内的耗时（毫秒）',
       topTotals: '，启动以来累计（毫秒）',
       profOff: '没有开 profiler（level 0），可用 db.setProfilingLevel(1, {slowms: 100}) 打开',
-      badSort: function (fn, ch, ex) { return fn + ' 的 sort 可以是 ' + ch + '，或排序文档如 ' + ex; },
+      badSort: '{0} 的 sort 可以是 {1}，或排序文档如 {2}',
       sortChoices: {
         slow: "'desc'（默认，最新的在前）、'asc'（最早的在前）、'ms'（最慢的在前）",
         ps: "'desc'（默认，运行最久的在前）、'asc'（最短的在前）、'opid'",
@@ -89,24 +115,24 @@
       noLockWait: '没有在等锁的操作',
       noTxn: '没有未提交的事务',
       badSev: "mt.log() 的 sev 可以是 'F'、'E'、'W'、'I'、'D'：只看这个级别及更严重的",
-      logTail: function (n, total) { return '(共 ' + total + ' 行，只显示最后 ' + n + ' 行)'; },
-      fragTotal: function (all, data, idx) { return '合计可回收 ' + all + '（数据 ' + data + '，索引 ' + idx + '）'; },
-      cacheSum: function (sum, pct) { return '以上集合在缓存里合计 ' + sum + '，占已用缓存的 ' + pct; },
+      logTail: '(共 {1} 行，只显示最后 {0} 行)',
+      fragTotal: '合计可回收 {0}（数据 {1}，索引 {2}）',
+      cacheSum: '以上集合在缓存里合计 {0}，占已用缓存的 {1}',
       noTtl: '没有 TTL 索引',
       noUnused: '没有没被用过的索引',
-      unusedYoung: function (n, days) { return '另有 ' + n + ' 个索引计数开始不到 ' + days + ' 天（since 太近），没列出；{days: 0} 全部列出'; },
-      unusedNode: function (host) { return '计数只是本节点 ' + host + ' 的：只被从节点读用到的索引在这里也是 0 次，副本集每个成员都要各查一次'; },
+      unusedYoung: '另有 {0} 个索引计数开始不到 {1} 天（since 太近），没列出；{days: 0} 全部列出',
+      unusedNode: '计数只是本节点 {0} 的：只被从节点读用到的索引在这里也是 0 次，副本集每个成员都要各查一次',
       unusedMongos: '经 mongos 时是各分片接到请求的那个节点（通常是主节点）的计数，从节点上的使用看不到',
       unusedHide: function (hide) { return hide ? "确认各成员都没用后，先 db.集合.hideIndex('名字') 观察一段时间，再 dropIndex" : '确认各成员都没用后再 dropIndex（4.4 起可以先 hideIndex 观察）'; },
       noDocs: '集合是空的，没有可以抽样的文档',
-      lowFiles: function (n) { return n + '（建议至少 64000）'; },
+      lowFiles: '{0}（建议至少 64000）',
       plat: { container: '容器', vm: '虚拟机', onVm: '，运行在虚拟机上', physical: '可能是物理机', unknown: '物理机或无法判断',
-        memLimit: function (x) { return '内存限制 ' + x; }, cpu: function (a, b) { return 'CPU 可用 ' + a + ' / ' + b; }, pid1: 'mongod 是 1 号进程',
-        hyper: 'CPU 标志 hypervisor', kernel: function (k) { return '内核 ' + k; }, sockets: function (n) { return n + ' 路 CPU'; }, numa: function (n) { return n + ' 个 NUMA 节点'; },
+        memLimit: '内存限制 {0}', cpu: 'CPU 可用 {0} / {1}', pid1: 'mongod 是 1 号进程',
+        hyper: 'CPU 标志 hypervisor', kernel: '内核 {0}', sockets: '{0} 路 CPU', numa: '{0} 个 NUMA 节点',
         join: '，', open: '（', close: '）' },
-      bigCache: function (v) { return v + '（超过可用内存的 80%，容易 OOM）'; },
-      oldCache: function (v) { return v + '（4.4 之前看不到容器的内存限制，缓存按宿主机内存算，请确认没有超过容器内存）'; },
-      latSampled: function (n) { return '，间隔 ' + n + ' 秒采样两次，显示这段时间内的平均延迟（毫秒）'; },
+      bigCache: '{0}（超过可用内存的 80%，容易 OOM）',
+      oldCache: '{0}（4.4 之前看不到容器的内存限制，缓存按宿主机内存算，请确认没有超过容器内存）',
+      latSampled: '，间隔 {0} 秒采样两次，显示这段时间内的平均延迟（毫秒）',
       latTotals: '，启动以来累计（平均延迟，毫秒）',
       noPlanCache: '计划缓存是空的（重启、建删索引后会清空；查询跑过才会缓存）',
       sbePlan: '(SBE 计划)',
@@ -115,19 +141,19 @@
           cacheUsed: '缓存使用率', cacheDirty: '缓存脏数据', tickets: '读写并发票据', queue: '等锁队列', conns: '连接数', longOps: '长时间运行的操作',
           lockWait: '等锁的操作', txns: '长事务', builds: '正在建的索引', ttlMon: 'TTL 线程', profiler: 'profiler', ttlOverdue: 'TTL 超期',
           dupIdx: '冗余索引', unusedIdx: '没被用过的索引', frag: '可回收的磁盘空间' },
-        n: function (k) { return k + ' 条'; },
-        count: function (k) { return k + ' 个'; },
-        sizeOf: function (k, size) { return k + ' 个，共 ' + size; },
+        n: '{0} 条',
+        count: '{0} 个',
+        sizeOf: '{0} 个，共 {1}',
         notRs: '不是副本集', locked: '已锁', unlocked: '未锁', running: '运行中', stopped: '已停止', none: '没有',
-        fcv: function (f, v) { return 'FCV ' + f + '，二进制 ' + v; },
+        fcv: 'FCV {0}，二进制 {1}',
         members: function (n, bad) { return n + ' 个成员' + (bad.length ? '，异常：' + bad.join('、') : '，都正常'); },
         longOps: function (n, max, lim) { return n ? n + ' 个超过 ' + lim + '，最长 ' + max : '没有超过 ' + lim + '的'; },
         txns: function (n, max, lim) { return n ? n + ' 个开了 ' + lim + '以上，最长 ' + max : '没有开了 ' + lim + '以上的'; },
         ttlOverdue: function (n, max, lim) { return n ? n + ' 个超期 ' + lim + '以上，最多 ' + max : '没有超期 ' + lim + '以上的'; },
         level2: function (dbs) { return dbs.length ? 'level 2：' + dbs.join('、') : '没有库是 level 2'; },
-        young: function (up) { return '只运行了 ' + up + '，统计不够，满 7 天再看'; },
-        unusedYoung: function (n) { return '没有；另有 ' + n + ' 个计数不满 7 天'; },
-        frag: function (r, t, pct) { return r + ' / ' + t + '（' + pct + '）'; },
+        young: '只运行了 {0}，统计不够，满 7 天再看',
+        unusedYoung: '没有；另有 {0} 个计数不满 7 天',
+        frag: '{0} / {1}（{2}）',
         adv: { fsync: 'db.fsyncUnlock()', fcv: "升级完成后提升 FCV：db.adminCommand({setFeatureCompatibilityVersion: '版本'})", oplog: '调大 oplog：replSetResizeOplog；mt.oplog()',
           ttlMon: 'db.adminCommand({setParameter: 1, ttlMonitorEnabled: true})', profiler: 'level 2 记录所有操作，影响性能：db.setProfilingLevel(1, {slowms: 100})',
           frag: 'mt.frag()；compact 回收', unused: function (hide) { return 'mt.unusedIdx()；各成员都确认没用后' + (hide ? '先 hideIndex 观察再删' : '再删'); }, limited: "调大 maxColls / budgetMs（0 = 不限），或用 mt.dupIdx('库') 等单独查" },
@@ -138,9 +164,9 @@
           return x;
         },
         noWt: '不是 WiredTiger',
-        limited: function (seen, total, why) { return '只查了前 ' + seen + '/' + total + ' 个集合（' + why + '）'; },
-        scanned: function (seen, total) { return '（逐个集合的检查：' + seen + '/' + total + ' 个集合）'; },
-        summary: function (c) { return ['CRIT', 'WARN', 'UNKNOWN', 'OK', 'INFO', 'SKIP'].filter(function (k) { return c[k]; }).map(function (k) { return k + ' ' + c[k]; }).join('，'); },
+        limited: '只查了前 {0}/{1} 个集合（{2}）',
+        scanned: '（逐个集合的检查：{0}/{1} 个集合）',
+        summary: '{0|，}',
         noIssue: '没有发现问题',
         quick: '（quick: true，没有检查索引、TTL 和磁盘空间）',
         th: {
@@ -148,15 +174,15 @@
           desc: { oplog: 'oplog 窗口（越低越坏）', longOps: '操作运行了多久', txns: '事务开了多久', ttlOverdue: 'TTL 超期多久',
             frag: '可回收空间占比', fragMinGB: '可回收空间至少这么大才报' },
           head: '阈值（WARN / CRIT；只有一个数的只报 WARN）：',
-          was: function (d) { return '（默认 ' + d + '）'; },
-          notObj: function (name) { return name + ' 要写成对象，如 {lag: [30, 300], oplog: [48, 6]}'; },
-          unknown: function (k, keys) { return '没有叫 ' + k + ' 的阈值，可以用：' + keys.join('、'); },
-          pair: function (k, d) { return k + ' 要写成 [WARN, CRIT]，如 [' + d.join(', ') + ']'; },
-          one: function (k, d) { return k + ' 只有 WARN 一档，写一个数，如 ' + d[0]; },
-          num: function (k) { return k + ' 的值要是 ≥ 0 的数字'; },
-          pct: function (k) { return k + ' 是百分比，不能超过 100'; },
+          was: '（默认 {0}）',
+          notObj: '{0} 要写成对象，如 {lag: [30, 300], oplog: [48, 6]}',
+          unknown: '没有叫 {0} 的阈值，可以用：{1|、}',
+          pair: '{0} 要写成 [WARN, CRIT]，如 [{1|, }]',
+          one: '{0} 只有 WARN 一档，写一个数，如 {1|, }',
+          num: '{0} 的值要是 ≥ 0 的数字',
+          pct: '{0} 是百分比，不能超过 100',
           order: function (k, low) { return k + (low ? ' 越低越坏，WARN 要大于等于 CRIT' : ' 的 WARN 不能大于 CRIT'); },
-          custom: function (list) { return '改过的阈值：' + list.join('，'); }
+          custom: '改过的阈值：{0|，}'
         }
       },
       noBuild: '没有正在建的索引',
@@ -165,16 +191,16 @@
       needExplain: "mt.explain() 需要游标或 explain 的结果，例如 mt.explain(db.orders.find({status: 'PAID'}))；慢日志里的查询用 mt.explainLog(...)",
       useExplainLog: 'mt.explain() 只接受游标或 explain 的结果；慢日志里的行号、日志行、命令请用 mt.explainLog(...)，想转成查询语句用 mt.logQuery(...)',
       needLog: "mt.explainLog() / mt.logQuery() 需要慢日志里的东西：mt.slow() / mt.log() 的行号、日志里的整行、命令（从 { 开始）、profile 文档，或命令对象如 {find: 'orders', filter: {...}}",
-      noRow: function (n) { return '没有第 ' + n + ' 行：行号用的是上一次 mt.slow() 或 mt.log() 列出的行'; },
-      recLine: function (parts) { return '// 慢日志：' + parts.join('，'); },
+      noRow: '没有第 {0} 行：行号用的是上一次 mt.slow() 或 mt.log() 列出的行',
+      recLine: '// 慢日志：{0|，}',
       writeWarn: '// 注意：这是写操作，执行会修改数据',
-      rowNoCmd: function (n) { return '第 ' + n + ' 行没有可以 explain 的命令（或者日志行太长被截断了；可以改用 mt.slow()）'; },
+      rowNoCmd: '第 {0} 行没有可以 explain 的命令（或者日志行太长被截断了；可以改用 mt.slow()）',
       notJson: "解析不了这段文字：mt.slow() / mt.log() 表格里显示的命令去掉了引号，不能直接粘贴；请用行号，或者传日志里的整行（4.4 起的 JSON 行、之前的文本行都可以）、命令文档",
-      cantExplain: function (v) { return v + ' 命令不能 explain，支持 find、aggregate、count、distinct、update、delete、findAndModify'; },
+      cantExplain: '{0} 命令不能 explain，支持 find、aggregate、count、distinct、update、delete、findAndModify',
       recTitle: '慢日志里记录的执行情况（当时实际跑的）：',
-      planChanged: function (a, b) { return '注意：慢日志里用的是 ' + a + '，现在的计划是 ' + b + '（索引、数据分布或计划缓存可能变了）'; },
+      planChanged: '注意：慢日志里用的是 {0}，现在的计划是 {1}（索引、数据分布或计划缓存可能变了）',
       exNote: { fullScan: '全表扫描', memSort: '内存排序', spilled: '用到了磁盘', postFilter: '取出后再过滤', multikey: '多键索引' },
-      exNotes: function (list) { return '注意：' + list.join('；'); },
+      exNotes: '注意：{0|；}',
       cmdDesc: {
         ps: "正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'",
         slow: "慢查询（system.profile）；默认当前库，可传 'db'；ms 最短毫秒数，ns 集合，sort: 'desc' 新的在前（默认）/ 'asc' / 'ms' 最慢的在前",
@@ -208,8 +234,8 @@
       cmdsMore: "mt.help('ps') 看某个命令的详细用法、选项和输出的每一列",
       groups: { run: '运行状态', query: '慢查询和执行计划', store: '存储和索引', repl: '复制' },
       hd: { usage: '用法：', opts: '选项：', out: '输出：', notes: '说明：', see: '另见：', common: '都可以加 t() 的选项（cols、exclude、limit、vertical、table、tz...）；mt.config({showCmd: false}) 不打印原生命令' },
-      noHelp: function (name, names) { return '没有叫 ' + name + ' 的命令。可以看：' + names.join('、'); },
-      loaded: function (v, tz) { return 'MongoTab ' + v + ' 已加载：t(x) 表格 / g(x) 竖排 / mt.help()   时区 ' + tz; },
+      noHelp: '没有叫 {0} 的命令。可以看：{1|、}',
+      loaded: 'MongoTab {0} 已加载：t(x) 表格 / g(x) 竖排 / mt.help()   时区 {1}',
       skipped: function (names) {
         return '  注意：' + names.join('、') + ' 已被占用，未覆盖；请用 mongotab.table / mongotab.vertical / mongotab.help()';
       },
@@ -257,25 +283,25 @@
       }
     },
     en: {
-      badTz: function (s) { return "mongotab: unknown time zone '" + s + "'; try 'UTC', 'local', '+08:00' or 'Asia/Shanghai'"; },
-      noIntl: function (s) { return "mongotab: the legacy mongo shell does not support time zone names like '" + s + "'; use 'UTC', 'local' or an offset such as '+08:00'"; },
-      more: function (n, next, fn) { return '(showing the first ' + n + ' rows, more available; use ' + fn + '(x, {limit: ' + next + '}) to see more)'; },
-      partial: function (n, total) { return '(showing the first ' + n + ' of ' + total + ' rows)'; },
+      badTz: "mongotab: unknown time zone '{0}'; try 'UTC', 'local', '+08:00' or 'Asia/Shanghai'",
+      noIntl: "mongotab: the legacy mongo shell does not support time zone names like '{0}'; use 'UTC', 'local' or an offset such as '+08:00'",
+      more: '(showing the first {0} rows, more available; use {2}(x, {limit: {1}}) to see more)',
+      partial: '(showing the first {0} of {1} rows)',
       missing: '(missing)',
       noDb: 'not connected to a database',
-      unauthorized: function (c) { return 'not authorized to run ' + c + '; this needs the clusterMonitor role (or root)'; },
-      cmdFailed: function (c, err) { return c + ' failed: ' + err; },
-      onMongos: function (n) { return n + ' must run on a replica set member; this is a mongos'; },
-      notRs: function (n) { return n + ' only works on a replica set; this is a standalone server'; },
+      unauthorized: 'not authorized to run {0}; this needs the clusterMonitor role (or root)',
+      cmdFailed: '{0} failed: {1}',
+      onMongos: '{0} must run on a replica set member; this is a mongos',
+      notRs: '{0} only works on a replica set; this is a standalone server',
       needColl: "mt.idx() needs a collection, e.g. mt.idx('orders'), mt.idx('shop.orders') or mt.idx(db.orders)",
-      noColl: function (ns) { return 'collection ' + ns + ' does not exist'; },
+      noColl: 'collection {0} does not exist',
       noOplog: 'local.oplog.rs is empty',
-      total: function (s) { return 'Total ' + s; },
-      sampled: function (n) { return ', sampled twice ' + n + 's apart for ops/s'; },
-      topSampled: function (n) { return ', sampled twice ' + n + 's apart; time spent in between (ms)'; },
+      total: 'Total {0}',
+      sampled: ', sampled twice {0}s apart for ops/s',
+      topSampled: ', sampled twice {0}s apart; time spent in between (ms)',
       topTotals: ', totals since startup (ms)',
       profOff: 'the profiler is off (level 0); turn it on with db.setProfilingLevel(1, {slowms: 100})',
-      badSort: function (fn, ch, ex) { return fn + ' sort can be ' + ch + ' or a sort document such as ' + ex; },
+      badSort: '{0} sort can be {1} or a sort document such as {2}',
       sortChoices: {
         slow: "'desc' (default, newest first), 'asc' (oldest first), 'ms' (slowest first)",
         ps: "'desc' (default, longest running first), 'asc' (shortest first), 'opid'",
@@ -284,24 +310,24 @@
       noLockWait: 'no operation is waiting for a lock',
       noTxn: 'no open transactions',
       badSev: "mt.log() sev can be 'F', 'E', 'W', 'I' or 'D': this level and more severe",
-      logTail: function (n, total) { return '(showing the last ' + n + ' of ' + total + ' rows)'; },
-      fragTotal: function (all, data, idx) { return 'Total reusable ' + all + ' (data ' + data + ', indexes ' + idx + ')'; },
-      cacheSum: function (sum, pct) { return 'These collections hold ' + sum + ' in the cache, ' + pct + ' of the cache in use'; },
+      logTail: '(showing the last {0} of {1} rows)',
+      fragTotal: 'Total reusable {0} (data {1}, indexes {2})',
+      cacheSum: 'These collections hold {0} in the cache, {1} of the cache in use',
       noTtl: 'no TTL indexes',
       noUnused: 'no unused indexes',
       unusedYoung: function (n, days) { return n + (n === 1 ? ' more index has' : ' more indexes have') + ' been counted for less than ' + days + ' days (recent since) and ' + (n === 1 ? 'is' : 'are') + ' not listed; {days: 0} lists all'; },
-      unusedNode: function (host) { return 'counts are from this node ' + host + ' only: an index used only by secondary reads shows 0 here too; check every replica set member'; },
+      unusedNode: 'counts are from this node {0} only: an index used only by secondary reads shows 0 here too; check every replica set member',
       unusedMongos: 'through mongos the counts come from the node each shard routed to (usually the primary); use on secondaries is not visible',
       unusedHide: function (hide) { return hide ? "once no member uses it, db.coll.hideIndex('name') and watch for a while before dropIndex" : 'once no member uses it, dropIndex (from 4.4 you can hideIndex first and watch)'; },
       noDocs: 'the collection is empty; nothing to sample',
-      lowFiles: function (n) { return n + ' (64000 or more recommended)'; },
+      lowFiles: '{0} (64000 or more recommended)',
       plat: { container: 'container', vm: 'virtual machine', onVm: ', on a virtual machine', physical: 'probably physical', unknown: 'physical or unknown',
-        memLimit: function (x) { return 'memory limit ' + x; }, cpu: function (a, b) { return 'CPUs available ' + a + ' / ' + b; }, pid1: 'mongod is pid 1',
-        hyper: 'CPU flag hypervisor', kernel: function (k) { return 'kernel ' + k; }, sockets: function (n) { return n + ' CPU sockets'; }, numa: function (n) { return n + ' NUMA nodes'; },
+        memLimit: 'memory limit {0}', cpu: 'CPUs available {0} / {1}', pid1: 'mongod is pid 1',
+        hyper: 'CPU flag hypervisor', kernel: 'kernel {0}', sockets: '{0} CPU sockets', numa: '{0} NUMA nodes',
         join: ', ', open: ' (', close: ')' },
-      bigCache: function (v) { return v + ' (over 80% of available memory; OOM risk)'; },
-      oldCache: function (v) { return v + ' (before 4.4 the container memory limit is not visible and the cache is sized from host memory; check it fits the container)'; },
-      latSampled: function (n) { return ', sampled twice ' + n + 's apart; average latency in between (ms)'; },
+      bigCache: '{0} (over 80% of available memory; OOM risk)',
+      oldCache: '{0} (before 4.4 the container memory limit is not visible and the cache is sized from host memory; check it fits the container)',
+      latSampled: ', sampled twice {0}s apart; average latency in between (ms)',
       latTotals: ', totals since startup (average latency, ms)',
       noPlanCache: 'the plan cache is empty (cleared on restart and index changes; filled as queries run)',
       sbePlan: '(SBE plan)',
@@ -311,18 +337,18 @@
           lockWait: 'Lock waits', txns: 'Long transactions', builds: 'Index builds', ttlMon: 'TTL thread', profiler: 'Profiler', ttlOverdue: 'TTL overdue',
           dupIdx: 'Redundant indexes', unusedIdx: 'Unused indexes', frag: 'Reusable disk space' },
         n: function (k) { return k + (k === 1 ? ' line' : ' lines'); },
-        count: function (k) { return String(k); },
-        sizeOf: function (k, size) { return k + ', ' + size + ' in total'; },
+        count: '{0}',
+        sizeOf: '{0}, {1} in total',
         notRs: 'not a replica set', locked: 'locked', unlocked: 'not locked', running: 'running', stopped: 'stopped', none: 'none',
-        fcv: function (f, v) { return 'FCV ' + f + ', binary ' + v; },
+        fcv: 'FCV {0}, binary {1}',
         members: function (n, bad) { return n + (n === 1 ? ' member' : ' members') + (bad.length ? ', unhealthy: ' + bad.join(', ') : ', all healthy'); },
         longOps: function (n, max, lim) { return n ? n + ' over ' + lim + ', longest ' + max : 'none over ' + lim; },
         txns: function (n, max, lim) { return n ? n + ' open ' + lim + ' or more, longest ' + max : 'none open ' + lim + ' or more'; },
         ttlOverdue: function (n, max, lim) { return n ? n + ' overdue by over ' + lim + ', worst ' + max : 'none overdue by over ' + lim; },
         level2: function (dbs) { return dbs.length ? 'level 2: ' + dbs.join(', ') : 'no database at level 2'; },
-        young: function (up) { return 'up only ' + up + '; check again after 7 days'; },
-        unusedYoung: function (n) { return 'none; ' + n + ' more counted for under 7 days'; },
-        frag: function (r, t, pct) { return r + ' / ' + t + ' (' + pct + ')'; },
+        young: 'up only {0}; check again after 7 days',
+        unusedYoung: 'none; {0} more counted for under 7 days',
+        frag: '{0} / {1} ({2})',
         adv: { fsync: 'db.fsyncUnlock()', fcv: "after upgrading, raise FCV: db.adminCommand({setFeatureCompatibilityVersion: 'version'})", oplog: 'grow the oplog: replSetResizeOplog; mt.oplog()',
           ttlMon: 'db.adminCommand({setParameter: 1, ttlMonitorEnabled: true})', profiler: 'level 2 records every operation and costs performance: db.setProfilingLevel(1, {slowms: 100})',
           frag: 'mt.frag(); compact reclaims it', unused: function (hide) { return 'mt.unusedIdx(); once no member uses it, ' + (hide ? 'hideIndex and watch before dropping' : 'drop it'); }, limited: "raise maxColls / budgetMs (0 = no limit), or run mt.dupIdx('db') etc. per database" },
@@ -333,9 +359,9 @@
           return x;
         },
         noWt: 'not WiredTiger',
-        limited: function (seen, total, why) { return 'only the first ' + seen + '/' + total + ' collections checked (' + why + ')'; },
-        scanned: function (seen, total) { return '(per-collection checks: ' + seen + '/' + total + ' collections)'; },
-        summary: function (c) { return ['CRIT', 'WARN', 'UNKNOWN', 'OK', 'INFO', 'SKIP'].filter(function (k) { return c[k]; }).map(function (k) { return k + ' ' + c[k]; }).join(', '); },
+        limited: 'only the first {0}/{1} collections checked ({2})',
+        scanned: '(per-collection checks: {0}/{1} collections)',
+        summary: '{0|, }',
         noIssue: 'no issues found',
         quick: '(quick: true, indexes, TTL and disk space not checked)',
         th: {
@@ -343,15 +369,15 @@
           desc: { oplog: 'Oplog window (lower is worse)', longOps: 'how long an operation has run', txns: 'how long a transaction has been open',
             ttlOverdue: 'how long TTL deletes are overdue', frag: 'share of reusable space', fragMinGB: 'reusable space must be at least this big' },
           head: 'Thresholds (WARN / CRIT; keys with one number only WARN):',
-          was: function (d) { return ' (default ' + d + ')'; },
-          notObj: function (name) { return name + ' must be an object, e.g. {lag: [30, 300], oplog: [48, 6]}'; },
-          unknown: function (k, keys) { return 'no threshold named ' + k + '; valid keys: ' + keys.join(', '); },
-          pair: function (k, d) { return k + ' takes [WARN, CRIT], e.g. [' + d.join(', ') + ']'; },
-          one: function (k, d) { return k + ' has only a WARN level; give one number, e.g. ' + d[0]; },
-          num: function (k) { return k + ' takes numbers >= 0'; },
-          pct: function (k) { return k + ' is a percentage and cannot exceed 100'; },
+          was: ' (default {0})',
+          notObj: '{0} must be an object, e.g. {lag: [30, 300], oplog: [48, 6]}',
+          unknown: 'no threshold named {0}; valid keys: {1|, }',
+          pair: '{0} takes [WARN, CRIT], e.g. [{1|, }]',
+          one: '{0} has only a WARN level; give one number, e.g. {1|, }',
+          num: '{0} takes numbers >= 0',
+          pct: '{0} is a percentage and cannot exceed 100',
           order: function (k, low) { return k + (low ? ': lower is worse, so WARN must be >= CRIT' : ': WARN cannot exceed CRIT'); },
-          custom: function (list) { return 'Changed thresholds: ' + list.join(', '); }
+          custom: 'Changed thresholds: {0|, }'
         }
       },
       noBuild: 'no index builds in progress',
@@ -360,16 +386,16 @@
       needExplain: "mt.explain() needs a cursor or an explain result, e.g. mt.explain(db.orders.find({status: 'PAID'})); for queries from a slow log use mt.explainLog(...)",
       useExplainLog: 'mt.explain() takes only a cursor or an explain result; for row numbers, log lines and commands from a slow log use mt.explainLog(...), or mt.logQuery(...) to turn them into a query',
       needLog: "mt.explainLog() / mt.logQuery() need something from a slow log: a row number from mt.slow() / mt.log(), a whole log line, a command (from its {), a profile document, or a command object such as {find: 'orders', filter: {...}}",
-      noRow: function (n) { return 'there is no row ' + n + ': row numbers refer to the last mt.slow() or mt.log()'; },
-      recLine: function (parts) { return '// slow log: ' + parts.join(', '); },
+      noRow: 'there is no row {0}: row numbers refer to the last mt.slow() or mt.log()',
+      recLine: '// slow log: {0|, }',
       writeWarn: '// Note: this is a write; running it changes data',
-      rowNoCmd: function (n) { return 'row ' + n + ' has no command that can be explained (or the log line was truncated for being too long; try mt.slow())'; },
+      rowNoCmd: 'row {0} has no command that can be explained (or the log line was truncated for being too long; try mt.slow())',
       notJson: "cannot parse this text: the commands shown in mt.slow() / mt.log() tables drop the quotes and cannot be pasted back; use the row number, or pass a whole log line (a 4.4+ JSON line or an older text line) or a command document",
-      cantExplain: function (v) { return 'a ' + v + ' command cannot be explained; find, aggregate, count, distinct, update, delete and findAndModify can'; },
+      cantExplain: 'a {0} command cannot be explained; find, aggregate, count, distinct, update, delete and findAndModify can',
       recTitle: 'Recorded in the slow log (what actually ran):',
-      planChanged: function (a, b) { return 'Note: the slow log used ' + a + ', the current plan is ' + b + ' (indexes, data distribution or the plan cache may have changed)'; },
+      planChanged: 'Note: the slow log used {0}, the current plan is {1} (indexes, data distribution or the plan cache may have changed)',
       exNote: { fullScan: 'full scan', memSort: 'in-memory sort', spilled: 'spilled to disk', postFilter: 'filtered after fetch', multikey: 'multikey' },
-      exNotes: function (list) { return 'Note: ' + list.join('; '); },
+      exNotes: 'Note: {0|; }',
       cmdDesc: {
         ps: "Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'",
         slow: "Slow operations from system.profile; current db unless you pass 'db'; ms = minimum milliseconds, ns = collection, sort: 'desc' newest first (default) / 'asc' / 'ms' slowest first",
@@ -403,8 +429,8 @@
       cmdsMore: "mt.help('ps') shows the detailed usage, options and output columns of one command",
       groups: { run: 'Server activity', query: 'Slow queries and plans', store: 'Storage and indexes', repl: 'Replication' },
       hd: { usage: 'Usage:', opts: 'Options:', out: 'Output:', notes: 'Notes:', see: 'See also:', common: 'All take t() options (cols, exclude, limit, vertical, table, tz...); mt.config({showCmd: false}) hides the native command' },
-      noHelp: function (name, names) { return 'No command named ' + name + '. Available: ' + names.join(', '); },
-      loaded: function (v, tz) { return 'MongoTab ' + v + ' loaded: t(x) table / g(x) vertical / mt.help()   time zone ' + tz; },
+      noHelp: 'No command named {0}. Available: {1|, }',
+      loaded: 'MongoTab {0} loaded: t(x) table / g(x) vertical / mt.help()   time zone {1}',
       skipped: function (names) {
         return '  Note: ' + names.join(', ') + ' already defined, left untouched; use mongotab.table / mongotab.vertical / mongotab.help()';
       },
@@ -452,6 +478,23 @@
       }
     }
   };
+  // 提示信息里带 {0}、{1} 的字符串，加载时变成函数，用法不变：m.noColl(ns)。{1|、} 表示数组用“、”连起来。
+  // 少写函数是为了 mongosh 加载快：它要改写每个函数，开销随函数个数的平方增长（680 个函数要 5 秒左右）
+  function tplFn(s) {
+    return function () {
+      var a = arguments;
+      return s.replace(/\{(\d)(?:\|([^}]*))?\}/g, function (_, i, sep) { var v = a[i]; return sep != null && Array.isArray(v) ? v.join(sep) : v; });
+    };
+  }
+  function compileMsg(o) {
+    for (var ks = Object.keys(o), i = 0; i < ks.length; i++) {
+      var k = ks[i];
+      var v = o[k];
+      if (typeof v === 'string' && /\{\d[}|]/.test(v)) o[k] = tplFn(v);
+      else if (v && typeof v === 'object' && !Array.isArray(v)) compileMsg(v);
+    }
+  }
+  compileMsg(MSG);
   function L(lang) { return MSG[normLang(lang)]; }
   function missingText(o) { return o.missingText != null ? String(o.missingText) : L(o.lang).missing; }
 
@@ -477,7 +520,7 @@
   };
   function bsonType(v) {
     if (v === null || (typeof v !== 'object' && typeof v !== 'function')) return null;
-    var bt = safe(function () { return v._bsontype; });
+    var bt = attempt(getProp, v, '_bsontype');
     if (typeof bt === 'string') return bt;
     var tag = toStr.call(v).slice(8, -1);
     if (Object.prototype.hasOwnProperty.call(LEGACY_TYPES, tag)) return LEGACY_TYPES[tag];
@@ -550,8 +593,8 @@
 
   // ───────────────────────── 值 → 文本 ─────────────────────────
   function tsParts(v) {
-    var t = safe(function () { return v.t; });
-    var i = safe(function () { return v.i; });
+    var t = attempt(getProp, v, 't');
+    var i = attempt(getProp, v, 'i');
     if (typeof t !== 'number') {
       t = safe(function () { return v.getHighBits() >>> 0; });
       i = safe(function () { return v.getLowBits() >>> 0; });
@@ -689,9 +732,7 @@
     this._vals[k] = v;
     return this;
   };
-  StrMap.prototype.forEach = function (fn) {
-    for (var i = 0; i < this._keys.length; i++) fn(this._vals[this._keys[i]], this._keys[i]);
-  };
+  StrMap.prototype.keys = function () { return this._keys.slice(); };
 
   // ───────────────────────── 展开 / 选列 ─────────────────────────
   // 嵌套文档展开成 a.b.c；subs 不为空时，把“文档数组”单独收集起来做子表
@@ -735,25 +776,24 @@
       cols = out;
     }
     if (exc && exc.length) {
-      cols = cols.filter(function (c) { return !exc.some(function (p) { return matchCol(c, p); }); });
+      for (var n = 0, keep = []; n < cols.length; n++) if (!matchAny(cols[n], exc)) keep.push(cols[n]);
+      cols = keep;
     }
     return cols;
   }
   // 子表 key 的选列：-c members.name → 子表里的 name
   function subPatterns(key, pats) {
     if (!pats || !pats.length) return { all: true, pats: null };
-    if (pats.some(function (p) { return matchCol(key, p); })) return { all: true, pats: null };
-    var sub = pats.filter(function (p) { return p.indexOf(key + '.') === 0; })
-      .map(function (p) { return p.slice(key.length + 1); });
-    return { all: false, pats: sub };
+    if (matchAny(key, pats)) return { all: true, pats: null };
+    return { all: false, pats: childPats(key, pats) };
   }
 
   // ───────────────────────── 渲染 ─────────────────────────
   function tableLines(flats, cols, o) {
     var head = cols.map(function (c) { return clip(c, o.maxCol); });
     var widths = head.map(dw);
-    var numeric = cols.map(function () { return true; });
-    var hasNum = cols.map(function () { return false; });
+    var numeric = fill(cols.length, true);
+    var hasNum = fill(cols.length, false);
     var body = flats.map(function (f) {
       return cols.map(function (c, j) {
         if (!f.has(c)) {                     // 字段不存在：显示 (无字段)，变暗
@@ -771,24 +811,26 @@
     numeric = numeric.map(function (n, j) { return (n && hasNum[j]) || (o._right ? o._right.indexOf(cols[j]) >= 0 : false); });
     var sep = '+' + widths.map(function (w) { return '-'.repeat(w + 2); }).join('+') + '+';
     var lines = [sep, '| ' + head.map(function (h, j) { return paint(o, BOLD, padR(h, widths[j])); }).join(' | ') + ' |', sep];
-    body.forEach(function (row) {
+    for (var i = 0; i < body.length; i++) {
+      var row = body[i];
       lines.push('| ' + row.map(function (cell, j) {
         var p = numeric[j] ? padL(cell.s, widths[j]) : padR(cell.s, widths[j]);
         return cell.dim ? paint(o, DIM, p) : p;
       }).join(' | ') + ' |');
-    });
+    }
     lines.push(sep);
     return { lines: lines, width: sep.length };
   }
   function kvLines(map, keys, o, out) {
     var kw = 0;
-    keys.forEach(function (k) { kw = Math.max(kw, dw(k)); });
+    for (var i = 0; i < keys.length; i++) { var k = keys[i]; kw = Math.max(kw, dw(k)); }
     kw = Math.min(kw, 32);   // 个别超长 key 不拖累整列对齐
-    keys.forEach(function (k) {
-      var v = map.get(k), s = cellText(v, o);
+    for (var j = 0; j < keys.length; j++) {
+      var k2 = keys[j];
+      var v = map.get(k2), s = cellText(v, o);
       if (v === null || v === undefined) s = paint(o, DIM, s);
-      out.push(paint(o, BOLD, padL(k, kw)) + ': ' + s);
-    });
+      out.push(paint(o, BOLD, padL(k2, kw)) + ': ' + s);
+    }
   }
   // 提示里写用户能直接再敲一遍的函数名：g() 调的就提示 g(...)；短名被占用时提示 mongotab.xxx
   function callName(o) {
@@ -804,11 +846,12 @@
   }
   function renderRows(rows, o, out, more, total) {
     var flats = [], cols = [], seen = new StrMap();
-    rows.forEach(function (r) {
+    for (var k2 = 0; k2 < rows.length; k2++) {
+      var r = rows[k2];
       var f = flatten(isDoc(r) ? r : { value: r }, o, null);
       flats.push(f);
-      f.forEach(function (_, k) { if (!seen.has(k)) { seen.set(k, true); cols.push(k); } });
-    });
+      for (var fk = f.keys(), j = 0; j < fk.length; j++) if (!seen.has(fk[j])) { seen.set(fk[j], true); cols.push(fk[j]); }
+    }
     cols = selectCols(cols, o.cols, o.exclude);
     if (!rows.length) { footer(0, 0, false, o, out); return; }
     if (!o.vertical) {
@@ -819,54 +862,56 @@
         return;
       }
     }
-    flats.forEach(function (f, i) {
+    for (var n2 = 0; n2 < flats.length; n2++) {
+      var f2 = flats[n2], i = n2;
       var stars = '***************************';
       out.push(paint(o, YELLOW, stars + ' ' + (i + 1) + '. row ' + stars));
-      kvLines(f, cols.filter(function (c) { return f.has(c); }), o, out);
-    });
+      kvLines(f2, cols.filter(function (c) { return f2.has(c); }), o, out);
+    }
     footer(rows.length, total, more, o, out);
   }
   function renderDoc(doc, o, out) {
     var subs = [];
     var f = flatten(doc, o, subs);
-    var keys = [];
-    f.forEach(function (_, k) { keys.push(k); });
+    var keys = f.keys();
     keys = selectCols(keys, o.cols, o.exclude);
     kvLines(f, keys, o, out);
-    subs.forEach(function (sub) {
+    for (var i = 0; i < subs.length; i++) {
+      var sub = subs[i];
       var key = sub[0], list = sub[1];
       var inc = subPatterns(key, o.cols);
-      if (!inc.all && !inc.pats.length) return;
-      if (o.exclude && o.exclude.some(function (p) { return matchCol(key, p); })) return;
-      var exc = (o.exclude || []).filter(function (p) { return p.indexOf(key + '.') === 0; })
-        .map(function (p) { return p.slice(key.length + 1); });
+      if (!inc.all && !inc.pats.length) continue;
+      if (matchAny(key, o.exclude)) continue;
+      var exc = childPats(key, o.exclude);
       var so = Object.assign({}, o, { cols: inc.pats, exclude: exc });
       if (out.length) out.push('');
       out.push(paint(o, CYAN, '── ' + key + ' (' + list.length + ') ──'));
       var shown = limitOf(o) < list.length ? list.slice(0, limitOf(o)) : list;
       renderRows(shown, so, out, false, list.length);
-    });
+    }
   }
   function limitOf(o) { return o.limit > 0 ? o.limit : Infinity; }
 
   function csvLines(x, o, out) {
     var rows = Array.isArray(x) ? x : [x];
     var flats = [], cols = [], seen = new StrMap();
-    rows.forEach(function (r) {
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
       var f = flatten(isDoc(r) ? r : { value: r }, o, null);
       flats.push(f);
-      f.forEach(function (_, k) { if (!seen.has(k)) { seen.set(k, true); cols.push(k); } });
-    });
+      for (var fk = f.keys(), j = 0; j < fk.length; j++) if (!seen.has(fk[j])) { seen.set(fk[j], true); cols.push(fk[j]); }
+    }
     cols = selectCols(cols, o.cols, o.exclude);
     var q = function (s) { return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
     out.push(cols.map(q).join(','));
-    flats.forEach(function (f) {
+    for (var k2 = 0; k2 < flats.length; k2++) {
+      var f2 = flats[k2];
       out.push(cols.map(function (c) {
-        if (!f.has(c)) return q(missingText(o));
-        var v = f.get(c);
+        if (!f2.has(c)) return q(missingText(o));
+        var v = f2.get(c);
         return q(v === null || v === undefined ? String(o.nullText) : valText(v, false, o));
       }).join(','));
-    });
+    }
   }
 
   // ───────────────────────── 入口 ─────────────────────────
@@ -937,14 +982,14 @@
       // 阈值按键合并：mt.config({checkThresholds: {lag: [30, 300]}}) 只改 lag；某个键给 null 恢复默认，整个给 null 全部恢复
       if ('checkThresholds' in c) {
         var ct = c.checkThresholds === null ? {} : Object.assign({}, cfg.checkThresholds || {}, thParse(c.checkThresholds, 'checkThresholds', next.lang, true));
-        Object.keys(ct).forEach(function (k) { if (ct[k] === null) delete ct[k]; });
+        for (var ks = Object.keys(ct), i = 0; i < ks.length; i++) { var k = ks[i]; if (ct[k] === null) delete ct[k]; }
         next.checkThresholds = Object.keys(ct).length ? ct : null;
       }
       cfg = next;
       return;
     }
     var shown = {};
-    Object.keys(cfg).forEach(function (k) { if (k[0] !== '_') shown[k] = cfg[k]; });
+    for (var list = Object.keys(cfg), j = 0; j < list.length; j++) { var k2 = list[j]; if (k2[0] !== '_') shown[k2] = cfg[k2]; }
     emit([JSON.stringify(shown)]);
   }
   function help(name) {
@@ -989,6 +1034,7 @@
     return d;
   }
   function admin() { return curDb().getSiblingDB('admin'); }
+  function rawCmd(d, cmd) { var r = unwrap(d.runCommand(cmd)); return r; }   // 不检查 ok，失败由调用方看
   function runCmd(d, cmd) {
     var r;
     try { r = unwrap(d.runCommand(cmd)); } catch (e) { r = { ok: 0, errmsg: e.message, code: e.code, codeName: e.codeName }; }
@@ -1020,8 +1066,8 @@
     try { var r = fn(); return r; } catch (e) { if (e && e.mtFriendly) throw e; missed(o, kind, ns, e); return null; }
   }
   function helloDoc(a) {
-    var r = safe(function () { return unwrap(a.runCommand({ hello: 1 })); });
-    if (!r || !r.ok) r = safe(function () { return unwrap(a.runCommand({ isMaster: 1 })); });
+    var r = attempt(rawCmd, a, { hello: 1 });
+    if (!r || !r.ok) r = attempt(rawCmd, a, { isMaster: 1 });
     return r || {};
   }
   function ensureRs(a, name) {
@@ -1034,7 +1080,8 @@
   function collStatsOf(docs) {   // $collStats 的结果（经 mongos 时每个分片一条）加起来
     if (!docs || !docs.length) return null;
     var s = { count: 0, size: 0, storageSize: 0, totalIndexSize: 0, nindexes: 0, maxSize: null, indexSizes: {} };
-    docs.forEach(function (x) {
+    for (var i = 0; i < docs.length; i++) {
+      var x = docs[i];
       var st = x.storageStats || {};
       s.count += toNum(st.count) || 0;
       s.size += toNum(st.size) || 0;
@@ -1042,8 +1089,8 @@
       s.totalIndexSize += toNum(st.totalIndexSize) || 0;
       s.nindexes = Math.max(s.nindexes, toNum(st.nindexes) || 0);
       if (st.maxSize != null) s.maxSize = (s.maxSize || 0) + toNum(st.maxSize);
-      Object.keys(st.indexSizes || {}).forEach(function (k) { s.indexSizes[k] = (s.indexSizes[k] || 0) + toNum(st.indexSizes[k]); });
-    });
+      for (var ks = Object.keys(st.indexSizes || {}), j = 0; j < ks.length; j++) { var k = ks[j]; s.indexSizes[k] = (s.indexSizes[k] || 0) + toNum(st.indexSizes[k]); }
+    }
     return s;
   }
   function hostOf(client) {
@@ -1053,12 +1100,13 @@
   // 去掉空值，免得竖排里出现一堆 NULL
   function prune(doc) {
     var out = {};
-    Object.keys(doc).forEach(function (k) {
+    for (var ks = Object.keys(doc), i = 0; i < ks.length; i++) {
+      var k = ks[i];
       var v = doc[k];
-      if (v === null || v === undefined || v === '' || (typeof v === 'number' && isNaN(v))) return;
-      if (isDoc(v)) { v = prune(v); if (!Object.keys(v).length) return; }
+      if (v === null || v === undefined || v === '' || (typeof v === 'number' && isNaN(v))) continue;
+      if (isDoc(v)) { v = prune(v); if (!Object.keys(v).length) continue; }
       out[k] = v;
-    });
+    }
     return out;
   }
   function dbaOpts(opts, right) { return makeOpts(opts, { _fn: 'table', _right: right || [] }); }
@@ -1068,8 +1116,7 @@
     renderRows(rows.length > lim ? rows.slice(0, lim) : rows, o, out, false, rows.length);
   }
   function headOut(doc, o, out) {
-    var f = flatten(prune(doc), o, null), keys = [];
-    f.forEach(function (_, k) { keys.push(k); });
+    var f = flatten(prune(doc), o, null), keys = f.keys();
     kvLines(f, keys, o, out);
   }
   // 包一层：可预期的错误（没权限、不是副本集...）打印一行提示，不抛异常。
@@ -1090,7 +1137,7 @@
   }
   function cleanCmd(c) {
     var out = {};
-    Object.keys(c).forEach(function (k) { if (k[0] !== '$' && k !== 'lsid' && k !== 'txnNumber') out[k] = c[k]; });
+    for (var ks = Object.keys(c), i = 0; i < ks.length; i++) { var k = ks[i]; if (k[0] !== '$' && k !== 'lsid' && k !== 'txnNumber') out[k] = c[k]; }
     return out;
   }
   // 按排序文档比较两行：{ns: 1, secs: -1}；数字按大小，其余按字符串
@@ -1122,16 +1169,17 @@
     var ops = runCmd(admin(), all ? { currentOp: 1, $all: true } : { currentOp: 1, active: true }).inprog || [];
     var minSecs = toNum(o.secs) || 0, ns = o.ns ? String(o.ns) : '';
     var rows = [];
-    ops.forEach(function (op, i) {
+    for (var j = 0; j < ops.length; j++) {
+      var op = ops[j], i = j;
       var c = op.command || {};
-      if (isSelfOp(c)) return;
+      if (isSelfOp(c)) continue;
       if (!all) {
-        if (!(op.client || op.client_s)) return;                                         // 内部线程
-        if ((c.hello || c.isMaster || c.ismaster) && c.maxAwaitTimeMS != null) return;  // 驱动的心跳长轮询
+        if (!(op.client || op.client_s)) continue;                                         // 内部线程
+        if ((c.hello || c.isMaster || c.ismaster) && c.maxAwaitTimeMS != null) continue;  // 驱动的心跳长轮询
       }
       var secs = toNum(op.secs_running) || 0;
-      if (secs < minSecs) return;
-      if (ns && !(op.ns === ns || String(op.ns || '').indexOf(ns + '.') === 0)) return;
+      if (secs < minSecs) continue;
+      if (ns && !(op.ns === ns || String(op.ns || '').indexOf(ns + '.') === 0)) continue;
       var cc = cleanCmd(c);
       rows.push({ i: i, row: {
         opid: op.opid != null ? op.opid : '', secs: secs, op: op.active === false ? 'idle' : (op.op || ''),
@@ -1139,14 +1187,14 @@
         app: op.appName || '', lock: op.waitingForLock ? 'WAIT' : '', plan: op.planSummary || '',
         command: Object.keys(cc).length ? valText(cc, true, o) : (op.desc || '')
       } });
-    });
+    }
     // 默认耗时长的在前；同耗时时有客户端的连接排在内部线程前面
     var byDefault = function (a, b) {
       return b.row.secs - a.row.secs || (a.row.client ? 0 : 1) - (b.row.client ? 0 : 1) || a.i - b.i;
     };
     var cmp = spec ? rowCmp(spec) : null;
     rows.sort(function (a, b) { return (cmp ? cmp(a.row, b.row) : 0) || byDefault(a, b); });
-    rowsOut(rows.map(function (x) { return x.row; }), o, out);
+    rowsOut(pluck(rows, 'row'), o, out);
     emit(out);
   }
 
@@ -1159,7 +1207,7 @@
     var ms = st.members || [];
     var opt = function (m) { return isDate(m.optimeDate) && m.optimeDate.getTime() > 0 ? m.optimeDate : null; };
     var ref = null;
-    ms.forEach(function (m) { if (m.state === 1 && opt(m)) ref = opt(m).getTime(); });
+    for (var i = 0; i < ms.length; i++) { var m = ms[i]; if (m.state === 1 && opt(m)) ref = opt(m).getTime(); }
     if (ref === null) ms.forEach(function (m) { if (opt(m) && (ref === null || opt(m).getTime() > ref)) ref = opt(m).getTime(); });
     headOut({ set: st.set, date: st.date }, Object.assign({}, o, { cols: null, exclude: null }), out);
     var rows = ms.map(function (m) {
@@ -1195,7 +1243,7 @@
       if (isAuthErr(e)) fail(M().unauthorized('listCollections'));
       throw e;
     }
-    return infos.filter(function (i) { return i.type !== 'view'; }).map(function (i) { return i.name; });
+    return pluck(infos.filter(function (i) { return i.type !== 'view'; }), 'name');
   }
   function isDbHandle(x) { return !!x && typeof x === 'object' && typeof x.getCollectionInfos === 'function' && typeof x.getSiblingDB === 'function'; }
   function colls(dbName, opts) {
@@ -1206,7 +1254,8 @@
     var dn = d.getName();
     cmdLine(o, "db.getSiblingDB('" + dn + "').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}])", out);
     var rows = [];
-    collNames(d).forEach(function (name) {
+    for (var ks = collNames(d), i = 0; i < ks.length; i++) {
+      var name = ks[i];
       var info = { name: name };
       var s = collStats(d, info.name);
       rows.push({
@@ -1216,9 +1265,9 @@
         },
         w: s ? s.storageSize + s.totalIndexSize : -1
       });
-    });
+    }
     rows.sort(function (x, y) { return y.w - x.w || (x.row.name < y.row.name ? -1 : 1); });
-    rowsOut(rows.map(function (x) { return x.row; }), o, out);
+    rowsOut(pluck(rows, 'row'), o, out);
     emit(out);
   }
 
@@ -1241,12 +1290,13 @@
   // $indexStats：每个索引自 since 以来被用了几次；经 mongos 时每个分片一条，加起来
   function indexUsage(c, o) {
     var usage = {};
-    (aggArr(c, [{ $indexStats: {} }], o, 'use') || []).forEach(function (x) {
+    for (var ks = (aggArr(c, [{ $indexStats: {} }], o, 'use') || []), i = 0; i < ks.length; i++) {
+      var x = ks[i];
       var u = usage[x.name] || (usage[x.name] = { ops: 0, since: null });
       u.ops += toNum(x.accesses && x.accesses.ops) || 0;
       var since = x.accesses && x.accesses.since;
       if (isDate(since) && (!u.since || since < u.since)) u.since = since;
-    });
+    }
     return usage;
   }
   function indexFlags(ix, o) {
@@ -1298,11 +1348,10 @@
       if (op.appName) r.apps.set(op.appName, true);
     });
     var rows = [];
-    by.forEach(function (r) {
-      var apps = [];
-      r.apps.forEach(function (_, k) { apps.push(k); });
-      rows.push({ client: r.client, conns: r.conns, active: r.active, apps: apps.join(', ') });
-    });
+    for (var bk = by.keys(), i = 0; i < bk.length; i++) {
+      var r = by.get(bk[i]);
+      rows.push({ client: r.client, conns: r.conns, active: r.active, apps: r.apps.keys().join(', ') });
+    }
     rows.sort(function (x, y) { return y.conns - x.conns || (x.client < y.client ? -1 : 1); });
     rowsOut(rows, o, out);
     emit(out);
@@ -1329,8 +1378,7 @@
       maxLogical: sizeText(cs.maxSize), usedLogical: sizeText(cs.size), disk: sizeText(cs.storageSize),
       firstEvent: t1, lastEvent: t2, window: durText(secs) + ' (' + (secs / 3600).toFixed(2) + ' h)', now: new Date()
     });
-    var f = flatten(doc, o, null), keys = [];
-    f.forEach(function (_, k) { keys.push(k); });
+    var f = flatten(doc, o, null), keys = f.keys();
     kvLines(f, selectCols(keys, o.cols, o.exclude), o, out);
     emit(out);
   }
@@ -1354,10 +1402,10 @@
     var names = ['insert', 'query', 'update', 'delete', 'getmore', 'command'];
     if (s2) {
       doc['ops/s'] = {};
-      names.forEach(function (k) { doc['ops/s'][k] = rate((s1.opcounters || {})[k], oc[k]); });
+      for (var i = 0; i < names.length; i++) { var k = names[i]; doc['ops/s'][k] = rate((s1.opcounters || {})[k], oc[k]); }
     } else {
       doc.opcounters = {};
-      names.forEach(function (k) { doc.opcounters[k] = toNum(oc[k]); });
+      for (var j = 0; j < names.length; j++) { var k2 = names[j]; doc.opcounters[k2] = toNum(oc[k2]); }
     }
     var cn = s.connections || {};
     doc.connections = { current: toNum(cn.current), available: toNum(cn.available) };
@@ -1375,8 +1423,7 @@
         dirty: sizeText(wc['tracked dirty bytes in the cache'])
       };
     }
-    var f = flatten(prune(doc), o, null), keys = [];
-    f.forEach(function (_, k) { keys.push(k); });
+    var f = flatten(prune(doc), o, null), keys = f.keys();
     kvLines(f, selectCols(keys, o.cols, o.exclude), o, out);
     emit(out);
   }
@@ -1433,7 +1480,7 @@
         command: Object.keys(cc).length ? valText(cc, true, o) : ''
       };
     });
-    if (rows.every(function (r) { return !r.user; })) rows.forEach(function (r) { delete r.user; });   // 没开认证
+    dropBlank(rows, ['user']);   // 没开认证
     renderRows(rows, o, out, false, Math.max(total, rows.length));
     if (!rows.length && !st.was) out.push(M().profOff);
     emit(out);
@@ -1455,19 +1502,20 @@
     var f = function (x, k, sub) { return toNum(x && x[k] && x[k][sub]) || 0; };
     var ms = function (us) { return Math.round(us / 1000); };
     var rows = [];
-    Object.keys(cur).forEach(function (k) {
+    for (var ks = Object.keys(cur), i = 0; i < ks.length; i++) {
+      var k = ks[i];
       var c = cur[k], b = base[k];
-      if (!k || !isDoc(c) || !c.total || !nsMatch(k, ns)) return;
+      if (!k || !isDoc(c) || !c.total || !nsMatch(k, ns)) continue;
       var tot = f(c, 'total', 'time') - f(b, 'total', 'time');
       var n = f(c, 'total', 'count') - f(b, 'total', 'count');
-      if (tot <= 0 && n <= 0) return;
+      if (tot <= 0 && n <= 0) continue;
       rows.push({
         ns: k, totalMs: ms(tot),
         readMs: ms(f(c, 'readLock', 'time') - f(b, 'readLock', 'time')),
         writeMs: ms(f(c, 'writeLock', 'time') - f(b, 'writeLock', 'time')),
         ops: n, us: tot
       });
-    });
+    }
     rows.sort(function (x, y) { return y.us - x.us || y.ops - x.ops || (x.ns < y.ns ? -1 : 1); });
     rowsOut(rows.map(function (r) { delete r.us; return r; }), o, out);
     emit(out);
@@ -1498,7 +1546,7 @@
     cmdLine(o, 'db.adminCommand({lockInfo: 1}); db.adminCommand({currentOp: 1, $all: true})', out);
     var info = runCmd(a, { lockInfo: 1 }).lockInfo || [];
     var byOp = {};
-    (runCmd(a, { currentOp: 1, $all: true }).inprog || []).forEach(function (op) { if (op.opid != null) byOp[String(op.opid)] = op; });
+    for (var ks = (runCmd(a, { currentOp: 1, $all: true }).inprog || []), i = 0; i < ks.length; i++) { var op = ks[i]; if (op.opid != null) byOp[String(op.opid)] = op; }
     var rows = [], waiting = new StrMap();
     // ci：lockInfo 里的 clientInfo（3.6 / 4.0 / 4.2 直接放在条目上），或 currentOp 的一条
     var add = function (res, mode, ci, state) {
@@ -1513,15 +1561,17 @@
         command: Object.keys(cc).length ? valText(cc, true, o) : ''
       });
     };
-    info.forEach(function (r) {
+    for (var j = 0; j < info.length; j++) {
+      var r = info[j];
       var pending = r.pending || [], granted = r.granted || [];
-      if (!pending.length && !(all && granted.length)) return;
-      granted.forEach(function (x) {
-        if (!all && !pending.some(function (p) { return lockConflicts(x.mode, p.mode); })) return;
+      if (!pending.length && !(all && granted.length)) continue;
+      for (var n2 = 0; n2 < granted.length; n2++) {
+        var x = granted[n2];
+        if (!all && !pending.some(function (p) { return lockConflicts(x.mode, p.mode); })) continue;
         add(resName(r.resourceId), x.mode, x.clientInfo || x, 'HOLD');
-      });
-      pending.forEach(function (x) { add(resName(r.resourceId), x.mode, x.clientInfo || x, 'WAIT'); });
-    });
+      }
+      for (var i2 = 0; i2 < pending.length; i2++) { var x2 = pending[i2]; add(resName(r.resourceId), x2.mode, x2.clientInfo || x2, 'WAIT'); }
+    }
     // 4.2 等版本的 Global 锁不在 lockInfo 里：用 currentOp 的 waitingForLock 补上。
     // 等的是 locks 里最后一项；占着它的是同一把锁上模式冲突的操作
     var extra = new StrMap();
@@ -1532,10 +1582,11 @@
       if (!n) return;
       if (!extra.has(n)) {
         extra.set(n, true);
-        Object.keys(byOp).forEach(function (k2) {
+        for (var ks = Object.keys(byOp), i = 0; i < ks.length; i++) {
+          var k2 = ks[i];
           var h = byOp[k2];
           if (!h.waitingForLock && isDoc(h.locks) && h.locks[n] && lockConflicts(h.locks[n], op.locks[n])) add(n, h.locks[n], h, 'HOLD');
-        });
+        }
       }
       add(n, op.locks[n], op, 'WAIT');
     });
@@ -1565,9 +1616,10 @@
       return d && !isNaN(d.getTime()) ? d : null;
     };
     var seen = new StrMap(), rows = [];
-    ops.forEach(function (op) {
+    for (var j = 0; j < ops.length; j++) {
+      var op = ops[j];
       var tx = op.transaction;
-      if (!tx || !isDoc(tx)) return;
+      if (!tx || !isDoc(tx)) continue;
       var p = tx.parameters || {};
       var id = op.lsid && op.lsid.id != null ? valText(op.lsid.id, true, o) : '';
       var key = id + '#' + valText(p.txnNumber, true, o);
@@ -1581,10 +1633,10 @@
         opid: op.active && op.opid != null ? op.opid : '',
         client: op.client || op.client_s || '', app: op.appName || '', ns: op.active ? op.ns || '' : ''
       };
-      if (r) { if (row.state === 'active') seen.set(key, row); return; }   // 同一事务有多条时，留正在执行的那条
+      if (r) { if (row.state === 'active') seen.set(key, row); continue; }   // 同一事务有多条时，留正在执行的那条
       seen.set(key, row);
-    });
-    seen.forEach(function (row) { if (row.openSecs >= minSecs) rows.push(row); });
+    }
+    for (var sk = seen.keys(), i = 0; i < sk.length; i++) if (seen.get(sk[i]).openSecs >= minSecs) rows.push(seen.get(sk[i]));
     var cmp = spec ? rowCmp(spec) : null;
     rows.sort(function (x, y) { return (cmp ? cmp(x, y) : 0) || y.openSecs - x.openSecs; });
     rowsOut(rows, o, out);
@@ -1599,14 +1651,15 @@
     var reuse = function (w) { return toNum(((w || {})['block-manager'] || {})['file bytes available for reuse']) || 0; };
     var cached = function (w) { return toNum(((w || {}).cache || {})['bytes currently in the cache']) || 0; };
     var s = { storage: 0, reuse: 0, idxSize: 0, idxReuse: 0, cache: 0, idxCache: 0 };
-    docs.forEach(function (x) {
+    for (var i = 0; i < docs.length; i++) {
+      var x = docs[i];
       var st = x.storageStats || {}, ix = st.indexDetails || {};
       s.storage += toNum(st.storageSize) || 0;
       s.idxSize += toNum(st.totalIndexSize) || 0;
       s.reuse += reuse(st.wiredTiger);
       s.cache += cached(st.wiredTiger);
-      Object.keys(ix).forEach(function (k) { s.idxReuse += reuse(ix[k]); s.idxCache += cached(ix[k]); });
-    });
+      for (var ks = Object.keys(ix), j = 0; j < ks.length; j++) { var k = ks[j]; s.idxReuse += reuse(ix[k]); s.idxCache += cached(ix[k]); }
+    }
     return s;
   }
   function pctText(a, b) { return b > 0 ? (a / b * 100).toFixed(1) + '%' : ''; }
@@ -1622,9 +1675,10 @@
     var dn = d.getName();
     cmdLine(o, "db.getSiblingDB('" + dn + "').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}]) → wiredTiger['block-manager']", out);
     var rows = [], tData = 0, tIdx = 0;
-    collNames(d).forEach(function (name) {
+    for (var ks = collNames(d), i = 0; i < ks.length; i++) {
+      var name = ks[i];
       var s = wtStats(d, name);
-      if (!s) return;
+      if (!s) continue;
       tData += s.reuse; tIdx += s.idxReuse;
       rows.push({
         row: {
@@ -1633,9 +1687,9 @@
         },
         w: s.reuse + s.idxReuse
       });
-    });
+    }
     rows.sort(function (a, b) { return b.w - a.w || (a.row.name < b.row.name ? -1 : 1); });
-    rowsOut(rows.map(function (r) { return r.row; }), o, out);
+    rowsOut(pluck(rows, 'row'), o, out);
     out.push(M().fragTotal(sizeText(tData + tIdx), sizeText(tData), sizeText(tIdx)));
     emit(out);
   }
@@ -1646,8 +1700,7 @@
     var o = dbaOpts(x.opts, ['cached', 'dataCached', 'indexCached', 'share']), out = [];
     var a = admin();
     notMongos('mt.cache()');
-    var dbsList = x.d ? [x.d] : (runCmd(a, { listDatabases: 1, nameOnly: true }).databases || [])
-      .map(function (i) { return curDb().getSiblingDB(i.name); });
+    var dbsList = x.d ? [x.d] : dbsOf(dbNames());
     cmdLine(o, 'db.serverStatus().wiredTiger.cache; ' + (x.d ? "db.getSiblingDB('" + x.d.getName() + "')" : 'every db') +
       ': each collection aggregate([{$collStats: {storageStats: {}}}]) → wiredTiger.cache', out);
     var wc = (runCmd(a, { serverStatus: 1 }).wiredTiger || {}).cache || {};
@@ -1656,17 +1709,19 @@
     headOut({ used: sizeText(used) + (max ? ' (' + pctText(used, max) + ')' : ''), max: sizeText(max),
       dirty: sizeText(dirty) + (max ? ' (' + pctText(dirty, max) + ')' : '') }, Object.assign({}, o, { cols: null, exclude: null }), out);
     var rows = [], sum = 0;
-    dbsList.forEach(function (d) {
-      collNames(d).forEach(function (name) {
+    for (var j = 0; j < dbsList.length; j++) {
+      var d = dbsList[j];
+      for (var ks = collNames(d), k2 = 0; k2 < ks.length; k2++) {
+        var name = ks[k2];
         var s = wtStats(d, name);
-        if (!s || s.cache + s.idxCache <= 0) return;
+        if (!s || s.cache + s.idxCache <= 0) continue;
         var c = s.cache + s.idxCache;
         sum += c;
         rows.push({ row: { ns: d.getName() + '.' + name, cached: sizeText(c), dataCached: sizeText(s.cache), indexCached: sizeText(s.idxCache), share: pctText(c, used) }, w: c });
-      });
-    });
+      }
+    }
     rows.sort(function (p, q) { return q.w - p.w || (p.row.ns < q.row.ns ? -1 : 1); });
-    rowsOut(rows.map(function (r) { return r.row; }), o, out);
+    rowsOut(pluck(rows, 'row'), o, out);
     if (rows.length) out.push(M().cacheSum(sizeText(sum), pctText(sum, used)));
     emit(out);
   }
@@ -1693,11 +1748,10 @@
     var x = dbArg(dbName, opts);
     var o = dbaOpts(x.opts, ['expireAfterSeconds', 'overdueSecs']), out = [];
     var a = admin();
-    var dbsList = x.d ? [x.d] : (runCmd(a, { listDatabases: 1, nameOnly: true }).databases || [])
-      .map(function (i) { return curDb().getSiblingDB(i.name); });
+    var dbsList = x.d ? [x.d] : dbsOf(dbNames());
     cmdLine(o, (x.d ? "db.getSiblingDB('" + x.d.getName() + "')" : 'every db') +
       ': getCollectionInfos() + each getIndexes() → expireAfterSeconds; getParameter ttlMonitor*; serverStatus().metrics.ttl', out);
-    var p = safe(function () { return unwrap(a.runCommand({ getParameter: 1, ttlMonitorEnabled: 1, ttlMonitorSleepSecs: 1 })); }) || {};
+    var p = attempt(rawCmd, a, { getParameter: 1, ttlMonitorEnabled: 1, ttlMonitorSleepSecs: 1 }) || {};
     var tm = safe(function () { return unwrap(a.runCommand({ serverStatus: 1 })).metrics.ttl; }) || {};
     headOut({ ttlMonitorEnabled: p.ok ? p.ttlMonitorEnabled : null, ttlMonitorSleepSecs: p.ok ? toNum(p.ttlMonitorSleepSecs) : null,
       passes: toNum(tm.passes), deletedDocuments: toNum(tm.deletedDocuments) }, Object.assign({}, o, { cols: null, exclude: null }), out);
@@ -1714,13 +1768,14 @@
       else add(cc.ns, '(clustered)', '_id', op.expireAfterSeconds, null, []);
     }
     if (cc.info.type === 'timeseries') return;
-    cc.indexes().forEach(function (ix) {
-      if (ix.expireAfterSeconds == null || ix.clustered) return;   // 聚簇索引上面已经算过
+    for (var ks = cc.indexes(), i = 0; i < ks.length; i++) {
+      var ix = ks[i];
+      if (ix.expireAfterSeconds == null || ix.clustered) continue;   // 聚簇索引上面已经算过
       var flags = [];
       if (ix.partialFilterExpression) flags.push('partial=' + valText(ix.partialFilterExpression, true, o));
       if (ix.hidden) flags.push('hidden');
       add(cc.ns, ix.name, Object.keys(ix.key || {})[0] || '', ix.expireAfterSeconds, oldestDate(cc.c, ix, o), flags);
-    });
+    }
   }
   function ttlAdder(rows) {
     var now = Date.now();
@@ -1740,18 +1795,18 @@
   function ttlScope(cc) { return !/^system\.buckets\./.test(cc.name); }
   function ttlList(dbsList, o) {
     var rows = [], add = ttlAdder(rows);
-    inventory(dbsList, o).forEach(function (x) { var cc = collCtx(x, o); if (ttlScope(cc)) ttlRows(cc, add, o); });
+    for (var ks = inventory(dbsList, o), i = 0; i < ks.length; i++) { var x = ks[i]; var cc = collCtx(x, o); if (ttlScope(cc)) ttlRows(cc, add, o); }
     return rows.sort(byOverdue);
   }
 
   // ─── 索引体检。默认扫所有用户库（跳过 admin / local / config），也可以只给一个库
+  function dbNames() { return pluck(runCmd(admin(), { listDatabases: 1, nameOnly: true }).databases || [], 'name'); }
+  function dbsOf(names) { var out = []; for (var i = 0; i < names.length; i++) out.push(curDb().getSiblingDB(names[i])); return out; }
   function userDbs(x) {
     if (x.d) return [x.d];
-    return (runCmd(admin(), { listDatabases: 1, nameOnly: true }).databases || [])
-      .map(function (i) { return i.name; })
-      .filter(function (n) { return n !== 'admin' && n !== 'local' && n !== 'config'; })
-      .sort()
-      .map(function (n) { return curDb().getSiblingDB(n); });
+    var names = dbNames(), user = [];
+    for (var i = 0; i < names.length; i++) if (names[i] !== 'admin' && names[i] !== 'local' && names[i] !== 'config') user.push(names[i]);
+    return dbsOf(user.sort());
   }
   // 各库的集合（不含视图）：[{d, info}]，每个库一次 listCollections。o.track 存在时列不出的库记下来跳过
   function inventory(dbsList, o) {
@@ -1764,7 +1819,7 @@
         missed(o, 'list', d.getName(), e);
         return;
       }
-      infos.forEach(function (info) { if (info.type !== 'view') list.push({ d: d, info: info }); });
+      for (var i = 0; i < infos.length; i++) { var info = infos[i]; if (info.type !== 'view') list.push({ d: d, info: info }); }
     });
     return list;
   }
@@ -1792,7 +1847,7 @@
     var cfgDb = curDb().getSiblingDB('config'), map = {};
     var name = helloDoc(admin()).msg === 'isdbgrid' ? 'collections' : 'cache.collections';
     var docs = safe(function () { return cfgDb.getCollection(name).find({ dropped: { $ne: true } }, { key: 1 }).toArray(); }) || [];
-    docs.forEach(function (d) { if (d && d._id != null && isDoc(d.key)) map[String(d._id)] = d.key; });
+    for (var i = 0; i < docs.length; i++) { var d = docs[i]; if (d && d._id != null && isDoc(d.key)) map[String(d._id)] = d.key; }
     return map;
   }
   // 索引键以分片键开头（字段、顺序一样，hashed 对 hashed）：分片需要它，不能删
@@ -1810,40 +1865,43 @@
   // o.days：计数开始（since）不到这么多天的不算没用（标 young），默认 7；o.shardKeys：shardKeyMap() 的结果
   function unusedRows(cc, rows, o) {
     var usage = cc.usage(), now = Date.now(), days = o.days == null ? 7 : toNum(o.days) || 0, sk = (o.shardKeys || {})[cc.ns];
-    cc.indexes().forEach(function (ix) {
+    for (var ks = cc.indexes(), i = 0; i < ks.length; i++) {
+      var ix = ks[i];
       var u = usage[ix.name];
-      if (ix.name === '_id_' || !u || u.ops > 0) return;
+      if (ix.name === '_id_' || !u || u.ops > 0) continue;
       var cs = cc.cs(), bytes = cs ? toNum(cs.indexSizes[ix.name]) || 0 : 0, shard = onShardKey(ix, sk);
       var flags = indexFlags(ix, o);
       if (shard) flags = flags ? flags + ', shardKey' : 'shardKey';
       rows.push({ row: { ns: cc.ns, index: ix.name, key: valText(ix.key, true, o), disk: cs ? sizeText(bytes) : '',
         since: u.since || '', options: flags }, w: bytes, ix: ix, shard: shard,
         young: days > 0 && isDate(u.since) && now - u.since.getTime() < days * 86400000 });
-    });
+    }
   }
   function unusedList(dbsList, o) {
     var rows = [];
-    inventory(dbsList, o).forEach(function (x) { var cc = collCtx(x, o); if (idxScope(cc)) unusedRows(cc, rows, o); });
+    for (var ks = inventory(dbsList, o), i = 0; i < ks.length; i++) { var x = ks[i]; var cc = collCtx(x, o); if (idxScope(cc)) unusedRows(cc, rows, o); }
     return rows.sort(bySize);
   }
   function dupRows(cc, rows, o) {
     var ixs = cc.indexes().filter(function (ix) { return ix.key && plainKey(ix.key); });
-    ixs.forEach(function (a) {
-      if (a.name === '_id_' || a.unique || a.expireAfterSeconds != null || a.partialFilterExpression || a.sparse || a.hidden) return;
+    for (var i = 0; i < ixs.length; i++) {
+      var a = ixs[i];
+      if (a.name === '_id_' || a.unique || a.expireAfterSeconds != null || a.partialFilterExpression || a.sparse || a.hidden) continue;
       var cover = null;
-      ixs.forEach(function (b) {
-        if (b === a || b.partialFilterExpression || b.sparse || b.hidden || !sameCollation(a, b) || !keyPrefix(a.key, b.key)) return;
+      for (var j = 0; j < ixs.length; j++) {
+        var b = ixs[j];
+        if (b === a || b.partialFilterExpression || b.sparse || b.hidden || !sameCollation(a, b) || !keyPrefix(a.key, b.key)) continue;
         if (!cover || Object.keys(b.key).length < Object.keys(cover.key).length) cover = b;   // 取最短的那个
-      });
-      if (!cover) return;
+      }
+      if (!cover) continue;
       var cs = cc.cs(), bytes = cs ? toNum(cs.indexSizes[a.name]) || 0 : 0;
       rows.push({ row: { ns: cc.ns, index: a.name, key: valText(a.key, true, o), disk: cs ? sizeText(bytes) : '',
         coveredBy: cover.name, coveredKey: valText(cover.key, true, o) }, w: bytes });
-    });
+    }
   }
   function dupList(dbsList, o) {
     var rows = [];
-    inventory(dbsList, o).forEach(function (x) { var cc = collCtx(x, o); if (idxScope(cc)) dupRows(cc, rows, o); });
+    for (var ks = inventory(dbsList, o), i = 0; i < ks.length; i++) { var x = ks[i]; var cc = collCtx(x, o); if (idxScope(cc)) dupRows(cc, rows, o); }
     return rows.sort(bySize);
   }
   function unusedIdx(dbName, opts) {
@@ -1853,11 +1911,11 @@
     var days = o.days == null ? 7 : toNum(o.days) || 0;
     cmdLine(o, (x.d ? "db.getSiblingDB('" + x.d.getName() + "')" : 'every user db') +
       ': each collection getIndexes() + aggregate([{$indexStats: {}}]) → accesses.ops = 0' + (days ? ', accesses.since ≥ ' + days + ' days ago' : ''), out);
-    var st = safe(function () { return unwrap(admin().runCommand({ serverStatus: 1 })); }) || {}, h = helloDoc(admin()), m = M();
+    var st = attempt(rawCmd, admin(), { serverStatus: 1 }) || {}, h = helloDoc(admin()), m = M();
     headOut({ node: st.host || null, uptime: st.uptime != null ? durText(st.uptime) : null }, Object.assign({}, o, { cols: null, exclude: null }), out);
     var all = unusedList(dbsList, Object.assign({}, o, { shardKeys: shardKeyMap() }));
     var rows = all.filter(function (r) { return !r.young; }), young = all.length - rows.length;
-    rowsOut(rows.map(function (r) { return r.row; }), o, out);
+    rowsOut(pluck(rows, 'row'), o, out);
     if (!rows.length) out.push(m.noUnused);
     if (young) out.push(m.unusedYoung(young, days));
     if (h.msg === 'isdbgrid') out.push(m.unusedMongos);
@@ -1884,7 +1942,7 @@
     cmdLine(o, (x.d ? "db.getSiblingDB('" + x.d.getName() + "')" : 'every user db') +
       ': each collection getIndexes() → key is a prefix of another index', out);
     var rows = dupList(dbsList, o);
-    rowsOut(rows.map(function (r) { return r.row; }), o, out);
+    rowsOut(pluck(rows, 'row'), o, out);
     if (!rows.length) out.push(M().noDup);
     emit(out);
   }
@@ -1896,17 +1954,19 @@
   function exChildren(n) {
     var out = [];
     if (Array.isArray(n.shards)) {   // 分片：每个分片一棵子树
-      n.shards.forEach(function (sh) {
+      for (var i = 0; i < n.shards.length; i++) {
+        var sh = n.shards[i];
         var t = sh.executionStages || sh.winningPlan;
         if (t) out.push({ stage: 'shard ' + (sh.shardName || ''), _child: t.queryPlan || t });
-      });
+      }
       return out;
     }
-    Object.keys(n).forEach(function (k) {
+    for (var ks = Object.keys(n), j = 0; j < ks.length; j++) {
+      var k = ks[j];
       var v = n[k];
       if (isDoc(v) && typeof v.stage === 'string') out.push(v);
       else if (Array.isArray(v)) v.forEach(function (x) { if (isDoc(x) && typeof x.stage === 'string') out.push(x); });
-    });
+    }
     return out;
   }
   // indexBounds 的每个区间本来就是字符串，如 {status: ['["PAID", "PAID"]']}：直接拼起来，不再加引号
@@ -1944,7 +2004,7 @@
           case '$numberDecimal': return NumberDecimal(w);   // eslint-disable-line no-undef
           case '$uuid': return UUID(w);   // eslint-disable-line no-undef
           case '$regularExpression': return new RegExp(w.pattern, w.options);
-          case '$timestamp': return safe(function () { return Timestamp(w.t, w.i); }) || Timestamp({ t: w.t, i: w.i });   // eslint-disable-line no-undef
+          case '$timestamp': return attempt(Timestamp, w.t, w.i) || Timestamp({ t: w.t, i: w.i });   // eslint-disable-line no-undef
           case '$minKey': return MinKey();   // eslint-disable-line no-undef
           case '$maxKey': return MaxKey();   // eslint-disable-line no-undef
           case '$binary': return typeof w === 'string' ? BinData(parseInt(v.$type, 16), w) : BinData(parseInt(w.subType, 16), w.base64);   // eslint-disable-line no-undef
@@ -1954,7 +2014,7 @@
       if (r !== undefined && r !== null) return r;
     }
     var out = {};
-    ks.forEach(function (key) { out[key] = ejsonFix(v[key]); });
+    for (var i = 0; i < ks.length; i++) { var key = ks[i]; out[key] = ejsonFix(v[key]); }
     return out;
   }
   // ─── 4.4 之前的文本日志。命令部分是 shell 写法，不是 JSON：字段名不带引号（可以带点）、
@@ -1969,7 +2029,7 @@
     }
     return out;
   }
-  function tsMake(t, i) { return safe(function () { return Timestamp(t, i); }) || Timestamp({ t: t, i: i }); }   // eslint-disable-line no-undef
+  function tsMake(t, i) { return attempt(Timestamp, t, i) || Timestamp({ t: t, i: i }); }   // eslint-disable-line no-undef
   // 从 pos（应该是 '{' 或 '['）开始解析一个值，返回 {v, pos}；格式不对就抛异常
   function looseParse(text, pos) {
     var i = pos;
@@ -2112,7 +2172,7 @@
     if (r.docsExamined > 0 && r.nreturned != null) r.docsExaminedPerReturned = r.nreturned > 0 ? Math.round(r.docsExamined / r.nreturned * 10) / 10 : 'Infinity';
     r.hasSortStage = x.hasSortStage && String(x.hasSortStage) !== '0' && String(x.hasSortStage) !== 'false' ? true : null;
     r.usedDisk = x.usedDisk && String(x.usedDisk) !== '0' && String(x.usedDisk) !== 'false' ? true : null;
-    ['numYields', 'writeConflicts', 'nMatched', 'nModified', 'ndeleted', 'ninserted', 'reslen'].forEach(function (k) { r[k] = num(x[k]); });
+    for (var ks = ['numYields', 'writeConflicts', 'nMatched', 'nModified', 'ndeleted', 'ninserted', 'reslen'], i = 0; i < ks.length; i++) { var k = ks[i]; r[k] = num(x[k]); }
     r.bytesRead = x.bytesRead != null ? sizeText(x.bytesRead) : null;
     r.readMs = x.readMicros != null ? Math.round(toNum(x.readMicros) / 100) / 10 : null;
     r.queryHash = x.queryHash || null; r.planCacheKey = x.planCacheKey || null;
@@ -2192,17 +2252,19 @@
     var verb = Object.keys(c)[0];
     if (EXPLAIN_VERBS.indexOf(verb) < 0) fail(M().cantExplain(verb || '?'));
     var cmd = {};
-    Object.keys(c).forEach(function (k) {
-      if (k.charAt(0) === '$' || EXPLAIN_DROP.indexOf(k) >= 0) return;
+    for (var ks = Object.keys(c), i = 0; i < ks.length; i++) {
+      var k = ks[i];
+      if (k.charAt(0) === '$' || EXPLAIN_DROP.indexOf(k) >= 0) continue;
       cmd[k] = c[k];
-    });
+    }
     // mongos 发给分片时加的 projection: {$sortKey: {$meta: 'sortKey'}}
     if (isDoc(cmd.projection)) {
       var pj = {};
-      Object.keys(cmd.projection).forEach(function (k) {
-        var v = cmd.projection[k];
-        if (!(isDoc(v) && v.$meta === 'sortKey')) pj[k] = v;
-      });
+      for (var list = Object.keys(cmd.projection), j = 0; j < list.length; j++) {
+        var k2 = list[j];
+        var v = cmd.projection[k2];
+        if (!(isDoc(v) && v.$meta === 'sortKey')) pj[k2] = v;
+      }
       if (Object.keys(pj).length) cmd.projection = pj; else delete cmd.projection;
     }
     if (verb === 'aggregate' && !cmd.cursor) cmd.cursor = {};
@@ -2217,7 +2279,7 @@
       return lastRows[x - 1];
     }
     if (typeof x === 'string') {
-      var j = safe(function () { return JSON.parse(x); });
+      var j = attempt(JSON.parse, x);
       if (isDoc(j)) {
         j = ejsonFix(j);
         var jt = isDoc(j.t) && isDate(j.t.$date) ? j.t.$date : isDate(j.t) ? j.t : null;
@@ -2227,7 +2289,7 @@
         return isDoc(j.command) ? j : { command: j };
       }
       // 4.4 之前的文本日志行，或者 shell 写法的命令 { find: "c", filter: { ... } }
-      var e = safe(function () { return textLogEntry(x); });
+      var e = attempt(textLogEntry, x);
       if (!e && /^\s*\{/.test(x)) e = safe(function () { var c = looseParse(x, x.indexOf('{')).v; return isDoc(c) ? { command: c } : null; });
       if (!e) fail(m.notJson);
       return e;
@@ -2319,7 +2381,7 @@
   }
   function pickOpts(c, keys) {
     var o = {}, n = 0;
-    keys.forEach(function (k) { if (c[k] !== undefined && c[k] !== false) { o[k] = c[k]; n++; } });
+    for (var i = 0; i < keys.length; i++) { var k = keys[i]; if (c[k] !== undefined && c[k] !== false) { o[k] = c[k]; n++; } }
     return n ? o : null;
   }
   function hasOperator(u) { return isDoc(u) && Object.keys(u).some(function (k) { return k.charAt(0) === '$'; }); }
@@ -2333,9 +2395,10 @@
     switch (verb) {
       case 'find': {
         var q = c + '.find(' + args([cmd.filter || {}, cmd.projection || null]) + ')';
-        ['sort', 'skip', 'limit', 'hint', 'collation', 'maxTimeMS', 'comment'].forEach(function (k) {
+        for (var ks = ['sort', 'skip', 'limit', 'hint', 'collation', 'maxTimeMS', 'comment'], i = 0; i < ks.length; i++) {
+          var k = ks[i];
           if (cmd[k] !== undefined && !(k === 'skip' && !cmd[k]) && !(k === 'limit' && !cmd[k])) q += '.' + k + '(' + jsLit(cmd[k]) + ')';
-        });
+        }
         if (cmd.allowDiskUse) q += '.allowDiskUse()';
         return { lines: [q] };
       }
@@ -2391,11 +2454,12 @@
     // 聚合：$cursor 之后的阶段在树的上面，倒过来排
     var stages = Array.isArray(ex.stages) ? ex.stages : [];
     var cur = ex.queryPlanner ? ex : null, rest = [];
-    stages.forEach(function (st) {
+    for (var j = 0; j < stages.length; j++) {
+      var st = stages[j];
       var k = Object.keys(st).filter(function (key) { return key.charAt(0) === '$'; })[0];
       if (k === '$cursor') cur = st.$cursor;
       else if (k) rest.push({ name: k, st: st });
-    });
+    }
     var qp = cur ? cur.queryPlanner || {} : {}, es = cur ? cur.executionStats || null : null;
     var sbe = String(ex.explainVersion) === '2' || !!(qp.winningPlan && qp.winningPlan.queryPlan);
     var wp = qp.winningPlan ? qp.winningPlan.queryPlan || qp.winningPlan : null;
@@ -2431,7 +2495,7 @@
       if (n.isMultiKey) note(row, 'multikey');
       if (n.stage === 'FETCH' && n.filter) note(row, 'postFilter');
       rows.push(row);
-      exChildren(n).forEach(function (c) { walk(c, d + 1); });
+      for (var ks = exChildren(n), i = 0; i < ks.length; i++) { var c = ks[i]; walk(c, d + 1); }
     })(root, depth);
     var h = { ns: qp.namespace, engine: sbe ? 'sbe' : 'classic' };
     if (es) {
@@ -2445,12 +2509,10 @@
     if (qp.indexFilterSet) h.indexFilterSet = true;
     headOut(h, Object.assign({}, o, { cols: null, exclude: null }), out);
     // 只看计划时没有统计；SBE 没有每一步的扫描数：整列都是空的就不显示
-    ['nReturned', 'keysExamined', 'docsExamined', 'ms'].forEach(function (k) {
-      if (rows.every(function (r) { return r[k] === ''; })) rows.forEach(function (r) { delete r[k]; });
-    });
+    dropBlank(rows, ['nReturned', 'keysExamined', 'docsExamined', 'ms']);
     renderRows(rows, o, out, false, rows.length);
     var nl = [];
-    notes.forEach(function (_, k) { nl.push(m.exNote[k]); });
+    for (var nk = notes.keys(), i = 0; i < nk.length; i++) nl.push(m.exNote[nk[i]]);
     if (nl.length) out.push(m.exNotes(nl));
     if (rec && rec.planSummary) {
       var now = planSummaryOf(root);
@@ -2480,15 +2542,16 @@
     var ops = runCmd(admin(), { currentOp: 1, $all: true }).inprog || [];
     var rows = [], byKey = {};
     var keyOf = function (op) {
-      var ix = ((op.command || {}).indexes || []).map(function (i) { return i.name; }).sort().join(',');
+      var ix = pluck(((op.command || {}).indexes || []), 'name').sort().join(',');
       return buildNs(op) + '|' + ix;
     };
-    ops.forEach(function (op) {
-      if (!/index build/i.test(String(op.msg || ''))) return;
+    for (var j = 0; j < ops.length; j++) {
+      var op = ops[j];
+      if (!/index build/i.test(String(op.msg || ''))) continue;
       var c = op.command || {}, ixs = c.indexes || [], p = op.progress || {};
       var done = p.done != null ? toNum(p.done) : '', total = p.total != null ? toNum(p.total) : '';
       var row = {
-        ns: buildNs(op), index: ixs.map(function (i) { return i.name; }).join(', '),
+        ns: buildNs(op), index: pluck(ixs, 'name').join(', '),
         key: ixs.map(function (i) { return valText(i.key, true, o); }).join('; '),
         phase: buildPhase(op.msg), done: done, total: total, pct: total ? pctText(done, total) : '',
         secs: op.secs_running != null ? toNum(op.secs_running) : '', opid: op.opid != null ? op.opid : '',
@@ -2496,7 +2559,7 @@
       };
       byKey[keyOf(op)] = row;
       rows.push(row);
-    });
+    }
     // 客户端连接上的 createIndexes：补上客户端和时长。找不到对应建索引线程的，可能还没开始（如在等锁），
     // 也可能已经建完、在等提交或写关注（4.4 起），从 currentOp 分不出来，统一显示“等待中”
     ops.forEach(function (op) {
@@ -2510,7 +2573,7 @@
       }
       var ixs = c.indexes || [];
       rows.push({
-        ns: buildNs(op), index: ixs.map(function (i) { return i.name; }).join(', '),
+        ns: buildNs(op), index: pluck(ixs, 'name').join(', '),
         key: ixs.map(function (i) { return valText(i.key, true, o); }).join('; '),
         phase: M().buildWaiting, done: '', total: '', pct: '', secs: secs, opid: op.opid != null ? op.opid : '',
         client: op.client || op.client_s || ''
@@ -2529,7 +2592,7 @@
     line = String(line).replace(/\s+$/, '');
     if (!line) return null;
     if (line.charAt(0) === '{') {
-      var j = safe(function () { return JSON.parse(line); });
+      var j = attempt(JSON.parse, line);
       if (j) {
         var t = j.t && j.t.$date != null ? new Date(j.t.$date) : null;
         return { time: t && !isNaN(t.getTime()) ? t : '', sev: j.s || '', comp: j.c || '', ctx: j.ctx || '', id: j.id != null ? j.id : '', msg: j.msg || '', attr: j.attr, json: true, raw: line };
@@ -2555,18 +2618,19 @@
     var re = grep == null || grep === '' ? null : isRegExp(grep) ? grep : null;
     var needle = re || grep == null ? null : String(grep).toLowerCase();
     var rows = [];
-    lines.forEach(function (l) {
+    for (var j = 0; j < lines.length; j++) {
+      var l = lines[j];
       var r = logLine(l);
-      if (!r || (!r.msg && r.attr == null)) return;
-      if (maxRank != null && !(SEV_RANK[String(r.sev).charAt(0)] <= maxRank)) return;
-      if (re && !re.test(r.raw)) return;
-      if (needle && r.raw.toLowerCase().indexOf(needle) < 0) return;
+      if (!r || (!r.msg && r.attr == null)) continue;
+      if (maxRank != null && !(SEV_RANK[String(r.sev).charAt(0)] <= maxRank)) continue;
+      if (re && !re.test(r.raw)) continue;
+      if (needle && r.raw.toLowerCase().indexOf(needle) < 0) continue;
       var row = { '#': 0, time: r.time, sev: r.sev, comp: r.comp, ctx: r.ctx, id: r.id, msg: r.msg };
       if (r.json) row.attr = r.attr != null ? valText(r.attr, true, o) : '';
       row._attr = r.attr;
       row._raw = r.json ? null : r.raw;
       rows.push(row);
-    });
+    }
     var total = rows.length;
     if (rows.length > n) rows = rows.slice(rows.length - n);
     // 4.4 起 Slow query 的 attr 里有 ns、command、type（update / remove 是单条语句）
@@ -2578,9 +2642,9 @@
         a = ejsonFix(a);
         return { op: a.type, ns: a.ns, command: a.command, originatingCommand: a.originatingCommand, stats: statsFromAttr(a, isDate(r.time) ? r.time : null) };
       }
-      return raw ? safe(function () { return textLogEntry(raw); }) || null : null;   // 4.4 之前的文本日志
+      return raw ? attempt(textLogEntry, raw) || null : null;   // 4.4 之前的文本日志
     });
-    if (rows.every(function (r) { return r.id === ''; })) rows.forEach(function (r) { delete r.id; });   // 4.4 之前没有 id
+    dropBlank(rows, ['id']);   // 4.4 之前没有 id
     renderRows(rows, o, out, false, rows.length);
     if (total > rows.length) out.push(paint(o, DIM, M().logTail(rows.length, total)));
     emit(out);
@@ -2610,10 +2674,10 @@
   function host(opts) {
     var o = dbaOpts(opts), out = [], m = M(), a = admin();
     cmdLine(o, 'db.hostInfo(); db.serverBuildInfo(); db.adminCommand({getCmdLineOpts: 1}); db.serverStatus()', out);
-    var hi = safe(function () { return runCmd(a, { hostInfo: 1 }); }) || {};
-    var bi = safe(function () { return runCmd(a, { buildInfo: 1 }); }) || {};
-    var co = safe(function () { return runCmd(a, { getCmdLineOpts: 1 }); }) || {};
-    var ss = safe(function () { return runCmd(a, { serverStatus: 1 }); }) || {};
+    var hi = attempt(runCmd, a, { hostInfo: 1 }) || {};
+    var bi = attempt(runCmd, a, { buildInfo: 1 }) || {};
+    var co = attempt(runCmd, a, { getCmdLineOpts: 1 }) || {};
+    var ss = attempt(runCmd, a, { serverStatus: 1 }) || {};
     var fcv = safe(function () { var p = runCmd(a, { getParameter: 1, featureCompatibilityVersion: 1 }).featureCompatibilityVersion; return isDoc(p) ? p.version : p; });
     var sy = hi.system || {}, osi = hi.os || {}, ex = hi.extra || {}, pa = co.parsed || {};
     var get = function (obj, path) { return pathGet(obj, path); };
@@ -2659,8 +2723,7 @@
       }
     };
     if (o.all) doc.parsed = pa;   // 全部启动参数（配置文件 + 命令行）
-    var f = flatten(prune(doc), o, null), keys = [];
-    f.forEach(function (_, k) { keys.push(k); });
+    var f = flatten(prune(doc), o, null), keys = f.keys();
     kvLines(f, selectCols(keys, o.cols, o.exclude), o, out);
     emit(out);
   }
@@ -2670,20 +2733,23 @@
   var LAT_KINDS = ['reads', 'writes', 'commands', 'transactions'];
   function latPick(doc) {
     var r = {};
-    LAT_KINDS.forEach(function (k) {
+    for (var i = 0; i < LAT_KINDS.length; i++) {
+      var k = LAT_KINDS[i];
       var x = isDoc(doc) ? doc[k] : null;
       if (isDoc(x)) r[k] = { lat: toNum(x.latency) || 0, ops: toNum(x.ops) || 0 };
-    });
+    }
     return r;
   }
   function latColl(d, name) {
     var docs = aggArr(d.getCollection(name), [{ $collStats: { latencyStats: {} } }]);
     if (!docs || !docs.length) return null;
     var sum = {};
-    docs.forEach(function (x) {   // 经 mongos 时每个分片一条
+    for (var i = 0; i < docs.length; i++) {
+      var x = docs[i];
+      // 经 mongos 时每个分片一条
       var p = latPick(x.latencyStats);
-      Object.keys(p).forEach(function (k) { var s0 = sum[k] || (sum[k] = { lat: 0, ops: 0 }); s0.lat += p[k].lat; s0.ops += p[k].ops; });
-    });
+      for (var ks = Object.keys(p), j = 0; j < ks.length; j++) { var k = ks[j]; var s0 = sum[k] || (sum[k] = { lat: 0, ops: 0 }); s0.lat += p[k].lat; s0.ops += p[k].ops; }
+    }
     return sum;
   }
   function latency(dbName, opts) {
@@ -2699,19 +2765,21 @@
     // 两次之差就是一次探测的次数和延迟，第二次采样时把它减掉（$collStats 算读，serverStatus 算命令）
     var collsSnap = function (twice) {
       var colls = {}, probes = {};
-      dbsList.forEach(function (d) {
-        collNames(d).forEach(function (name) {
-          if (/^system\./.test(name)) return;
+      for (var i = 0; i < dbsList.length; i++) {
+        var d = dbsList[i];
+        for (var ks = collNames(d), j = 0; j < ks.length; j++) {
+          var name = ks[j];
+          if (/^system\./.test(name)) continue;
           var ns = d.getName() + '.' + name, a1 = latColl(d, name);
-          if (!a1) return;
+          if (!a1) continue;
           if (twice) {
             var b1 = latColl(d, name) || a1, pr = { lat: (b1.reads || {}).lat - (a1.reads || {}).lat, ops: (b1.reads || {}).ops - (a1.reads || {}).ops };
             probes[ns] = pr.ops > 0 ? { lat: pr.lat / pr.ops, ops: 1 } : { lat: 0, ops: 1 };
             a1 = b1;
           }
           colls[ns] = a1;
-        });
-      });
+        }
+      }
       return { colls: colls, probes: probes };
     };
     var srv = function () { return latPick(runCmd(a, { serverStatus: 1 }).opLatencies); };
@@ -2738,22 +2806,24 @@
     };
     var avg = function (dd) { return dd.ops > 0 ? Math.round(dd.lat / dd.ops / 10) / 100 : ''; };   // 微秒 → 毫秒，两位小数
     var h = {};
-    LAT_KINDS.forEach(function (k) {
-      if (!cur.server[k]) return;
+    for (var n2 = 0; n2 < LAT_KINDS.length; n2++) {
+      var k = LAT_KINDS[n2];
+      if (!cur.server[k]) continue;
       var dd = diff(cur.server, base && base.server, k, sampled && k === 'commands' ? srvProbe : null);
       h[k] = sampled ? { avgMs: avg(dd), 'ops/s': Math.round(dd.ops / iv * 10) / 10 } : { avgMs: avg(dd), ops: dd.ops };
-    });
+    }
     headOut(h, Object.assign({}, o, { cols: null, exclude: null }), out);
     var rows = [];
-    Object.keys(cur.colls).forEach(function (ns) {
+    for (var list = Object.keys(cur.colls), k2 = 0; k2 < list.length; k2++) {
+      var ns = list[k2];
       var c = cur.colls[ns], b = base ? base.colls[ns] : null;
       var r = diff(c, b, 'reads', sampled ? collProbes[ns] : null), w = diff(c, b, 'writes'), cm = diff(c, b, 'commands');
       var total = r.lat + w.lat + cm.lat;
-      if (r.ops + w.ops + cm.ops <= 0) return;
+      if (r.ops + w.ops + cm.ops <= 0) continue;
       rows.push({ row: { ns: ns, readOps: r.ops, readMs: avg(r), writeOps: w.ops, writeMs: avg(w), cmdOps: cm.ops, cmdMs: avg(cm), totalMs: Math.round(total / 1000) }, w: total });
-    });
+    }
     rows.sort(function (p1, p2) { return p2.w - p1.w || (p1.row.ns < p2.row.ns ? -1 : 1); });
-    rowsOut(rows.map(function (r) { return r.row; }), o, out);
+    rowsOut(pluck(rows, 'row'), o, out);
     emit(out);
   }
 
@@ -2801,7 +2871,7 @@
       count: cs ? cs.count : null, sampled: docs.length,
       validator: isDoc(v) ? valText(v, true, o).slice(0, 120) + (op.validationLevel ? ' (' + op.validationLevel + '/' + (op.validationAction || 'error') + ')' : '') : null,
       collation: op.collation && op.collation.locale ? op.collation.locale : null,
-      indexes: (safe(function () { return c.getIndexes(); }) || []).map(function (ix) { return ix.name; }).join(', ') || null
+      indexes: pluck((safe(function () { return c.getIndexes(); }) || []), 'name').join(', ') || null
     };
     headOut(h, Object.assign({}, o, { cols: null, exclude: null }), out);
     if (!docs.length) { out.push(m.noDocs); emit(out); return; }
@@ -2813,32 +2883,34 @@
     };
     docs.forEach(function (doc, di) {
       (function walk(obj, prefix, depth) {
-        Object.keys(obj).forEach(function (k, ki) {
+        for (var ks = Object.keys(obj), i = 0; i < ks.length; i++) {
+          var k = ks[i], ki = i;
           var path = prefix + k, val = obj[k], f = hit(path), t = typeName(val);
           f.pos += ki; f.posN++;   // 在父文档里的位置，用来排序：抽样顺序是随机的
           if (f.seen !== di) { f.seen = di; f.docs++; }
           f.types.set(t, (f.types.get(t) || 0) + 1);
           if (f.example === undefined && val !== null && t !== 'object' && t !== 'array') f.example = val;
-          if (o.depth != null && depth + 1 >= o.depth) return;
+          if (o.depth != null && depth + 1 >= o.depth) continue;
           if (t === 'object' && Object.keys(val).length) walk(val, path + '.', depth + 1);
           if (t === 'array') {
-            val.forEach(function (e) {
+            for (var j = 0; j < val.length; j++) {
+              var e = val[j];
               var et = typeName(e);
               f.elem.set(et, (f.elem.get(et) || 0) + 1);
               if (et === 'object') walk(e, path + '.', depth + 1);
               else if (f.example === undefined && e !== null && et !== 'array') f.example = val;
-            });
+            }
           }
-        });
+        }
       })(doc, '', 0);
     });
     // 按字段在父文档里的平均位置排，子字段紧跟在父字段后面（像 DESC t 按定义顺序）
     var kids = {};
-    fields.forEach(function (f, path) {
-      var i = path.lastIndexOf('.'), parent = i < 0 ? '' : path.slice(0, i);
-      if (i >= 0 && !fields.has(parent)) parent = '';
+    for (var paths = fields.keys(), pi = 0; pi < paths.length; pi++) {
+      var path = paths[pi], dot = path.lastIndexOf('.'), parent = dot < 0 ? '' : path.slice(0, dot);
+      if (dot >= 0 && !fields.has(parent)) parent = '';
       (kids[parent] = kids[parent] || []).push(path);
-    });
+    }
     var order = [];
     (function dfs(parent) {
       (kids[parent] || []).sort(function (a, b) {
@@ -2847,16 +2919,15 @@
       }).forEach(function (p) { order.push(p); dfs(p); });
     })('');
     var rows = order.map(function (path) {
-      var f = fields.get(path), total = 0, parts = [];
-      f.types.forEach(function (cnt) { total += cnt; });
-      var ts = [];
-      f.types.forEach(function (cnt, t) { ts.push([t, cnt]); });
+      var f = fields.get(path), total = 0, parts = [], ts = [];
+      for (var tk = f.types.keys(), j = 0; j < tk.length; j++) { total += f.types.get(tk[j]); ts.push([tk[j], f.types.get(tk[j])]); }
       ts.sort(function (a, b) { return b[1] - a[1] || (a[0] < b[0] ? -1 : 1); });   // 占比高的在前
-      ts.forEach(function (x) {
+      for (var i = 0; i < ts.length; i++) {
+        var x = ts[i];
         var et = [];
-        if (x[0] === 'array') f.elem.forEach(function (_, k) { et.push(k); });
+        if (x[0] === 'array') et = f.elem.keys();
         parts.push(x[0] + (et.length ? '<' + et.sort().join('|') + '>' : '') + (ts.length > 1 ? ' ' + Math.round(x[1] / total * 100) + '%' : ''));
-      });
+      }
       return { field: path, types: parts.join(', '), present: pctText(f.docs, docs.length), example: f.example === undefined ? '' : valText(f.example, true, o) };
     });
     rowsOut(rows, o, out);
@@ -2884,29 +2955,29 @@
     }
     if (stats) {
       cmdLine(o, "db.getSiblingDB('" + d.getName() + "').getCollection('" + cn + "').aggregate([{$planCacheStats: {}}])", out);
-      stats.forEach(function (x) {
+      for (var j = 0; j < stats.length; j++) {
+        var x = stats[j];
         var plan = isDoc(x.cachedPlan) && typeof x.cachedPlan.stage === 'string' ? planSummaryOf(x.cachedPlan) : m.sbePlan;
         rows.push({
           hash: x.queryHash || x.planCacheShapeHash || '', planCacheKey: x.planCacheKey || '', active: x.isActive != null ? !!x.isActive : '',
           works: x.works != null ? toNum(x.works) : '', shape: shape(x.createdFromQuery), plan: plan || '',
           created: isDate(x.timeOfCreation) ? x.timeOfCreation : ''
         });
-      });
+      }
     } else {
       cmdLine(o, "db.getSiblingDB('" + d.getName() + "').runCommand({planCacheListQueryShapes: '" + cn + "'}); each: planCacheListPlans", out);
-      (runCmd(d, { planCacheListQueryShapes: cn }).shapes || []).forEach(function (sh) {
-        var pl = safe(function () { return unwrap(d.runCommand({ planCacheListPlans: cn, query: sh.query, sort: sh.sort, projection: sh.projection })); }) || {};
+      for (var ks = (runCmd(d, { planCacheListQueryShapes: cn }).shapes || []), k2 = 0; k2 < ks.length; k2++) {
+        var sh = ks[k2];
+        var pl = attempt(rawCmd, d, { planCacheListPlans: cn, query: sh.query, sort: sh.sort, projection: sh.projection }) || {};
         var best = (pl.plans || [])[0] || {}, st = isDoc(best.reason) ? best.reason.stats : null;
         rows.push({
           hash: sh.queryHash || '', planCacheKey: '', active: '', works: st && st.works != null ? toNum(st.works) : '',
           shape: shape(sh), plan: st ? planSummaryOf(st) : '', created: ''
         });
-      });
+      }
     }
     if (hash) rows = rows.filter(function (r) { return String(r.hash).toUpperCase() === hash || String(r.planCacheKey).toUpperCase() === hash; });
-    ['hash', 'planCacheKey', 'active', 'created'].forEach(function (k) {   // 3.6 / 4.0 没有这些（4.0 之前也没有 queryHash）
-      if (rows.length && rows.every(function (r) { return r[k] === ''; })) rows.forEach(function (r) { delete r[k]; });
-    });
+    dropBlank(rows, ['hash', 'planCacheKey', 'active', 'created']);   // 3.6 / 4.0 没有这些（4.0 之前也没有 queryHash）
     rowsOut(rows, o, out);
     if (!rows.length && !hash) out.push(m.noPlanCache);
     emit(out);
@@ -2933,10 +3004,11 @@
     var th = L(lang).ck.th, out = {}, keys = Object.keys(CHECK_TH);
     if (src == null) return out;
     if (typeof src !== 'object' || Array.isArray(src)) throw new Error('mongotab: ' + th.notObj(name));
-    Object.keys(src).forEach(function (k) {
+    for (var ks = Object.keys(src), i = 0; i < ks.length; i++) {
+      var k = ks[i];
       var spec = CHECK_TH[k], v = src[k];
       if (!spec) throw new Error('mongotab: ' + th.unknown(k, keys));
-      if (v === null || v === undefined) { if (keepNull) out[k] = null; return; }
+      if (v === null || v === undefined) { if (keepNull) out[k] = null; continue; }
       var arr = Array.isArray(v) ? v : [v];
       if (arr.length !== spec.d.length) throw new Error('mongotab: ' + (spec.d.length === 2 ? th.pair(k, spec.d) : th.one(k, spec.d)));
       arr = arr.map(function (x) {
@@ -2947,13 +3019,13 @@
       });
       if (arr.length === 2 && (spec.low ? arr[0] < arr[1] : arr[0] > arr[1])) throw new Error('mongotab: ' + th.order(k, spec.low));
       out[k] = arr;
-    });
+    }
     return out;
   }
   // 生效的阈值：默认值 ← mt.config 的 checkThresholds ← 这次的 thresholds
   function thEffective(callTh) {
     var eff = {};
-    Object.keys(CHECK_TH).forEach(function (k) { eff[k] = CHECK_TH[k].d.slice(); });
+    for (var ks = Object.keys(CHECK_TH), i = 0; i < ks.length; i++) { var k = ks[i]; eff[k] = CHECK_TH[k].d.slice(); }
     Object.assign(eff, cfg.checkThresholds || {}, thParse(callTh, 'thresholds', cfg.lang, false));
     return eff;
   }
@@ -2978,9 +3050,8 @@
     cmdLine(o, 'serverStatus, currentOp, replSetGetStatus, getLog, getParameter' + (o.quick ? '' : '; per collection (maxColls ' + maxColls + ', budgetMs ' + budgetMs + '): getIndexes, $collStats, $indexStats'), out);
     var rows = [], counts = {};
     var add = function (key, status, value, advice) { rows.push({ check: ck.names[key], status: status, value: value == null ? '' : String(value), advice: advice || '' }); };
-    var run = function (key, fn) {
-      try { fn(); } catch (e) { add(key, e && e.mtSkip ? 'SKIP' : 'UNKNOWN', errText(e).slice(0, 80), ''); }
-    };
+    // 每一项单独 try：查不了只把这一项标成 UNKNOWN（不适用的是 SKIP），其他项照常
+    var ckFail = function (key, e) { add(key, e && e.mtSkip ? 'SKIP' : 'UNKNOWN', errText(e).slice(0, 80), ''); };
     var na = function (msg) { var e = new Error(msg); e.mtSkip = true; throw e; };   // 这一项不适用
     // 逐库 / 逐集合的检查：没查全时，有发现照常报并附上覆盖情况；什么都没发现就是 UNKNOWN，不能说 OK
     // spec：kinds 依赖哪些种类的数据（见 missed），n 应该查几个，scope 只算哪些 ns 的失败，dbUnit 单位是库
@@ -2988,11 +3059,12 @@
     var withTrack = function (tk) { return Object.assign({}, o, { track: tk }); };
     var finish = function (key, tk, spec, status, value, advice) {
       var badNs = {}, sep = normLang(cfg.lang) === 'zh' ? '；' : '; ';
-      spec.kinds.forEach(function (k) {
-        if (k === 'list') return;
+      for (var i = 0; i < spec.kinds.length; i++) {
+        var k = spec.kinds[i];
+        if (k === 'list') continue;
         var b = tk.bad[k] || {};
-        Object.keys(b).forEach(function (ns) { if ((!spec.scope || spec.scope(ns)) && !(ns in badNs)) badNs[ns] = b[ns]; });
-      });
+        for (var ks = Object.keys(b), j = 0; j < ks.length; j++) { var ns = ks[j]; if ((!spec.scope || spec.scope(ns)) && !(ns in badNs)) badNs[ns] = b[ns]; }
+      }
       var bad = Object.keys(badNs), lb = tk.bad.list || {}, dbs = spec.kinds.indexOf('list') >= 0 ? Object.keys(lb) : [], notes = [];
       if (bad.length || dbs.length) notes.push(ck.partial(spec.n - bad.length, spec.n, bad.length, dbs.length, spec.dbUnit));
       if (tk.limited) notes.push(ck.limited(tk.limited.seen, tk.limited.total, tk.limited.why));
@@ -3007,7 +3079,7 @@
     };
     var ss = runCmd(a, { serverStatus: 1 });
     var hello = helloDoc(a), isRs = !!hello.setName;
-    var ops = safe(function () { return runCmd(a, { currentOp: 1, $all: true }); }) || {};
+    var ops = attempt(runCmd, a, { currentOp: 1, $all: true }) || {};
     var inprog = ops.inprog || [];
     var needOps = function () { if (!Array.isArray(ops.inprog)) throw new Error(m.unauthorized('currentOp')); };   // currentOp 失败时，依赖它的几项标 UNKNOWN
     var r = ss.repl;
@@ -3015,120 +3087,122 @@
       role: (!r ? 'standalone' : (r.ismaster || r.isWritablePrimary) ? 'PRIMARY' : r.secondary ? 'SECONDARY' : 'OTHER') + (r && r.setName ? ' (' + r.setName + ')' : ''),
       uptime: durText(ss.uptime) }, Object.assign({}, o, { cols: null, exclude: null }), out);
 
-    run('startup', function () {
+    try {
       var lines = runCmd(a, { getLog: 'startupWarnings' }).log || [], warns = [];
-      lines.forEach(function (l) {
+      for (var i = 0; i < lines.length; i++) {
+        var l = lines[i];
         var x = logLine(l);
-        if (!x) return;
+        if (!x) continue;
         if (x.json ? /^[WEF]/.test(String(x.sev)) : /WARNING/.test(x.msg)) warns.push(x.msg.replace(/^\*+\s*WARNING:\s*/, ''));
-      });
+      }
       add('startup', warns.length ? 'WARN' : 'OK', warns.length ? ck.n(warns.length) + (normLang(cfg.lang) === 'zh' ? '：' : ': ') + (warns[0].length > 60 ? warns[0].slice(0, 57) + '...' : warns[0]) : ck.none, warns.length ? 'mt.log({startup: true})' : '');
-    });
-    run('fsync', function () { needOps(); add('fsync', ops.fsyncLock ? 'CRIT' : 'OK', ops.fsyncLock ? ck.locked : ck.unlocked, ops.fsyncLock ? ck.adv.fsync : ''); });
-    run('fcv', function () {
+    } catch (e) { ckFail('startup', e); }
+    try { needOps(); add('fsync', ops.fsyncLock ? 'CRIT' : 'OK', ops.fsyncLock ? ck.locked : ck.unlocked, ops.fsyncLock ? ck.adv.fsync : ''); } catch (e) { ckFail('fsync', e); }
+    try {
       var p = runCmd(a, { getParameter: 1, featureCompatibilityVersion: 1 }).featureCompatibilityVersion;
       var f = String(isDoc(p) ? p.version : p), v = String(ss.version).split('.').slice(0, 2).join('.');
       add('fcv', f === v ? 'OK' : 'WARN', ck.fcv(f, v), f === v ? '' : ck.adv.fcv);
-    });
+    } catch (e) { ckFail('fcv', e); }
     if (isRs) {
-      var st = safe(function () { return runCmd(a, { replSetGetStatus: 1 }); });
-      run('members', function () {
+      var st = attempt(runCmd, a, { replSetGetStatus: 1 });
+      try {
         if (!st) throw new Error('replSetGetStatus');
         var bad = (st.members || []).filter(function (x) { return x.health !== 1 || !/^(PRIMARY|SECONDARY|ARBITER)$/.test(x.stateStr); })
           .map(function (x) { return x.name + ' (' + x.stateStr + ')'; });
         add('members', bad.length ? 'CRIT' : 'OK', ck.members((st.members || []).length, bad), 'mt.repl()');
-      });
-      run('lag', function () {
+      } catch (e) { ckFail('members', e); }
+      try {
         if (!st) throw new Error('replSetGetStatus');
         var ms = st.members || [], opt = function (x) { return isDate(x.optimeDate) && x.optimeDate.getTime() > 0 ? x.optimeDate.getTime() : null; };
         var ref = null, worst = 0, who = '';
-        ms.forEach(function (x) { if (x.state === 1 && opt(x)) ref = opt(x); });
+        for (var i = 0; i < ms.length; i++) { var x = ms[i]; if (x.state === 1 && opt(x)) ref = opt(x); }
         if (ref === null) ms.forEach(function (x) { if (opt(x) && (ref === null || opt(x) > ref)) ref = opt(x); });
-        ms.forEach(function (x) { if (x.state === 2 && opt(x) !== null && ref - opt(x) > worst) { worst = ref - opt(x); who = x.name; } });
+        for (var j = 0; j < ms.length; j++) { var x2 = ms[j]; if (x2.state === 2 && opt(x2) !== null && ref - opt(x2) > worst) { worst = ref - opt(x2); who = x2.name; } }
         var secs = Math.round(worst / 1000);
         add('lag', level(secs, th.lag[0], th.lag[1]), durText(secs) + (who ? ' (' + who + ')' : ''), 'mt.repl()');
-      });
-      run('oplog', function () {
+      } catch (e) { ckFail('lag', e); }
+      try {
         var oc = curDb().getSiblingDB('local').getCollection('oplog.rs');
         var first = oc.find({}, { ts: 1 }).sort({ $natural: 1 }).limit(1).toArray()[0], last = oc.find({}, { ts: 1 }).sort({ $natural: -1 }).limit(1).toArray()[0];
         if (!first || !last) throw new Error(m.noOplog);
         var hours = (tsDate(last.ts).getTime() - tsDate(first.ts).getTime()) / 3600000;
         var lv = level(hours, th.oplog[0], th.oplog[1], false);
         add('oplog', lv, durText(hours * 3600) + ' (' + hours.toFixed(2) + ' h)', lv === 'OK' ? 'mt.oplog()' : ck.adv.oplog);
-      });
+      } catch (e) { ckFail('oplog', e); }
     } else {
-      ['members', 'lag', 'oplog'].forEach(function (k) { add(k, 'SKIP', ck.notRs, ''); });
+      for (var list = ['members', 'lag', 'oplog'], k2 = 0; k2 < list.length; k2++) { var k = list[k2]; add(k, 'SKIP', ck.notRs, ''); }
     }
-    run('cacheUsed', function () {
+    try {
       var wc = (ss.wiredTiger || {}).cache || {}, used = toNum(wc['bytes currently in the cache']), max = toNum(wc['maximum bytes configured']);
       if (!max) na(ck.noWt);
       add('cacheUsed', level(used / max * 100, th.cacheUsed[0], th.cacheUsed[1]), pctText(used, max) + ' (' + sizeText(used) + ' / ' + sizeText(max) + ')', 'mt.cache()');
-    });
-    run('cacheDirty', function () {
+    } catch (e) { ckFail('cacheUsed', e); }
+    try {
       var wc = (ss.wiredTiger || {}).cache || {}, dirty = toNum(wc['tracked dirty bytes in the cache']), max = toNum(wc['maximum bytes configured']);
       if (!max) na(ck.noWt);
       add('cacheDirty', level(dirty / max * 100, th.cacheDirty[0], th.cacheDirty[1]), pctText(dirty, max) + ' (' + sizeText(dirty) + ')', 'mt.status()');
-    });
+    } catch (e) { ckFail('cacheDirty', e); }
     var ct = (ss.wiredTiger || {}).concurrentTransactions;   // 7.0 起改成动态的，可能没有
     if (isDoc(ct) && isDoc(ct.read) && isDoc(ct.write) && toNum(ct.read.totalTickets)) {
-      run('tickets', function () {
+      try {
         var rp = toNum(ct.read.out) / toNum(ct.read.totalTickets) * 100, wp = toNum(ct.write.out) / toNum(ct.write.totalTickets) * 100;
         add('tickets', level(Math.max(rp, wp), th.tickets[0], th.tickets[1]), 'read ' + toNum(ct.read.out) + '/' + toNum(ct.read.totalTickets) + ', write ' + toNum(ct.write.out) + '/' + toNum(ct.write.totalTickets), 'mt.ps()');
-      });
+      } catch (e) { ckFail('tickets', e); }
     }
-    run('queue', function () {
+    try {
       var q = (ss.globalLock || {}).currentQueue || {}, n = (toNum(q.readers) || 0) + (toNum(q.writers) || 0);
       add('queue', level(n, th.queue[0], th.queue[1]), 'readers ' + (toNum(q.readers) || 0) + ', writers ' + (toNum(q.writers) || 0), 'mt.locks()');
-    });
-    run('conns', function () {
+    } catch (e) { ckFail('queue', e); }
+    try {
       var c = ss.connections || {}, cur = toNum(c.current) || 0, all = cur + (toNum(c.available) || 0);
       add('conns', level(all ? cur / all * 100 : 0, th.conns[0], th.conns[1]), cur + ' / ' + all + ' (' + pctText(cur, all) + ')', 'mt.conns()');
-    });
+    } catch (e) { ckFail('conns', e); }
     var clientOps = inprog.filter(function (op) {
       var c = op.command || {};
       return (op.client || op.client_s) && !isSelfOp(c) && !((c.hello || c.isMaster || c.ismaster) && c.maxAwaitTimeMS != null);
     });
-    run('longOps', function () {
+    try {
       needOps();
       var long = clientOps.filter(function (op) { return op.active && toNum(op.secs_running) >= th.longOps[0]; });
       var max = long.reduce(function (mx, op) { return Math.max(mx, toNum(op.secs_running)); }, 0);
       add('longOps', long.length ? (max >= th.longOps[1] ? 'CRIT' : 'WARN') : 'OK', ck.longOps(long.length, durText(max), secText(th.longOps[0], cfg.lang)), long.length ? 'mt.ps({secs: ' + th.longOps[0] + '})' : '');
-    });
-    run('lockWait', function () {
+    } catch (e) { ckFail('longOps', e); }
+    try {
       needOps();
       var n = clientOps.filter(function (op) { return op.waitingForLock; }).length;
       add('lockWait', n ? 'WARN' : 'OK', ck.count(n), n ? 'mt.locks()' : '');
-    });
-    run('txns', function () {
+    } catch (e) { ckFail('lockWait', e); }
+    try {
       needOps();
       var seen = {}, long = [];
-      inprog.forEach(function (op) {
+      for (var i = 0; i < inprog.length; i++) {
+        var op = inprog[i];
         var t = op.transaction;
-        if (!isDoc(t)) return;
+        if (!isDoc(t)) continue;
         var key = (op.lsid && op.lsid.id != null ? valText(op.lsid.id, true, o) : '') + '#' + valText((t.parameters || {}).txnNumber, true, o);
         var secs = (toNum(t.timeOpenMicros) || 0) / 1e6;
         if (!seen[key] && secs >= th.txns[0]) long.push(secs);
         seen[key] = true;
-      });
+      }
       var max = long.reduce(function (mx, x) { return Math.max(mx, x); }, 0);
       add('txns', long.length ? 'WARN' : 'OK', ck.txns(long.length, durText(max), secText(th.txns[0], cfg.lang)), long.length ? 'mt.txns({secs: ' + th.txns[0] + '})' : '');
-    });
-    run('builds', function () {
+    } catch (e) { ckFail('txns', e); }
+    try {
       needOps();
       var keys = {};
-      inprog.forEach(function (op) { if (/index build/i.test(String(op.msg || ''))) keys[buildNs(op) + '|' + ((op.command || {}).indexes || []).map(function (i) { return i.name; }).join(',')] = true; });
+      for (var j = 0; j < inprog.length; j++) { var op = inprog[j]; if (/index build/i.test(String(op.msg || ''))) keys[buildNs(op) + '|' + pluck(((op.command || {}).indexes || []), 'name').join(',')] = true; }
       var n = Object.keys(keys).length;
       add('builds', n ? 'INFO' : 'OK', ck.count(n), n ? 'mt.builds()' : '');
-    });
-    run('ttlMon', function () {
+    } catch (e) { ckFail('builds', e); }
+    try {
       var on = runCmd(a, { getParameter: 1, ttlMonitorEnabled: 1 }).ttlMonitorEnabled;
       add('ttlMon', on === false ? 'WARN' : 'OK', on === false ? ck.stopped : ck.running, on === false ? ck.adv.ttlMon : '');
-    });
+    } catch (e) { ckFail('ttlMon', e); }
     // 列不出库时，逐库的检查都是 UNKNOWN，不能当成“没有用户库”
     var dbsList = [], dbsErr = null;
     try { dbsList = userDbs({ d: null }); } catch (e) { dbsErr = errText(e); }
     var needDbs = function () { if (dbsErr !== null) throw new Error(dbsErr); };
-    run('profiler', function () {
+    try {
       needDbs();
       var tk = newTrack(), to = withTrack(tk), l2 = [];
       dbsList.forEach(function (d) {
@@ -3140,7 +3214,7 @@
         if (p && p.was === 2) l2.push(d.getName());
       });
       finish('profiler', tk, { kinds: ['prof'], n: dbsList.length, dbUnit: true }, l2.length ? 'WARN' : 'OK', ck.level2(l2), l2.length ? ck.adv.profiler : '');
-    });
+    } catch (e) { ckFail('profiler', e); }
     var scanNote = '';
     if (!o.quick) {
       // 逐个集合的四项共用一次遍历：每个集合 getIndexes、$collStats 各查一次，$indexStats 只在运行满 7 天时查；
@@ -3169,46 +3243,50 @@
         }
         scanNote = ' ' + ck.scanned(cnt.all, inv.length);
       } catch (e) {
-        perColl.forEach(function (k) {
-          if (k === 'unusedIdx' && young) add(k, 'INFO', ck.young(durText(ss.uptime)), 'mt.unusedIdx()');
-          else add(k, 'UNKNOWN', errText(e).slice(0, 80), '');
-        });
+        for (var i2 = 0; i2 < perColl.length; i2++) {
+          var k3 = perColl[i2];
+          if (k3 === 'unusedIdx' && young) add(k3, 'INFO', ck.young(durText(ss.uptime)), 'mt.unusedIdx()');
+          else add(k3, 'UNKNOWN', errText(e).slice(0, 80), '');
+        }
         inv = null;
       }
       if (inv) {
         var notSys = function (ns) { return !/^[^.]*\.system\./.test(ns); };
-        run('ttlOverdue', function () {
+        try {
           var od = ttlRowsAll.filter(function (x) { return x.overdueSecs !== '' && x.overdueSecs > th.ttlOverdue[0]; });
           var max = od.reduce(function (mx, x) { return Math.max(mx, x.overdueSecs); }, 0);
           finish('ttlOverdue', tk, { kinds: ['list', 'ix', 'ttl'], n: cnt.ttl }, od.length ? 'WARN' : 'OK', ck.ttlOverdue(od.length, durText(max), secText(th.ttlOverdue[0], cfg.lang)), od.length ? 'mt.ttl()' : '');
-        });
-        run('dupIdx', function () {
+        } catch (e) { ckFail('ttlOverdue', e); }
+        try {
           var bytes = dup.reduce(function (s0, x) { return s0 + x.w; }, 0);
           finish('dupIdx', tk, { kinds: ['list', 'ix'], n: cnt.idx, scope: notSys }, dup.length ? 'WARN' : 'OK', dup.length ? ck.sizeOf(dup.length, sizeText(bytes)) : ck.none, dup.length ? 'mt.dupIdx()' : '');
-        });
-        run('unusedIdx', function () {
-          if (young) { add('unusedIdx', 'INFO', ck.young(durText(ss.uptime)), 'mt.unusedIdx()'); return; }
-          // unique / ttl 在干活，分片键索引删不掉，计数不满 7 天的还说不准：都不算
-          var cand = unused.filter(function (x) { return !x.ix.unique && x.ix.expireAfterSeconds == null && !x.shard; });
-          var u = cand.filter(function (x) { return !x.young; }), yn = cand.length - u.length;
-          var bytes = u.reduce(function (s0, x) { return s0 + x.w; }, 0);
-          finish('unusedIdx', tk, { kinds: ['list', 'ix', 'use'], n: cnt.idx, scope: notSys }, u.length ? 'WARN' : 'OK',
-            u.length ? ck.sizeOf(u.length, sizeText(bytes)) : yn ? ck.unusedYoung(yn) : ck.none, u.length ? ck.adv.unused(verAtLeast(ss.version, 4, 4)) : '');
-        });
-        run('frag', function () {
+        } catch (e) { ckFail('dupIdx', e); }
+        try {
+          if (young) add('unusedIdx', 'INFO', ck.young(durText(ss.uptime)), 'mt.unusedIdx()');
+          else {
+            // unique / ttl 在干活，分片键索引删不掉，计数不满 7 天的还说不准：都不算
+            var cand = unused.filter(function (x) { return !x.ix.unique && x.ix.expireAfterSeconds == null && !x.shard; });
+            var u = cand.filter(function (x) { return !x.young; }), yn = cand.length - u.length;
+            var ubytes = u.reduce(function (s0, x) { return s0 + x.w; }, 0);
+            finish('unusedIdx', tk, { kinds: ['list', 'ix', 'use'], n: cnt.idx, scope: notSys }, u.length ? 'WARN' : 'OK',
+              u.length ? ck.sizeOf(u.length, sizeText(ubytes)) : yn ? ck.unusedYoung(yn) : ck.none, u.length ? ck.adv.unused(verAtLeast(ss.version, 4, 4)) : '');
+          }
+        } catch (e) { ckFail('unusedIdx', e); }
+        try {
           var bad = fragTotal > 0 && reuse / fragTotal * 100 > th.frag[0] && reuse > th.fragMinGB[0] * 1073741824;
           finish('frag', tk, { kinds: ['list', 'cs'], n: cnt.all }, bad ? 'WARN' : 'OK', ck.frag(sizeText(reuse), sizeText(fragTotal), pctText(reuse, fragTotal)), bad ? ck.adv.frag : '');
-        });
+        } catch (e) { ckFail('frag', e); }
       }
     }
-    rows.forEach(function (x) { counts[x.status] = (counts[x.status] || 0) + 1; });
+    for (var n2 = 0; n2 < rows.length; n2++) { var x = rows[n2]; counts[x.status] = (counts[x.status] || 0) + 1; }
     var shown = o.issues ? rows.filter(function (x) { return x.status === 'WARN' || x.status === 'CRIT' || x.status === 'UNKNOWN'; }) : rows;
     if (shown.length) {
       renderRows(shown, o, out, false, shown.length);
       out.pop();   // 去掉 "N rows in set"
     } else out.push(ck.noIssue);
     if (thChanged.length) out.push(ck.th.custom(thChanged));
-    out.push(ck.summary(counts) + (o.quick ? ' ' + ck.quick : scanNote));
+    for (var stList = [], stOrder = ['CRIT', 'WARN', 'UNKNOWN', 'OK', 'INFO', 'SKIP'], si = 0; si < stOrder.length; si++) if (counts[stOrder[si]]) stList.push(stOrder[si] + ' ' + counts[stOrder[si]]);
+    out.push(ck.summary(stList) + (o.quick ? ' ' + ck.quick : scanNote));
     emit(out);
   }
 
@@ -3255,14 +3333,15 @@
     if (name != null && name !== '') return cmdHelp(name);
     var m = M(), out = [], o = makeOpts({ table: true, maxCol: 0 });
     var sig = {};
-    CMDS.forEach(function (c) { sig[c[2]] = c; });
-    CMD_GROUPS.forEach(function (g, gi) {
+    for (var i = 0; i < CMDS.length; i++) { var c = CMDS[i]; sig[c[2]] = c; }
+    for (var j = 0; j < CMD_GROUPS.length; j++) {
+      var g = CMD_GROUPS[j], gi = j;
       if (gi) out.push('');
       out.push(paint(o, CYAN, '── ' + m.groups[g[0]] + ' ──'));
       var rows = g[1].map(function (k) { return { command: sig[k][0], mysql: sig[k][1], description: m.cmdDesc[k] }; });
       renderRows(rows, o, out, false, rows.length);
       out.pop();   // 去掉 "N rows in set"
-    });
+    }
     out.push('', m.cmdsNote, m.cmdsMore);
     emit(out);
   }
@@ -3275,11 +3354,12 @@
     var d = HELP_DOC[hit], h = d[lang], out = [];
     var pad = function (rows, sep) {
       var w = 0;
-      rows.forEach(function (r) { if (dw(r[0]) <= 46) w = Math.max(w, dw(r[0])); });
-      rows.forEach(function (r) {
-        if (dw(r[0]) > 46) { out.push('  ' + r[0]); out.push('  ' + ' '.repeat(w) + '  ' + sep + r[1]); }
-        else out.push('  ' + padR(r[0], w) + '  ' + sep + r[1]);
-      });
+      for (var i = 0; i < rows.length; i++) { var r = rows[i]; if (dw(r[0]) <= 46) w = Math.max(w, dw(r[0])); }
+      for (var j = 0; j < rows.length; j++) {
+        var r2 = rows[j];
+        if (dw(r2[0]) > 46) { out.push('  ' + r2[0]); out.push('  ' + ' '.repeat(w) + '  ' + sep + r2[1]); }
+        else out.push('  ' + padR(r2[0], w) + '  ' + sep + r2[1]);
+      }
     };
     out.push(paint(o, BOLD, 'mt.' + hit + '() — ' + h.t) + '    MySQL: ' + d.mysql, '');
     out.push(paint(o, CYAN, m.hd.usage));
