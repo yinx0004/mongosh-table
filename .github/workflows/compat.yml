@@ -41,7 +41,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # macos-latest 现在是 macos-26，经常排不到机器、15 分钟后被取消；固定用 macos-15（也是 Apple 芯片）
+        os: [ubuntu-latest, macos-15, windows-latest]
         mongosh: ['1.8.0', '2.14.2']
     env:
       MONGOTAB_LANG: zh_CN.UTF-8
