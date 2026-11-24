@@ -386,13 +386,14 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 +--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Replication ──
-+-------------+-------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command     | mysql             | description                                                                                                                                                                                                                         |
-+-------------+-------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.repl()   | SHOW SLAVE STATUS | Replica set members, replication lag (seconds), sync source                                                                                                                                                                         |
-| mt.rsconf() | SHOW SLAVE HOSTS  | Replica set configuration (rs.conf()): each member's priority, votes, hidden, delay, tags and current state, election settings, default read/write concern; notes an even number of voters, arbiters, and delayed members that vote |
-| mt.oplog()  | SHOW BINARY LOGS  | Oplog size and how much time it covers                                                                                                                                                                                              |
-+-------------+-------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++-----------------+-------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command         | mysql             | description                                                                                                                                                                                                                         |
++-----------------+-------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.repl()       | SHOW SLAVE STATUS | Replica set members, replication lag (seconds), sync source                                                                                                                                                                         |
+| mt.rsconf()     | SHOW SLAVE HOSTS  | Replica set configuration (rs.conf()): each member's priority, votes, hidden, delay, tags and current state, election settings, default read/write concern; notes an even number of voters, arbiters, and delayed members that vote |
+| mt.oplog()      | SHOW BINARY LOGS  | Oplog size and how much time it covers                                                                                                                                                                                              |
+| mt.shards('db') | sh.status()       | Sharded cluster (on a mongos): balancer, each shard's draining state, zones, chunks, data size and the databases it is primary for, each sharded collection's key and chunk distribution; pass 'db' for one database's collections  |
++-----------------+-------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 All accept t() options such as {cols: ...} or {vertical: true}; mt.config({showCmd: false}) hides the native command
 mt.help('ps') shows the detailed usage, options and output columns of one command
@@ -440,7 +441,7 @@ All of them:
 - **Are read-only**: they never change settings; `mt.slow()` does not turn the profiler on either.
 - **Tell logical from disk sizes**: columns with `logical` in the name are the uncompressed data size (BSON), `disk` is what it actually takes on disk (compressed by WiredTiger), and `cached` is what it takes in the in-memory cache (uncompressed). The three can differ several times over for the same data.
 - **Need monitoring privileges**, such as the `clusterMonitor` role. Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, or `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` on a mongos, they print a one-line explanation instead of throwing.
-- **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version; sharded clusters (mongos) are not tested yet.
+- **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version. Through a mongos, CI tests `mt.shards()`, plus `mt.status()` and `mt.vars()` (they work) and `mt.check()`, `mt.engine()`, `mt.qstats()`, `mt.profile()`, `mt.rsconf()` (they print a one-line explanation); the other commands are not tested through a mongos yet.
 
 ### mt.check(): health check
 
@@ -1467,6 +1468,63 @@ Note: delayed members can vote (db3:27017): w: 'majority' writes may wait for th
 - The delay field is `secondaryDelaySecs` since 5.0 and `slaveDelay` before; both show as `delay`.
 - Replica sets only; on a standalone or a mongos it prints a one-line explanation. For each member's replication lag, use `mt.repl()`.
 
+### mt.shards(): sharded cluster
+
+Like `sh.status()`, as two tables: the shards, and the chunk distribution of each sharded collection. Needs a mongos.
+
+```js
+mt.shards()          // balancer, shards, every sharded collection
+mt.shards('shop')    // one database's sharded collections; a db object works too
+```
+
+| Field | Meaning |
+|---|---|
+| header | `balancer` (mode, noting a round in progress), `activeWindow` (only if set), `chunkSizeMB` (only if set), number of shards and sharded collections |
+| shards: `shard` / `host` | shard name, replica set address |
+| `draining` | `true`: being drained after removeShard |
+| `zones` | zones the shard belongs to |
+| `chunks` / `size` | chunks on the shard; data size (6.0.3+, from `$shardedDataDistribution`) |
+| `primaryFor` | databases whose primary shard it is (unsharded collections live there) |
+| sharded collections: `ns` / `key` / `unique` | collection, shard key, whether it is unique |
+| `chunks` / `distribution` | total chunks; chunks per shard (with data size in parentheses on 6.0.3+) |
+| `jumbo` / `orphans` | jumbo chunks; orphaned documents (6.0.3+, left behind by migrations and not yet deleted) |
+
+Below is a cluster of 3 shards: the balancer is off, `sh3` is draining, and `shop.orders` has just moved two chunks to `sh2`, leaving 2000 orphaned documents on `sh1` waiting to be cleaned up:
+
+```
+> mt.shards()
+-- listShards, balancerStatus, config.settings / databases / collections / chunks, $shardedDataDistribution
+          balancer: off
+            shards: 3
+shardedCollections: 2
+
+── shards ──
++-------+------------------+----------+-------+--------+----------+------------+
+| shard | host             | draining | zones | chunks | size     | primaryFor |
++-------+------------------+----------+-------+--------+----------+------------+
+| sh1   | sh1/db-sh1:27017 |          |       |      4 | 134.8 KB | shop       |
+| sh2   | sh2/db-sh2:27017 |          | EU    |      6 | 134.8 KB | crm        |
+| sh3   | sh3/db-sh3:27017 | true     |       |      0 | 0 B      |            |
++-------+------------------+----------+-------+--------+----------+------------+
+3 rows in set
+
+── sharded collections ──
++-------------+-----------------+--------+------------------------------------+---------+
+| ns          | key             | chunks | distribution                       | orphans |
++-------------+-----------------+--------+------------------------------------+---------+
+| shop.orders | {customerId: 1} |      4 | sh1 2 (134.8 KB), sh2 2 (134.8 KB) | 2000    |
+| shop.events | {_id: hashed}   |      6 | sh1 2 (29 B), sh2 4 (58 B)         |         |
++-------------+-----------------+--------+------------------------------------+---------+
+2 rows in set
+Note: the balancer is off: chunks are not migrated, so data can drift out of balance; turn it on with sh.startBalancer()
+Note: sh3 draining (after removeShard): the shard cannot be removed until its chunks move off; nothing moves while the balancer is off
+```
+
+- A note is printed at the end when the balancer is off, when a shard is draining, or when there are jumbo chunks.
+- Since 6.0.3 the balancer balances data size per shard rather than chunk counts, so uneven chunk counts are not necessarily a problem; look at `size`.
+- Chunks are matched to collections by uuid since 5.0 and by ns before; both are handled.
+- Needs a mongos; on a mongod it prints a one-line explanation.
+
 ### mt.dbs(): database sizes
 
 Like `SHOW DATABASES`. It runs `listDatabases`, sorts by name and ends with the total. `disk` is disk usage (`sizeOnDisk`).
@@ -2278,7 +2336,7 @@ Every PR and every push to main runs [test/compat.js](test/compat.js) against a 
 - mongosh: MongoDB 4.4, 5.0, 6.0, 7.0 and 8.0, each with mongosh 1.8.0 and the newest 2.x; MongoDB 4.0 with mongosh 1.8.0 and 1.10.6 (mongosh 2.x cannot connect to 4.0). 12 jobs.
 - Legacy mongo shell: MongoDB 3.6, 4.0, 4.2, 4.4 and 5.0, each with its own `mongo` against a server of the same version. 5 jobs.
 
-All on single-node replica sets. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
+All on single-node replica sets. [test/shard.js](test/shard.js) also runs on a sharded cluster (config server, 3 shards, mongos; see [test/shard.sh](test/shard.sh)) with MongoDB 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0), 5.0, 7.0 and 8.0 (mongosh 2.x): 5 jobs. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
 
 To run them locally (needs Docker):
 
@@ -2295,6 +2353,12 @@ test/run.sh mongo:4.4 mongo:6.0.4
 # images without mongosh use the legacy mongo; where both exist, pick it with MONGO_SHELL=mongo
 test/run.sh mongo:4.0
 MONGO_SHELL=mongo test/run.sh mongo:5.0
+```
+
+```bash
+# on a sharded cluster
+test/shard.sh mongo:7.0
+MONGO_SHELL=mongo test/shard.sh mongo:3.6
 ```
 
 ```bash
