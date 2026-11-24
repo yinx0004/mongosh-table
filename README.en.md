@@ -346,6 +346,7 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 | mt.status({interval})        | SHOW GLOBAL STATUS                   | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                                        |
 | mt.engine({interval})        | SHOW ENGINE INNODB STATUS            | Storage engine (WiredTiger): cache usage, dirty data, eviction, checkpoints, read/write tickets, journal and disk I/O; interval = seconds to sample, 0 = totals since startup                                                                         |
 | mt.host({all})               | SHOW VARIABLES LIKE 'version%'       | Machine and process: CPU, memory, OS, open files limit, mongod version and build, storage engine, startup options; all lists every startup option                                                                                                     |
+| mt.mem()                     | sys.memory_global_by_current_bytes   | Where memory goes: resident memory split into the WiredTiger cache, other allocations, free memory tcmalloc keeps and memory outside tcmalloc; notes memory running out, an oversized cache, much dirty data and free memory not returned to the OS   |
 | mt.vars('pattern')           | SHOW VARIABLES                       | Runtime parameters (getParameter): name, current value, whether it can be changed at runtime (4.2+); filter with text, a wildcard or a regex, e.g. mt.vars('ttl')                                                                                     |
 | mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                     | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                                  |
 | mt.conns()                   | PROCESSLIST GROUP BY host            | Connections per client IP                                                                                                                                                                                                                             |
@@ -444,7 +445,7 @@ All of them:
 - **Are read-only**: they never change settings; `mt.slow()` does not turn the profiler on either.
 - **Tell logical from disk sizes**: columns with `logical` in the name are the uncompressed data size (BSON), `disk` is what it actually takes on disk (compressed by WiredTiger), and `cached` is what it takes in the in-memory cache (uncompressed). The three can differ several times over for the same data.
 - **Need monitoring privileges**, such as the `clusterMonitor` role. Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, or `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` on a mongos, they print a one-line explanation instead of throwing.
-- **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version. Through a mongos, CI tests `mt.shards()`, `mt.balancer()` and `mt.pool()` (including a shard that cannot be reached), plus `mt.status()` and `mt.vars()` (they work) and `mt.check()`, `mt.engine()`, `mt.qstats()`, `mt.profile()`, `mt.rsconf()` (they print a one-line explanation); the other commands are not tested through a mongos yet.
+- **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version. Through a mongos, CI tests `mt.shards()`, `mt.balancer()` and `mt.pool()` (including a shard that cannot be reached), plus `mt.status()`, `mt.vars()` and `mt.mem()` (they work) and `mt.check()`, `mt.engine()`, `mt.qstats()`, `mt.profile()`, `mt.rsconf()` (they print a one-line explanation); the other commands are not tested through a mongos yet.
 
 ### mt.check(): health check
 
@@ -2303,6 +2304,57 @@ Note: application threads evict 12.8 pages per second: the cache is under pressu
 - `/s` values are the difference between the two samples divided by the interval; with `{interval: 0}` there is no `/s` and the values are totals since startup.
 - Since 8.0 the checkpoint statistics moved to `wiredTiger.checkpoint` and the tickets to `serverStatus().queues.execution`; both are handled per version.
 - Must run on a mongod; a mongos has no storage engine, so it prints a one-line explanation. `mt.status()` also shows the three cache figures, and `mt.cache()` shows how much of the cache each collection uses.
+
+### mt.mem(): where memory goes
+
+Like MySQL's `sys.memory_global_by_current_bytes`: mongod's resident memory (RSS) split into parts, and how big each one is. Look here first when resident memory is far above the cache size, or a container is close to being OOM-killed.
+
+```js
+mt.mem()
+```
+
+The lines on top: `memory` is the machine's memory, `memLimit` the container limit when there is one, `resident` resident memory and `cacheMax` the cache size (in brackets, their share of the memory available), `virtual` virtual memory, `connections` current connections. The table splits resident memory into:
+
+| Row | Meaning |
+|---|---|
+| `WiredTiger cache` | data in the cache now; `detail` has its share of the cache size and the share of dirty data |
+| `other in use` | memory mongod allocated outside the cache: connections, query execution, sorts / aggregations, index builds, metadata...; from 8.0 the plan cache too |
+| `tcmalloc free` | memory already freed but kept by the allocator, tcmalloc, for reuse: page heap plus caches |
+| `outside tcmalloc` | resident memory minus the rows above: thread stacks, program code, allocator metadata... |
+| `released to OS` | memory tcmalloc returned to the OS; it uses no physical memory and has no share |
+
+`share` is the share of resident memory.
+
+Below is MongoDB 7.0 in a container limited to 6 GB, after loading about 2.4 GB of data and dropping one of the collections: the cache has room again but resident memory did not go down; the difference is free memory tcmalloc keeps, as the last line notes.
+
+```
+> mt.mem()
+-- db.serverStatus({tcmalloc: 1}) → mem, tcmalloc, wiredTiger.cache, connections; hostInfo
+     memory: 15.7 GB
+   memLimit: 6.0 GB
+   resident: 2.2 GB (36.5%)
+    virtual: 2.6 GB
+   cacheMax: 2.5 GB (41.7%)
+connections: 4
+
+── where resident memory goes ──
++------------------+----------+-------+------------------------------------------------+
+| part             | size     | share | detail                                         |
++------------------+----------+-------+------------------------------------------------+
+| WiredTiger cache | 769.0 MB | 34.3% | 30.0% of max, dirty 0.0%                       |
+| other in use     |  69.0 MB |  3.1% | 4 connections, queries, sorts, index builds... |
+| tcmalloc free    |   1.3 GB | 61.6% | page heap 1.3 GB, caches 4.4 MB                |
+| outside tcmalloc |  22.9 MB |  1.0% | thread stacks, code, allocator metadata...     |
+| released to OS   | 960.0 KB |       | returned to the OS, not resident               |
++------------------+----------+-------+------------------------------------------------+
+5 rows in set
+Note: tcmalloc holds 1.3 GB of free memory not returned to the OS (61.6%): common after deleting much data, large queries or a burst of connections; resident memory looks big but it is not a leak; tcmallocReleaseRate sets how fast it is returned
+```
+
+- Runs `serverStatus({tcmalloc: 1})` and `hostInfo`. 8.0+ uses the new tcmalloc with different field names; they are mapped to the same rows.
+- Memory available is the container limit when there is one, otherwise the machine's memory; before 4.4 container limits cannot be seen.
+- A note is printed at the end when resident memory is over 80% of the memory available, the cache size is over 80% of it, dirty data is over 20% of the cache size, tcmalloc keeps more than 1 GB free and over 20% of resident memory, or allocations outside the cache are more than 1 GB and over half of resident memory.
+- A mongos has no WiredTiger cache, only the other rows. To see which collections fill the cache, use `mt.cache()`.
 
 ### mt.cache(): what is in the cache
 

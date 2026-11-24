@@ -346,6 +346,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 | mt.status({interval})        | SHOW GLOBAL STATUS                   | 版本、角色、ops/s、连接、缓存等关键指标                                                                                                                              |
 | mt.engine({interval})        | SHOW ENGINE INNODB STATUS            | 存储引擎（WiredTiger）：缓存用量、脏数据、驱逐、检查点、读写票据、日志和磁盘读写；interval 采样秒数，0 = 启动以来累计                                                |
 | mt.host({all})               | SHOW VARIABLES LIKE 'version%'       | 机器和进程：CPU、内存、操作系统、文件句柄数、mongod 版本和编译信息、存储引擎、启动参数；all 列出全部启动参数                                                         |
+| mt.mem()                     | sys.memory_global_by_current_bytes   | 内存都花在哪：常驻内存分成 WiredTiger 缓存、缓存以外的分配、tcmalloc 留着的空闲和 tcmalloc 以外；提示内存快满、缓存设得太大、脏数据多、空闲内存没还给系统            |
 | mt.vars('pattern')           | SHOW VARIABLES                       | 运行参数（getParameter）：名字、当前值、能不能在运行时改（4.2 起）；可传关键字、通配符或正则过滤，如 mt.vars('ttl')                                                  |
 | mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                     | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                                      |
 | mt.conns()                   | PROCESSLIST GROUP BY host            | 按客户端 IP 统计连接数                                                                                                                                               |
@@ -444,7 +445,7 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
 - **只读**：不会改任何设置，`mt.slow()` 也不会打开 profiler。
 - **大小分逻辑和磁盘**：列名里带 `logical` 的是未压缩的数据量（BSON 大小），带 `disk` 的是磁盘上实际占的（WiredTiger 压缩后），带 `cached` 的是在内存缓存里占的（解压后）。同一份数据三者可以差好几倍。
 - **权限**：需要监控类权限，如 `clusterMonitor` 角色。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()`、在 mongos 上执行 `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` 时，只打印一行说明，不抛异常。
-- **版本**：老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过。经 mongos 测过的有 `mt.shards()`、`mt.balancer()`、`mt.pool()`（包括有分片连不上时），以及 `mt.status()`、`mt.vars()`（能用）和 `mt.check()`、`mt.engine()`、`mt.qstats()`、`mt.profile()`、`mt.rsconf()`（打印一行说明）；其余命令经 mongos 还没测过。
+- **版本**：老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过。经 mongos 测过的有 `mt.shards()`、`mt.balancer()`、`mt.pool()`（包括有分片连不上时），以及 `mt.status()`、`mt.vars()`、`mt.mem()`（能用）和 `mt.check()`、`mt.engine()`、`mt.qstats()`、`mt.profile()`、`mt.rsconf()`（打印一行说明）；其余命令经 mongos 还没测过。
 
 ### mt.check()：一键体检
 
@@ -2303,6 +2304,57 @@ checkpoint.running: false
 - 带 `/s` 的是两次采样的差除以间隔；`{interval: 0}` 时没有 `/s`，是启动以来的累计值。
 - 8.0 起检查点的统计挪到了 `wiredTiger.checkpoint`，票据挪到了 `serverStatus().queues.execution`，这两处都已经按版本处理。
 - 只能连 mongod；mongos 上没有存储引擎，只打印一行说明。`mt.status()` 里也有缓存的三项，`mt.cache()` 看各集合占了多少缓存。
+
+### mt.mem()：内存都花在哪
+
+相当于 MySQL 的 `sys.memory_global_by_current_bytes`：mongod 的常驻内存（RSS）分成几部分，各占多少。常驻内存比缓存上限大很多、容器快被 OOM 杀掉时，先看这个。
+
+```js
+mt.mem()
+```
+
+上面几行：`memory` 机器内存，`memLimit` 容器限制了内存时的上限，`resident` 常驻内存和 `cacheMax` 缓存上限（括号里是占可用内存的比例），`virtual` 虚拟内存，`connections` 当前连接数。下面的表把常驻内存分成：
+
+| 行 | 说明 |
+|---|---|
+| `WiredTiger cache` | 缓存里现在的数据；`detail` 里是占缓存上限的比例和脏数据的比例 |
+| `other in use` | mongod 分配了、但不在缓存里的内存：连接、查询执行、排序 / 聚合、索引构建、元数据等；8.0 起还列出计划缓存 |
+| `tcmalloc free` | 已经释放、但内存分配器 tcmalloc 还留着备用的内存：页堆加各级缓存 |
+| `outside tcmalloc` | 常驻内存减去上面几项：线程栈、程序代码、分配器的元数据等 |
+| `released to OS` | tcmalloc 已经还给系统的内存，不占物理内存，不算比例 |
+
+`share` 是占常驻内存的比例。
+
+下面是 MongoDB 7.0、容器限制 6 GB 内存，灌了约 2.4 GB 数据、又删掉其中一个集合之后：缓存空出来了，常驻内存却没降，多出来的是 tcmalloc 留着的空闲内存，最后一行提示了这一点。
+
+```
+> mt.mem()
+-- db.serverStatus({tcmalloc: 1}) → mem, tcmalloc, wiredTiger.cache, connections; hostInfo
+     memory: 15.7 GB
+   memLimit: 6.0 GB
+   resident: 2.2 GB (36.5%)
+    virtual: 2.6 GB
+   cacheMax: 2.5 GB (41.7%)
+connections: 5
+
+── 常驻内存的去向 ──
++------------------+----------+-------+------------------------------------------+
+| part             | size     | share | detail                                   |
++------------------+----------+-------+------------------------------------------+
+| WiredTiger cache | 769.0 MB | 34.3% | 占上限 30.0%，脏数据 0.0%                |
+| other in use     |  69.1 MB |  3.1% | 连接 5 个、查询、排序 / 聚合、索引构建等 |
+| tcmalloc free    |   1.3 GB | 61.6% | 页堆 1.3 GB，各级缓存 4.5 MB             |
+| outside tcmalloc |  22.0 MB |  1.0% | 线程栈、程序代码、分配器元数据等         |
+| released to OS   |   1.1 MB |       | 已还给系统，不占物理内存                 |
++------------------+----------+-------+------------------------------------------+
+5 rows in set
+注意：tcmalloc 手里有 1.3 GB 空闲内存没还给系统（占 61.6%）：常见于删了大量数据、跑过大查询或连接数突增之后，常驻内存看着大但不是泄漏；归还的快慢由参数 tcmallocReleaseRate 控制
+```
+
+- 执行的是 `serverStatus({tcmalloc: 1})` 和 `hostInfo`。8.0 起用的是新版 tcmalloc，字段名不同，这里都换算成同样几项。
+- 可用内存：容器限制了内存时按限制算，否则按机器内存；4.4 之前看不到容器的限制。
+- 这些情况会在最后提示：常驻内存超过可用内存的 80%；缓存上限超过可用内存的 80%；脏数据超过缓存上限的 20%；tcmalloc 留着超过 1 GB、且超过常驻内存 20% 的空闲；缓存以外的分配超过 1 GB、且超过常驻内存的一半。
+- mongos 上没有 WiredTiger 缓存，只有后面几行。各集合占了多少缓存看 `mt.cache()`。
 
 ### mt.cache()：谁占着缓存
 

@@ -70,6 +70,12 @@ run('mongos: mt.balancer help', function () { mt.help('balancer'); }, ['mt.balan
 run('mongos: mt.status', function () { mt.status({ interval: 0, cols: 'role' }); }, ['role: mongos']);
 run('mongos: mt.vars', function () { mt.vars('ttlMonitor'); }, ['-- db.adminCommand({getParameter: ']);
 run('mongos: mt.users', function () { mt.users(); }, ['-- db.adminCommand({usersInfo: {forAllDBs: true}})', 'authorization: disabled', '── 用户 ──', '注意：没开认证']);
+// mongos 上没有 WiredTiger 缓存：没有 cacheMax 和缓存那一行，tcmalloc 的几行照常
+run('mongos: mt.mem', function () {
+  var out = capOut(function () { mt.mem(); });
+  print(/resident: /.test(out) && !/cacheMax/.test(out) && !/WiredTiger cache/.test(out) && /\| other in use +\|/.test(out) && /\| tcmalloc free +\|/.test(out) ? 'no cache, tcmalloc rows' : out);
+  print(/注意：/.test(out) ? out : 'no notes');
+}, ['no cache, tcmalloc rows', 'no notes']);
 run('mongos: mongod-only commands', function () {
   ['check', 'engine', 'qstats', 'profile', 'rsconf'].forEach(function (k) {
     var out = capOut(function () { mt[k]({ interval: 0 }); });
