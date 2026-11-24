@@ -1592,6 +1592,41 @@ Note: throttling now: the majority commit point is 40.1s behind, more than 5s; t
 - A note is printed at the end when this is not the primary, flow control is off, it is throttling now (listing voting members more than `threshold` behind), or it has throttled since startup.
 - Replica sets only; on a standalone or a mongos it prints one line.
 
+### mt.initialSync(): initial sync progress
+
+A new member, or one whose data was wiped, first copies all the data (initial sync), staying in STARTUP2 meanwhile. When STARTUP2 goes on for a long time or the disk keeps growing, this shows how far it has got. Like the progress of MySQL's CLONE plugin (`performance_schema.clone_status`).
+
+```js
+mt.initialSync()               // run on the member that is syncing
+mt.initialSync({all: true})    // every collection, not only the ones being copied
+```
+
+Connect to the member that is syncing (`mongosh "mongodb://host:port/?directConnection=true"`). On other members it only lists who is in initial sync.
+
+| Field | Meaning |
+|---|---|
+| `phase` | the step it is at: preparing, copying data (the collections being copied), applying the oplog from while it copied, this attempt done and finishing up, finished, or the sync source cannot be reached |
+| `syncSource` | the member it copies from |
+| `copied` / `remaining` | data copied / total, and the estimated time left (4.2+) |
+| `databases` / `collections` | databases and collections copied / total |
+| `oplogStart` / `oplogEnd` / `appliedOps` | the oplog range to catch up on, and how many entries were applied |
+| `oplogBuffer` | oplog entries in `local.temp_oplog_buffer` not applied yet: writes on the sync source during the copy are kept here |
+| `failedAttempts` | attempts of this initial sync that failed / the most allowed |
+| `unreachable` | time the sync source could not be reached (4.4+) |
+| `sinceStartup` | initial syncs completed, attempts failed and initial syncs failed since this node started |
+| databases / collections being copied | status, collections, documents, data size (4.2+), percent, seconds taken |
+| attempts so far | each attempt's seconds, result (why it failed) and sync source |
+
+```
+> mt.initialSync()
+x
+```
+
+- STARTUP2 that never ends: look at `phase` and the collections being copied first; a rising `failedAttempts` means it keeps failing and starting over, with the reasons under attempts so far.
+- A disk that keeps growing: besides the data being copied, writes on the sync source during the copy are kept in `local.temp_oplog_buffer` and applied only after the copy; with many writes and a slow copy it keeps growing, and a note is printed above 1 GB.
+- On 3.6 `initialSyncStatus` stays after the sync finishes and shows as finished; from 4.2 it is gone once done, leaving only the `sinceStartup` counts. Before 4.2 other members do not show a syncing member's sync source.
+- A note is printed at the end when attempts have failed (with the latest reason), the sync source cannot be reached now, the oplog buffer is over 1 GB, or other members are in initial sync.
+
 ### mt.shards(): sharded cluster
 
 Like `sh.status()`, as two tables: the shards, and the chunk distribution of each sharded collection. Needs a mongos.
@@ -2709,7 +2744,7 @@ Every PR and every push to main runs [test/compat.js](test/compat.js) against a 
 - mongosh: MongoDB 4.4, 5.0, 6.0, 7.0 and 8.0, each with mongosh 1.8.0 and the newest 2.x; MongoDB 4.0 with mongosh 1.8.0 and 1.10.6 (mongosh 2.x cannot connect to 4.0). 12 jobs.
 - Legacy mongo shell: MongoDB 3.6, 4.0, 4.2, 4.4 and 5.0, each with its own `mongo` against a server of the same version. 5 jobs.
 
-All on single-node replica sets. [test/shard.js](test/shard.js) also runs on a sharded cluster (config server, 3 shards, mongos; see [test/shard.sh](test/shard.sh)), followed by [test/shard-down.js](test/shard-down.js) with one shard stopped, with MongoDB 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0), 5.0, 7.0 and 8.0 (mongosh 2.x): 5 jobs. [test/auth.js](test/auth.js) runs against a mongod started with `--auth` (see [test/auth.sh](test/auth.sh); logged in as root and as a user that may not list users) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/flow.js](test/flow.js) runs on a two-member replica set (see [test/flow.sh](test/flow.sh): normal, throttled while the secondary is `fsyncLock`'ed, after it caught up, and on the secondary) with 4.2 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
+All on single-node replica sets. [test/shard.js](test/shard.js) also runs on a sharded cluster (config server, 3 shards, mongos; see [test/shard.sh](test/shard.sh)), followed by [test/shard-down.js](test/shard-down.js) with one shard stopped, with MongoDB 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0), 5.0, 7.0 and 8.0 (mongosh 2.x): 5 jobs. [test/auth.js](test/auth.js) runs against a mongod started with `--auth` (see [test/auth.sh](test/auth.sh); logged in as root and as a user that may not list users) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/flow.js](test/flow.js) runs on a two-member replica set (see [test/flow.sh](test/flow.sh): normal, throttled while the secondary is `fsyncLock`'ed, after it caught up, and on the secondary) with 4.2 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/isync.js](test/isync.js) runs while a new member goes through initial sync, held at each step with failpoints (see [test/isync.sh](test/isync.sh): part way through copying after two failed attempts, on the primary, just before it finishes, and after) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
 
 To run them locally (needs Docker):
 
@@ -2744,6 +2779,12 @@ MONGO_SHELL=mongo test/auth.sh mongo:3.6
 # flow control on a two-member replica set
 test/flow.sh mongo:7.0
 MONGO_SHELL=mongo test/flow.sh mongo:4.2
+```
+
+```bash
+# initial sync
+test/isync.sh mongo:7.0
+MONGO_SHELL=mongo test/isync.sh mongo:3.6
 ```
 
 ```bash
