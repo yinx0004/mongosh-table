@@ -89,7 +89,7 @@ jobs:
       - name: Run test/format.js
         run: test/format.sh mongo:${{ matrix.mongodb }}
 
-  # mt.shards(), mt.pool() and the mongos behaviour of the other commands, on a
+  # mt.shards(), mt.balancer(), mt.pool() and the mongos behaviour of the others, on a
   # throwaway sharded cluster (config server, three shards, mongos; see
   # test/shard.sh), then again with one shard stopped (test/shard-down.js).
   sharded:

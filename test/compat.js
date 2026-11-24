@@ -86,7 +86,7 @@ run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '─�
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
 var ALL_CMDS = ['host', 'latency', 'desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
-  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'pool'];
+  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'balancer', 'pool'];
 run('mt.help each command', function () {
   var bad = [];
   ['zh', 'en'].forEach(function (lang) {
@@ -99,7 +99,7 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 34 ok']);
+}, ['all 35 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
 run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'vars'、'engine'"]);
@@ -505,6 +505,7 @@ run('mt.rsconf', function () { mt.rsconf(); }, [
   'electionTimeoutMillis: 10000', '| id | host ', '| state   | priority | votes |', '| PRIMARY |        1 |     1 |', '1 row in set'
 ]);
 run('mt.shards not mongos', function () { mt.shards(); }, ['mt.shards() 要连 mongos（分片集群的路由）']);   // 分片集群的测试在 test/shard.js
+run('mt.balancer not mongos', function () { mt.balancer(); }, ['mt.balancer() 要连 mongos（分片集群的路由）']);
 // 单节点副本集通常没有连出去的连接：要么是空表的提示，要么是表；不该有提示
 run('mt.pool', function () {
   var out = capOut(function () { mt.pool(); });
