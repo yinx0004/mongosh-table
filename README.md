@@ -390,16 +390,17 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 +--------------------+----------------------------------+-------------------------------------------------------------------------------------------------------------+
 
 ── 复制 ──
-+-------------------------------+--------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                       | mysql                          | description                                                                                                                                                       |
-+-------------------------------+--------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.repl()                     | SHOW SLAVE STATUS              | 副本集成员状态、复制延迟（秒）、同步源                                                                                                                            |
-| mt.rsconf()                   | SHOW SLAVE HOSTS               | 副本集配置（rs.conf()）：每个成员的优先级、投票、隐藏、延迟、标签和现在的状态，选举设置、默认读写关注；提示偶数个投票成员、仲裁节点、有投票权的延迟成员           |
-| mt.flow({interval})           | Group Replication flow control | flow control：是否开着、是否正在限流、多数派落后多少、等了多久（每秒）、进入过几次限流；各成员落后多少；被拖住的操作和等待次数                                    |
-| mt.oplog()                    | SHOW BINARY LOGS               | oplog 大小和能覆盖多长时间                                                                                                                                        |
-| mt.shards('db')               | sh.status()                    | 分片集群（要连 mongos）：均衡器、各分片的排空、区域、块数、数据量、哪些库的主分片，各分片集合的分片键和块分布；可传 'db' 只看一个库的集合                         |
-| mt.balancer('ns', {hours, n}) | sh.status() migration results  | 均衡器和最近的块迁移：每次迁移的集合、从哪到哪、范围、文档数、耗时、结果，正在进行的迁移，均衡轮次；hours 看多久（默认 24），n 最多几条，ns 库或集合；要连 mongos |
-+-------------------------------+--------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++-------------------------------+--------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                       | mysql                                | description                                                                                                                                                       |
++-------------------------------+--------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.repl()                     | SHOW SLAVE STATUS                    | 副本集成员状态、复制延迟（秒）、同步源                                                                                                                            |
+| mt.rsconf()                   | SHOW SLAVE HOSTS                     | 副本集配置（rs.conf()）：每个成员的优先级、投票、隐藏、延迟、标签和现在的状态，选举设置、默认读写关注；提示偶数个投票成员、仲裁节点、有投票权的延迟成员           |
+| mt.flow({interval})           | Group Replication flow control       | flow control：是否开着、是否正在限流、多数派落后多少、等了多久（每秒）、进入过几次限流；各成员落后多少；被拖住的操作和等待次数                                    |
+| mt.initialSync({all})         | CLONE plugin progress (clone_status) | 初始同步的进度：同步源、阶段、已复制多少、剩余估算（4.2 起）、oplog 起止和缓冲、应用了多少、失败和重试；各库、正在复制的集合；all 列出所有集合                    |
+| mt.oplog()                    | SHOW BINARY LOGS                     | oplog 大小和能覆盖多长时间                                                                                                                                        |
+| mt.shards('db')               | sh.status()                          | 分片集群（要连 mongos）：均衡器、各分片的排空、区域、块数、数据量、哪些库的主分片，各分片集合的分片键和块分布；可传 'db' 只看一个库的集合                         |
+| mt.balancer('ns', {hours, n}) | sh.status() migration results        | 均衡器和最近的块迁移：每次迁移的集合、从哪到哪、范围、文档数、耗时、结果，正在进行的迁移，均衡轮次；hours 看多久（默认 24），n 最多几条，ns 库或集合；要连 mongos |
++-------------------------------+--------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 都可以加 t() 的选项，如 {cols: ...}、{vertical: true}；mt.config({showCmd: false}) 不打印原生命令
 mt.help('ps') 看某个命令的详细用法、选项和输出的每一列
@@ -1592,6 +1593,77 @@ laggedCount: 1
 - 这些情况会在最后提示：不是主节点；flow control 关着；正在限流（列出落后超过 `threshold` 的有投票权的成员）；启动以来限流过。
 - 只适用于副本集；单机、mongos 上只打印一行说明。
 
+### mt.initialSync()：初始同步的进度
+
+新成员加入、或者成员数据删了重新同步时，要先把数据整个复制一遍（初始同步），这期间状态是 STARTUP2。STARTUP2 很久不结束、磁盘一直在涨时，用它看同步到哪了。类似 MySQL CLONE 插件的进度（`performance_schema.clone_status`）。
+
+```js
+mt.initialSync()               // 连到正在同步的成员上执行
+mt.initialSync({all: true})    // 列出所有集合，不只是正在复制的
+```
+
+要连到正在同步的那个成员上（`mongosh "mongodb://主机:端口/?directConnection=true"`）。在其他成员上执行时，只列出谁在初始同步。
+
+| 字段 | 说明 |
+|---|---|
+| `phase` | 现在在哪一步：准备中、复制数据（正在复制的集合）、应用复制期间的 oplog、这一轮已经完成正在收尾、已完成，或者同步源连不上 |
+| `syncSource` | 从哪个成员复制 |
+| `copied` / `remaining` | 已复制 / 总数据量，以及剩余时间的估算（4.2 起） |
+| `databases` / `collections` | 已复制完的库和集合 / 总数 |
+| `oplogStart` / `oplogEnd` / `appliedOps` | 复制期间要补的 oplog 从哪到哪，已经应用了多少条 |
+| `oplogBuffer` | `local.temp_oplog_buffer` 里还没应用的 oplog：复制期间同步源上的写入先存在这里 |
+| `failedAttempts` | 这次初始同步已经失败的次数 / 最多允许的次数 |
+| `unreachable` | 连不上同步源的时间（4.4 起） |
+| `sinceStartup` | 这个节点启动以来完成了几次初始同步、失败了几次尝试、几次整体失败 |
+| 各库 / 正在复制的集合 | 状态、集合数、文档数、数据量（4.2 起）、百分比、用了几秒 |
+| 之前的尝试 | 每次尝试用了几秒、结果（失败的原因）、同步源 |
+
+下面是 MongoDB 7.0 上新成员 `db2` 从 `db1` 初始同步，复制到 `shop.orders` 一半时（用 failpoint 停在这一步）。`db1` 上一直有写入，它们先攒在 oplog 缓冲里，几秒内就有了 10 万条：
+
+```
+> mt.initialSync()
+-- db.adminCommand({replSetGetStatus: 1, initialSync: 1}).initialSyncStatus; serverStatus().metrics.repl.initialSync; local.temp_oplog_buffer
+         state: STARTUP2
+         phase: 复制数据：shop.orders
+    syncSource: db1:27017
+        method: logical
+       started: 2026-11-24 16:21:41.912
+       elapsed: 27s
+        copied: 194.2 MB / 258.3 MB (75.2%)
+     remaining: ~9s
+     databases: 3 / 4
+   collections: 15 / 16
+    oplogStart: 2026-11-24 16:21:42
+    appliedOps: 0
+   oplogBuffer: 95327 ops, 32.8 MB
+failedAttempts: 0 / 10
+  sinceStartup: completed 0, failedAttempts 0, failures 0
+
+── 各库 ──
++--------+---------+-------------+---------------------+------+
+| db     | status  | collections | size                | secs |
++--------+---------+-------------+---------------------+------+
+| admin  | done    | 2 / 2       |       229 B / 229 B |    0 |
+| config | done    | 10 / 10     |       332 B / 332 B |    0 |
+| crm    | done    | 1 / 1       |   20.3 MB / 20.3 MB |    0 |
+| shop   | copying | 2 / 3       | 173.9 MB / 238.0 MB |   25 |
++--------+---------+-------------+---------------------+------+
+4 rows in set
+
+── 正在复制的集合 ──
++-------------+---------+-----------------+---------------------+-------+---------+------+
+| ns          | status  | docs            | size                | pct   | indexes | secs |
++-------------+---------+-----------------+---------------------+-------+---------+------+
+| shop.orders | copying | 138217 / 200000 | 143.3 MB / 207.4 MB | 69.1% |       3 |   25 |
++-------------+---------+-----------------+---------------------+-------+---------+------+
+1 row in set
+```
+
+- STARTUP2 很久不结束：先看 `phase` 和正在复制的集合；`failedAttempts` 在涨说明在反复失败重来，原因在“之前的尝试”里。
+- 磁盘一直涨：除了复制的数据本身，复制期间同步源上的写入都先存在 `local.temp_oplog_buffer`，等数据复制完才应用；写入多、复制慢时它会越来越大，超过 1 GB 会提示。
+- 3.6 同步完后 `initialSyncStatus` 还保留着，显示为“已完成”；4.2 起完成后就没有了，只剩 `sinceStartup` 的计数。4.2 之前，在其他成员上看不到同步中成员的同步源。
+- 这些情况会在最后提示：已经失败过（列出最近一次的原因）；同步源现在连不上；oplog 缓冲超过 1 GB；其他成员正在初始同步。
+
 ### mt.shards()：分片集群
 
 相当于 `sh.status()`，排成两张表：各分片的情况，以及各分片集合的块分布。要连 mongos。
@@ -2709,7 +2781,7 @@ attr: {type: remove, ns: shop.orders, appName: mongosh 2.14.2, command: {q: {amo
 - mongosh：MongoDB 4.4、5.0、6.0、7.0、8.0 各配 mongosh 1.8.0 和 2.x 最新版；MongoDB 4.0 配 mongosh 1.8.0 和 1.10.6（mongosh 2.x 连不了 4.0）。共 12 组。
 - 老的 mongo shell：MongoDB 3.6、4.0、4.2、4.4、5.0，各用自带的 `mongo` 连同版本的服务器。共 5 组。
 
-都是单节点副本集。另外在一个分片集群（配置服务器、3 个分片、mongos，见 [test/shard.sh](test/shard.sh)）上跑 [test/shard.js](test/shard.js)，再停掉一个分片跑 [test/shard-down.js](test/shard-down.js)：MongoDB 3.6（老 `mongo`）、4.4（mongosh 1.8.0）、5.0、7.0、8.0（mongosh 2.x），共 5 组。在开了 `--auth` 的 mongod 上跑 [test/auth.js](test/auth.js)（见 [test/auth.sh](test/auth.sh)，以 root 和一个没有查看用户权限的用户登录）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。在一个两成员的副本集上跑 [test/flow.js](test/flow.js)（见 [test/flow.sh](test/flow.sh)：正常时、从节点 `fsyncLock` 后主节点限流时、从节点追上之后，以及在从节点上）：4.2（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。还跑 [test/format.js](test/format.js)（不连数据库，只测排版、`load()` 路径和 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量）：Linux、macOS、Windows 上的 mongosh 1.8.0 和 2.14.2，以及上面 5 个版本的老 `mongo`。
+都是单节点副本集。另外在一个分片集群（配置服务器、3 个分片、mongos，见 [test/shard.sh](test/shard.sh)）上跑 [test/shard.js](test/shard.js)，再停掉一个分片跑 [test/shard-down.js](test/shard-down.js)：MongoDB 3.6（老 `mongo`）、4.4（mongosh 1.8.0）、5.0、7.0、8.0（mongosh 2.x），共 5 组。在开了 `--auth` 的 mongod 上跑 [test/auth.js](test/auth.js)（见 [test/auth.sh](test/auth.sh)，以 root 和一个没有查看用户权限的用户登录）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。在一个两成员的副本集上跑 [test/flow.js](test/flow.js)（见 [test/flow.sh](test/flow.sh)：正常时、从节点 `fsyncLock` 后主节点限流时、从节点追上之后，以及在从节点上）：4.2（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。让一个新成员做初始同步，用 failpoint 停在各个阶段跑 [test/isync.js](test/isync.js)（见 [test/isync.sh](test/isync.sh)：前两次尝试失败后复制到一半、在主节点上、快完成时、完成后）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。还跑 [test/format.js](test/format.js)（不连数据库，只测排版、`load()` 路径和 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量）：Linux、macOS、Windows 上的 mongosh 1.8.0 和 2.14.2，以及上面 5 个版本的老 `mongo`。
 
 本地跑（需要 Docker）：
 
@@ -2744,6 +2816,12 @@ MONGO_SHELL=mongo test/auth.sh mongo:3.6
 # 两成员副本集上的 flow control 测试
 test/flow.sh mongo:7.0
 MONGO_SHELL=mongo test/flow.sh mongo:4.2
+```
+
+```bash
+# 初始同步的测试
+test/isync.sh mongo:7.0
+MONGO_SHELL=mongo test/isync.sh mongo:3.6
 ```
 
 ```bash
