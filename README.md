@@ -339,22 +339,23 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 ```
 > mt.cmds()
 ── 运行状态 ──
-+------------------------------+--------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                          | description                                                                                                                                                          |
-+------------------------------+--------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.check({quick, issues})    | mysqltuner / pt-summary        | 一键体检：复制、oplog、缓存、连接、长操作、长事务、TTL、冗余 / 没用的索引等，每项给 OK / WARN / CRIT / UNKNOWN 和建议；quick 跳过逐个集合的检查，issues 只看有问题的 |
-| mt.status({interval})        | SHOW GLOBAL STATUS             | 版本、角色、ops/s、连接、缓存等关键指标                                                                                                                              |
-| mt.engine({interval})        | SHOW ENGINE INNODB STATUS      | 存储引擎（WiredTiger）：缓存用量、脏数据、驱逐、检查点、读写票据、日志和磁盘读写；interval 采样秒数，0 = 启动以来累计                                                |
-| mt.host({all})               | SHOW VARIABLES LIKE 'version%' | 机器和进程：CPU、内存、操作系统、文件句柄数、mongod 版本和编译信息、存储引擎、启动参数；all 列出全部启动参数                                                         |
-| mt.vars('pattern')           | SHOW VARIABLES                 | 运行参数（getParameter）：名字、当前值、能不能在运行时改（4.2 起）；可传关键字、通配符或正则过滤，如 mt.vars('ttl')                                                  |
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST               | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                                      |
-| mt.conns()                   | PROCESSLIST GROUP BY host      | 按客户端 IP 统计连接数                                                                                                                                               |
-| mt.locks({all})              | sys.innodb_lock_waits          | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                                         |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX  | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                                |
-| mt.top({interval, ns})       | sys.schema_table_statistics    | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                                           |
-| mt.latency('db', {interval}) | sys.statement_analysis         | 读 / 写 / 命令的平均延迟（毫秒），整台和各集合；interval 采样秒数，0 = 启动以来；默认所有用户库                                                                      |
-| mt.builds()                  | ALTER TABLE progress           | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                                                                     |
-+------------------------------+--------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+--------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                                | description                                                                                                                                                          |
++------------------------------+--------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.check({quick, issues})    | mysqltuner / pt-summary              | 一键体检：复制、oplog、缓存、连接、长操作、长事务、TTL、冗余 / 没用的索引等，每项给 OK / WARN / CRIT / UNKNOWN 和建议；quick 跳过逐个集合的检查，issues 只看有问题的 |
+| mt.status({interval})        | SHOW GLOBAL STATUS                   | 版本、角色、ops/s、连接、缓存等关键指标                                                                                                                              |
+| mt.engine({interval})        | SHOW ENGINE INNODB STATUS            | 存储引擎（WiredTiger）：缓存用量、脏数据、驱逐、检查点、读写票据、日志和磁盘读写；interval 采样秒数，0 = 启动以来累计                                                |
+| mt.host({all})               | SHOW VARIABLES LIKE 'version%'       | 机器和进程：CPU、内存、操作系统、文件句柄数、mongod 版本和编译信息、存储引擎、启动参数；all 列出全部启动参数                                                         |
+| mt.vars('pattern')           | SHOW VARIABLES                       | 运行参数（getParameter）：名字、当前值、能不能在运行时改（4.2 起）；可传关键字、通配符或正则过滤，如 mt.vars('ttl')                                                  |
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                     | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                                      |
+| mt.conns()                   | PROCESSLIST GROUP BY host            | 按客户端 IP 统计连接数                                                                                                                                               |
+| mt.pool({all})               | ProxySQL stats_mysql_connection_pool | 连出去的连接池（mongos 到各分片、成员之间），按目标主机汇总；all 再按连接池列出                                                                                      |
+| mt.locks({all})              | sys.innodb_lock_waits                | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                                         |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX        | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                                |
+| mt.top({interval, ns})       | sys.schema_table_statistics          | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                                           |
+| mt.latency('db', {interval}) | sys.statement_analysis               | 读 / 写 / 命令的平均延迟（毫秒），整台和各集合；interval 采样秒数，0 = 启动以来；默认所有用户库                                                                      |
+| mt.builds()                  | ALTER TABLE progress                 | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                                                                     |
++------------------------------+--------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── 慢查询和执行计划 ──
 +-------------------------+-----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -441,7 +442,7 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
 - **只读**：不会改任何设置，`mt.slow()` 也不会打开 profiler。
 - **大小分逻辑和磁盘**：列名里带 `logical` 的是未压缩的数据量（BSON 大小），带 `disk` 的是磁盘上实际占的（WiredTiger 压缩后），带 `cached` 的是在内存缓存里占的（解压后）。同一份数据三者可以差好几倍。
 - **权限**：需要监控类权限，如 `clusterMonitor` 角色。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()`、在 mongos 上执行 `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` 时，只打印一行说明，不抛异常。
-- **版本**：老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过。经 mongos 测过的有 `mt.shards()`，以及 `mt.status()`、`mt.vars()`（能用）和 `mt.check()`、`mt.engine()`、`mt.qstats()`、`mt.profile()`、`mt.rsconf()`（打印一行说明）；其余命令经 mongos 还没测过。
+- **版本**：老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过。经 mongos 测过的有 `mt.shards()`、`mt.pool()`（包括有分片连不上时），以及 `mt.status()`、`mt.vars()`（能用）和 `mt.check()`、`mt.engine()`、`mt.qstats()`、`mt.profile()`、`mt.rsconf()`（打印一行说明）；其余命令经 mongos 还没测过。
 
 ### mt.check()：一键体检
 
@@ -1838,6 +1839,98 @@ totalCreated: 69
 5 rows in set
 ```
 
+### mt.pool()：连出去的连接池
+
+`mt.conns()` 看的是客户端连进来的连接；`mt.pool()` 看的是这个节点连出去的：mongos 到各分片和配置服务器，或者 mongod 到其他成员。相当于 ProxySQL 的 `stats_mysql_connection_pool`，执行的是 `connPoolStats`，mongos 和 mongod 都能用。
+
+```js
+mt.pool()              // 按目标主机汇总
+mt.pool({all: true})   // 再按连接池（任务执行器、ShardRegistry、ReplNetwork...）列出
+```
+
+| 字段 | 说明 |
+|---|---|
+| 表头 | 所有连接池合计；7.0 起还有 `leased`、`wasNeverUsed`、`acquired`（取过多少次连接）和 `slowWaits`；`replicaSetMatchingStrategy`（4.4 起） |
+| `host` / `set` / `state` / `pingMs` | 目标主机；它属于哪个副本集、复制集监视器看到的状态（`PRIMARY` / `SECONDARY` / `unreachable`）和 ping（毫秒） |
+| `inUse` / `available` | 正在用的连接；空闲、可以直接用的连接 |
+| `leased` | 借出去、要过很久才还的连接，不算在 `inUse` 里（7.0 起） |
+| `created` | 启动以来建过的连接数；涨得快说明连接频繁断开重建 |
+| `refreshing` | 正在检查是否可用的连接 |
+| `wasNeverUsed` | 建了没用过就关掉的连接（7.0 起） |
+| `slowWaits` | 取连接等了 100 ms 以上的次数，启动以来（7.0 起） |
+
+经 mongos 看 3 个分片的集群：
+
+```
+> mt.pool()
+-- db.adminCommand({connPoolStats: 1})
+                     inUse: 0
+                 available: 9
+                    leased: 0
+                   created: 9
+                refreshing: 0
+              wasNeverUsed: 0
+replicaSetMatchingStrategy: matchPrimaryNode
+                  acquired: 82
+                 slowWaits: 0
++--------------+-----+---------+--------+-------+-----------+--------+---------+------------+--------------+-----------+
+| host         | set | state   | pingMs | inUse | available | leased | created | refreshing | wasNeverUsed | slowWaits |
++--------------+-----+---------+--------+-------+-----------+--------+---------+------------+--------------+-----------+
+| db-cfg:27017 | cfg | PRIMARY |    0.8 |     0 |         5 |      0 |       5 |          0 |            0 |         0 |
+| db-sh1:27017 | sh1 | PRIMARY |    0.6 |     0 |         2 |      0 |       2 |          0 |            0 |         0 |
+| db-sh2:27017 | sh2 | PRIMARY |    0.7 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
+| db-sh3:27017 | sh3 | PRIMARY |    0.4 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
++--------------+-----+---------+--------+-------+-----------+--------+---------+------------+--------------+-----------+
+4 rows in set
+```
+
+把 `sh3` 停掉，过一会儿复制集监视器发现连不上，`state` 变成 `unreachable`，最后两行提示。`created` 和 `wasNeverUsed` 一直在涨，是 mongos 不停地重试建连接：
+
+```
+> mt.pool({all: true})
+-- db.adminCommand({connPoolStats: 1})
+                     inUse: 0
+                 available: 10
+                    leased: 0
+                   created: 27
+                refreshing: 0
+              wasNeverUsed: 16
+replicaSetMatchingStrategy: matchPrimaryNode
+                  acquired: 107
+                 slowWaits: 0
++--------------+-----+-------------+--------+-------+-----------+--------+---------+------------+--------------+-----------+
+| host         | set | state       | pingMs | inUse | available | leased | created | refreshing | wasNeverUsed | slowWaits |
++--------------+-----+-------------+--------+-------+-----------+--------+---------+------------+--------------+-----------+
+| db-cfg:27017 | cfg | PRIMARY     |    0.7 |     0 |         5 |      0 |       5 |          0 |            0 |         0 |
+| db-sh1:27017 | sh1 | PRIMARY     |    0.6 |     0 |         2 |      0 |       2 |          0 |            0 |         0 |
+| db-sh2:27017 | sh2 | PRIMARY     |    0.6 |     0 |         2 |      0 |       2 |          0 |            0 |         0 |
+| db-sh3:27017 | sh3 | unreachable |        |     0 |         1 |      0 |      18 |          0 |           16 |         0 |
++--------------+-----+-------------+--------+-------+-----------+--------+---------+------------+--------------+-----------+
+4 rows in set
+
+── 各连接池 ──
++---------------------------------------+--------------+-------+-----------+--------+---------+------------+--------------+-----------+
+| pool                                  | host         | inUse | available | leased | created | refreshing | wasNeverUsed | slowWaits |
++---------------------------------------+--------------+-------+-----------+--------+---------+------------+--------------+-----------+
+| NetworkInterfaceTL-ShardRegistry      | db-cfg:27017 |     0 |         4 |      0 |       4 |          0 |            0 |         0 |
+| NetworkInterfaceTL-ShardRegistry      | db-sh1:27017 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
+| NetworkInterfaceTL-ShardRegistry      | db-sh2:27017 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
+| NetworkInterfaceTL-ShardRegistry      | db-sh3:27017 |     0 |         0 |      0 |      17 |          0 |           16 |         0 |
+| NetworkInterfaceTL-TaskExecutorPool-0 | db-cfg:27017 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
+| NetworkInterfaceTL-TaskExecutorPool-0 | db-sh1:27017 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
+| NetworkInterfaceTL-TaskExecutorPool-0 | db-sh2:27017 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
+| NetworkInterfaceTL-TaskExecutorPool-0 | db-sh3:27017 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
++---------------------------------------+--------------+-------+-----------+--------+---------+------------+--------------+-----------+
+8 rows in set
+注意：复制集监视器连不上 db-sh3:27017：发往那里的请求会失败或卡住，检查网络、防火墙和对方的 mongod
+注意：副本集 sh3 没有主节点（复制集监视器看到的）：发往它的写入和默认读会失败
+```
+
+- 表里的主机来自两处：连接池里有连接的主机，和复制集监视器（`replicaSets`）知道的主机；所以连不上的主机也会列出来。
+- 这些情况会在最后提示：复制集监视器连不上某个主机；某个副本集没有主节点；取连接等了 100 ms 以上。
+- mongos 连各分片的连接池大小由 `ShardingTaskExecutorPoolMinSize` / `MaxSize` / `MaxConnecting` 控制，用 `mt.vars('ShardingTaskExecutorPool')` 看。
+- 单机和单节点副本集一般没有连出去的连接，只打印一行说明。
+
 ### mt.oplog()：oplog 窗口
 
 相当于 `SHOW BINARY LOGS`，和 `rs.printReplicationInfo()` 看的是同一件事：oplog 能覆盖多长时间。只能在副本集成员上执行。
@@ -2336,7 +2429,7 @@ attr: {type: remove, ns: shop.orders, appName: mongosh 2.14.2, command: {q: {amo
 - mongosh：MongoDB 4.4、5.0、6.0、7.0、8.0 各配 mongosh 1.8.0 和 2.x 最新版；MongoDB 4.0 配 mongosh 1.8.0 和 1.10.6（mongosh 2.x 连不了 4.0）。共 12 组。
 - 老的 mongo shell：MongoDB 3.6、4.0、4.2、4.4、5.0，各用自带的 `mongo` 连同版本的服务器。共 5 组。
 
-都是单节点副本集。另外在一个分片集群（配置服务器、3 个分片、mongos，见 [test/shard.sh](test/shard.sh)）上跑 [test/shard.js](test/shard.js)：MongoDB 3.6（老 `mongo`）、4.4（mongosh 1.8.0）、5.0、7.0、8.0（mongosh 2.x），共 5 组。还跑 [test/format.js](test/format.js)（不连数据库，只测排版、`load()` 路径和 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量）：Linux、macOS、Windows 上的 mongosh 1.8.0 和 2.14.2，以及上面 5 个版本的老 `mongo`。
+都是单节点副本集。另外在一个分片集群（配置服务器、3 个分片、mongos，见 [test/shard.sh](test/shard.sh)）上跑 [test/shard.js](test/shard.js)，再停掉一个分片跑 [test/shard-down.js](test/shard-down.js)：MongoDB 3.6（老 `mongo`）、4.4（mongosh 1.8.0）、5.0、7.0、8.0（mongosh 2.x），共 5 组。还跑 [test/format.js](test/format.js)（不连数据库，只测排版、`load()` 路径和 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量）：Linux、macOS、Windows 上的 mongosh 1.8.0 和 2.14.2，以及上面 5 个版本的老 `mongo`。
 
 本地跑（需要 Docker）：
 

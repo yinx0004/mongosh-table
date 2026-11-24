@@ -8,6 +8,9 @@
 #   test/shard.sh mongo:4.4 mongo:6.0.4          # mongosh 1.8.0
 #   MONGO_SHELL=mongo test/shard.sh mongo:3.6    # legacy shell
 #
+# With no script given, it runs test/shard.js, then stops sh3 and runs
+# test/shard-down.js.
+#
 # The cluster is set up so that mt.shards() has something to show:
 #   shop.orders  range-sharded on {customerId: 1}, split into chunks on sh1 / sh2
 #   shop.events  hash-sharded on {_id: 'hashed'}
@@ -93,3 +96,10 @@ msh "$name-mongos" --eval "
 " >/dev/null
 
 msh "$name-mongos" "$script"
+
+# With the default script, also stop sh3 and check how mt.pool() shows a shard
+# that cannot be reached (test/shard-down.js).
+if [ $# -lt 3 ]; then
+  docker stop "$name-sh3" >/dev/null
+  msh "$name-mongos" test/shard-down.js
+fi

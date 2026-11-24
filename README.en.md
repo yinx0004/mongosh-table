@@ -339,22 +339,23 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 ```
 > mt.cmds()
 ── Server activity ──
-+------------------------------+--------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                          | description                                                                                                                                                                                                                                      |
-+------------------------------+--------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.check({quick, issues})    | mysqltuner / pt-summary        | Health check: replication, oplog, cache, connections, long operations and transactions, TTL, redundant / unused indexes and more, each with OK / WARN / CRIT / UNKNOWN and advice; quick skips per-collection checks, issues shows only problems |
-| mt.status({interval})        | SHOW GLOBAL STATUS             | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                                   |
-| mt.engine({interval})        | SHOW ENGINE INNODB STATUS      | Storage engine (WiredTiger): cache usage, dirty data, eviction, checkpoints, read/write tickets, journal and disk I/O; interval = seconds to sample, 0 = totals since startup                                                                    |
-| mt.host({all})               | SHOW VARIABLES LIKE 'version%' | Machine and process: CPU, memory, OS, open files limit, mongod version and build, storage engine, startup options; all lists every startup option                                                                                                |
-| mt.vars('pattern')           | SHOW VARIABLES                 | Runtime parameters (getParameter): name, current value, whether it can be changed at runtime (4.2+); filter with text, a wildcard or a regex, e.g. mt.vars('ttl')                                                                                |
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST               | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                             |
-| mt.conns()                   | PROCESSLIST GROUP BY host      | Connections per client IP                                                                                                                                                                                                                        |
-| mt.locks({all})              | sys.innodb_lock_waits          | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                                        |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX  | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                             |
-| mt.top({interval, ns})       | sys.schema_table_statistics    | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                                     |
-| mt.latency('db', {interval}) | sys.statement_analysis         | Average latency (ms) of reads / writes / commands, server-wide and per collection; interval = seconds to sample, 0 = since startup; all user databases by default                                                                                |
-| mt.builds()                  | ALTER TABLE progress           | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                                                          |
-+------------------------------+--------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+--------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                                | description                                                                                                                                                                                                                                      |
++------------------------------+--------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.check({quick, issues})    | mysqltuner / pt-summary              | Health check: replication, oplog, cache, connections, long operations and transactions, TTL, redundant / unused indexes and more, each with OK / WARN / CRIT / UNKNOWN and advice; quick skips per-collection checks, issues shows only problems |
+| mt.status({interval})        | SHOW GLOBAL STATUS                   | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                                   |
+| mt.engine({interval})        | SHOW ENGINE INNODB STATUS            | Storage engine (WiredTiger): cache usage, dirty data, eviction, checkpoints, read/write tickets, journal and disk I/O; interval = seconds to sample, 0 = totals since startup                                                                    |
+| mt.host({all})               | SHOW VARIABLES LIKE 'version%'       | Machine and process: CPU, memory, OS, open files limit, mongod version and build, storage engine, startup options; all lists every startup option                                                                                                |
+| mt.vars('pattern')           | SHOW VARIABLES                       | Runtime parameters (getParameter): name, current value, whether it can be changed at runtime (4.2+); filter with text, a wildcard or a regex, e.g. mt.vars('ttl')                                                                                |
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                     | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                             |
+| mt.conns()                   | PROCESSLIST GROUP BY host            | Connections per client IP                                                                                                                                                                                                                        |
+| mt.pool({all})               | ProxySQL stats_mysql_connection_pool | Outgoing connection pools (mongos to shards, between members) per target host; all = per pool too                                                                                                                                                |
+| mt.locks({all})              | sys.innodb_lock_waits                | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                                        |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX        | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                             |
+| mt.top({interval, ns})       | sys.schema_table_statistics          | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                                     |
+| mt.latency('db', {interval}) | sys.statement_analysis               | Average latency (ms) of reads / writes / commands, server-wide and per collection; interval = seconds to sample, 0 = since startup; all user databases by default                                                                                |
+| mt.builds()                  | ALTER TABLE progress                 | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                                                          |
++------------------------------+--------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Slow queries and plans ──
 +-------------------------+-----------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -441,7 +442,7 @@ All of them:
 - **Are read-only**: they never change settings; `mt.slow()` does not turn the profiler on either.
 - **Tell logical from disk sizes**: columns with `logical` in the name are the uncompressed data size (BSON), `disk` is what it actually takes on disk (compressed by WiredTiger), and `cached` is what it takes in the in-memory cache (uncompressed). The three can differ several times over for the same data.
 - **Need monitoring privileges**, such as the `clusterMonitor` role. Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, or `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` on a mongos, they print a one-line explanation instead of throwing.
-- **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version. Through a mongos, CI tests `mt.shards()`, plus `mt.status()` and `mt.vars()` (they work) and `mt.check()`, `mt.engine()`, `mt.qstats()`, `mt.profile()`, `mt.rsconf()` (they print a one-line explanation); the other commands are not tested through a mongos yet.
+- **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version. Through a mongos, CI tests `mt.shards()` and `mt.pool()` (including a shard that cannot be reached), plus `mt.status()` and `mt.vars()` (they work) and `mt.check()`, `mt.engine()`, `mt.qstats()`, `mt.profile()`, `mt.rsconf()` (they print a one-line explanation); the other commands are not tested through a mongos yet.
 
 ### mt.check(): health check
 
@@ -1838,6 +1839,98 @@ totalCreated: 66
 5 rows in set
 ```
 
+### mt.pool(): outgoing connection pools
+
+`mt.conns()` shows connections coming in from clients; `mt.pool()` shows the ones this node opens to others: mongos to the shards and config servers, or mongod to other members. It is like ProxySQL's `stats_mysql_connection_pool`, runs `connPoolStats`, and works on both mongos and mongod.
+
+```js
+mt.pool()              // per target host
+mt.pool({all: true})   // per pool as well (task executors, ShardRegistry, ReplNetwork...)
+```
+
+| Field | Meaning |
+|---|---|
+| header | totals over all pools; on 7.0+ also `leased`, `wasNeverUsed`, `acquired` (connection checkouts) and `slowWaits`; `replicaSetMatchingStrategy` (4.4+) |
+| `host` / `set` / `state` / `pingMs` | target host; its replica set, the state the replica set monitor sees (`PRIMARY` / `SECONDARY` / `unreachable`) and ping in ms |
+| `inUse` / `available` | connections in use; idle connections ready to use |
+| `leased` | connections lent out for a long time, not counted in `inUse` (7.0+) |
+| `created` | connections created since startup; fast growth means connections keep being dropped and reopened |
+| `refreshing` | connections being checked |
+| `wasNeverUsed` | connections closed without ever being used (7.0+) |
+| `slowWaits` | connection checkouts that waited 100 ms or more, since startup (7.0+) |
+
+Through the mongos of a cluster with 3 shards:
+
+```
+> mt.pool()
+-- db.adminCommand({connPoolStats: 1})
+                     inUse: 0
+                 available: 8
+                    leased: 0
+                   created: 8
+                refreshing: 0
+              wasNeverUsed: 0
+replicaSetMatchingStrategy: matchPrimaryNode
+                  acquired: 76
+                 slowWaits: 0
++--------------+-----+---------+--------+-------+-----------+--------+---------+------------+--------------+-----------+
+| host         | set | state   | pingMs | inUse | available | leased | created | refreshing | wasNeverUsed | slowWaits |
++--------------+-----+---------+--------+-------+-----------+--------+---------+------------+--------------+-----------+
+| db-cfg:27017 | cfg | PRIMARY |    0.5 |     0 |         4 |      0 |       4 |          0 |            0 |         0 |
+| db-sh1:27017 | sh1 | PRIMARY |    0.7 |     0 |         2 |      0 |       2 |          0 |            0 |         0 |
+| db-sh2:27017 | sh2 | PRIMARY |    0.7 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
+| db-sh3:27017 | sh3 | PRIMARY |    0.8 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
++--------------+-----+---------+--------+-------+-----------+--------+---------+------------+--------------+-----------+
+4 rows in set
+```
+
+With `sh3` stopped, the replica set monitor notices after a while: `state` turns `unreachable` and two notes follow. `created` and `wasNeverUsed` keep growing as mongos retries:
+
+```
+> mt.pool({all: true})
+-- db.adminCommand({connPoolStats: 1})
+                     inUse: 0
+                 available: 9
+                    leased: 0
+                   created: 26
+                refreshing: 0
+              wasNeverUsed: 16
+replicaSetMatchingStrategy: matchPrimaryNode
+                  acquired: 93
+                 slowWaits: 0
++--------------+-----+-------------+--------+-------+-----------+--------+---------+------------+--------------+-----------+
+| host         | set | state       | pingMs | inUse | available | leased | created | refreshing | wasNeverUsed | slowWaits |
++--------------+-----+-------------+--------+-------+-----------+--------+---------+------------+--------------+-----------+
+| db-cfg:27017 | cfg | PRIMARY     |    0.6 |     0 |         4 |      0 |       4 |          0 |            0 |         0 |
+| db-sh1:27017 | sh1 | PRIMARY     |    0.8 |     0 |         2 |      0 |       2 |          0 |            0 |         0 |
+| db-sh2:27017 | sh2 | PRIMARY     |    0.8 |     0 |         2 |      0 |       2 |          0 |            0 |         0 |
+| db-sh3:27017 | sh3 | unreachable |        |     0 |         1 |      0 |      18 |          0 |           16 |         0 |
++--------------+-----+-------------+--------+-------+-----------+--------+---------+------------+--------------+-----------+
+4 rows in set
+
+── per pool ──
++---------------------------------------+--------------+-------+-----------+--------+---------+------------+--------------+-----------+
+| pool                                  | host         | inUse | available | leased | created | refreshing | wasNeverUsed | slowWaits |
++---------------------------------------+--------------+-------+-----------+--------+---------+------------+--------------+-----------+
+| NetworkInterfaceTL-ShardRegistry      | db-cfg:27017 |     0 |         3 |      0 |       3 |          0 |            0 |         0 |
+| NetworkInterfaceTL-ShardRegistry      | db-sh1:27017 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
+| NetworkInterfaceTL-ShardRegistry      | db-sh2:27017 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
+| NetworkInterfaceTL-ShardRegistry      | db-sh3:27017 |     0 |         0 |      0 |      17 |          0 |           16 |         0 |
+| NetworkInterfaceTL-TaskExecutorPool-0 | db-cfg:27017 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
+| NetworkInterfaceTL-TaskExecutorPool-0 | db-sh1:27017 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
+| NetworkInterfaceTL-TaskExecutorPool-0 | db-sh2:27017 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
+| NetworkInterfaceTL-TaskExecutorPool-0 | db-sh3:27017 |     0 |         1 |      0 |       1 |          0 |            0 |         0 |
++---------------------------------------+--------------+-------+-----------+--------+---------+------------+--------------+-----------+
+8 rows in set
+Note: the replica set monitor cannot reach db-sh3:27017: requests sent there fail or hang; check the network, firewalls and that mongod
+Note: replica set sh3 has no primary (as the replica set monitor sees it): writes and default reads sent there fail
+```
+
+- Hosts come from two places: hosts with connections in a pool, and hosts the replica set monitor (`replicaSets`) knows; so unreachable hosts are listed too.
+- A note is printed at the end when the replica set monitor cannot reach a host, when a replica set has no primary, or when checkouts waited 100 ms or more.
+- Pool sizes from mongos to the shards are set by `ShardingTaskExecutorPoolMinSize` / `MaxSize` / `MaxConnecting`; see them with `mt.vars('ShardingTaskExecutorPool')`.
+- A standalone or a one-member replica set usually has no outgoing connections; one line says so.
+
 ### mt.oplog(): oplog window
 
 Like `SHOW BINARY LOGS`; it answers the same question as `rs.printReplicationInfo()`: how much time the oplog covers. Only works on a replica set member.
@@ -2336,7 +2429,7 @@ Every PR and every push to main runs [test/compat.js](test/compat.js) against a 
 - mongosh: MongoDB 4.4, 5.0, 6.0, 7.0 and 8.0, each with mongosh 1.8.0 and the newest 2.x; MongoDB 4.0 with mongosh 1.8.0 and 1.10.6 (mongosh 2.x cannot connect to 4.0). 12 jobs.
 - Legacy mongo shell: MongoDB 3.6, 4.0, 4.2, 4.4 and 5.0, each with its own `mongo` against a server of the same version. 5 jobs.
 
-All on single-node replica sets. [test/shard.js](test/shard.js) also runs on a sharded cluster (config server, 3 shards, mongos; see [test/shard.sh](test/shard.sh)) with MongoDB 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0), 5.0, 7.0 and 8.0 (mongosh 2.x): 5 jobs. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
+All on single-node replica sets. [test/shard.js](test/shard.js) also runs on a sharded cluster (config server, 3 shards, mongos; see [test/shard.sh](test/shard.sh)), followed by [test/shard-down.js](test/shard-down.js) with one shard stopped, with MongoDB 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0), 5.0, 7.0 and 8.0 (mongosh 2.x): 5 jobs. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
 
 To run them locally (needs Docker):
 

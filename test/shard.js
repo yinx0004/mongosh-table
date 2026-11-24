@@ -49,6 +49,19 @@ run('mongos: mongod-only commands', function () {
     print(/当前连的是 mongos/.test(out) ? k + ': mongos message' : k + ': ' + out);
   });
 }, ['check: mongos message', 'engine: mongos message', 'qstats: mongos message', 'profile: mongos message', 'rsconf: mongos message']);
+// mongos 连出去的连接池：各分片和配置服务器都在表里（sh3 没连接也会从复制集监视器列出来），都是主节点，没有提示
+run('mongos: mt.pool', function () {
+  db.getSiblingDB('shop').orders.find({ customerId: { $gt: 0 } }).itcount();
+  var out = capOut(function () { mt.pool({ showCmd: false }); });
+  print(/inUse: \d+/.test(out) && /created: \d+/.test(out) ? 'header' : out);
+  ['cfg', 'sh1', 'sh2', 'sh3'].forEach(function (s) {
+    print(new RegExp('\\| \\S+-' + s + ':27017 \\| ' + s + ' +\\| PRIMARY \\|').test(out) ? s + ' primary' : s + ': ' + out);
+  });
+  print(/\| slowWaits \|/.test(out) === (vmaj >= 7) ? 'slowWaits right' : out);
+  print(/注意：/.test(out) ? out : 'no notes');
+  out = capOut(function () { mt.pool({ all: true, showCmd: false }); });
+  print(/── 各连接池 ──/.test(out) && /\| NetworkInterface\w+-TaskExecutorPool-\d+ /.test(out) ? 'per pool' : out);
+}, ['header', 'cfg primary', 'sh1 primary', 'sh2 primary', 'sh3 primary', 'slowWaits right', 'no notes', 'per pool']);
 run('mongos: mt.shards help', function () { mt.help('shards'); }, ['mt.shards() — ', 'MySQL: sh.status()']);
 
 finish();
