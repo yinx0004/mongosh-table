@@ -339,25 +339,26 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 ```
 > mt.cmds()
 ── 运行状态 ──
-+------------------------------+--------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                                | description                                                                                                                                                          |
-+------------------------------+--------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.check({quick, issues})    | mysqltuner / pt-summary              | 一键体检：复制、oplog、缓存、连接、长操作、长事务、TTL、冗余 / 没用的索引等，每项给 OK / WARN / CRIT / UNKNOWN 和建议；quick 跳过逐个集合的检查，issues 只看有问题的 |
-| mt.status({interval})        | SHOW GLOBAL STATUS                   | 版本、角色、ops/s、连接、缓存等关键指标                                                                                                                              |
-| mt.engine({interval})        | SHOW ENGINE INNODB STATUS            | 存储引擎（WiredTiger）：缓存用量、脏数据、驱逐、检查点、读写票据、日志和磁盘读写；interval 采样秒数，0 = 启动以来累计                                                |
-| mt.host({all})               | SHOW VARIABLES LIKE 'version%'       | 机器和进程：CPU、内存、操作系统、文件句柄数、mongod 版本和编译信息、存储引擎、启动参数；all 列出全部启动参数                                                         |
-| mt.mem()                     | sys.memory_global_by_current_bytes   | 内存都花在哪：常驻内存分成 WiredTiger 缓存、缓存以外的分配、tcmalloc 留着的空闲和 tcmalloc 以外；提示内存快满、缓存设得太大、脏数据多、空闲内存没还给系统            |
-| mt.vars('pattern')           | SHOW VARIABLES                       | 运行参数（getParameter）：名字、当前值、能不能在运行时改（4.2 起）；可传关键字、通配符或正则过滤，如 mt.vars('ttl')                                                  |
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                     | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                                      |
-| mt.conns()                   | PROCESSLIST GROUP BY host            | 按客户端 IP 统计连接数                                                                                                                                               |
-| mt.pool({all})               | ProxySQL stats_mysql_connection_pool | 连出去的连接池（mongos 到各分片、成员之间），按目标主机汇总；all 再按连接池列出                                                                                      |
-| mt.users('db')               | SELECT * FROM mysql.user             | 用户和自定义角色：每个用户的库、角色、登录方式，自定义角色的权限和被几个用户直接用到；提示没开认证、权限过大、只能用 SHA-1、没有角色的用户；可传 'db'                |
-| mt.locks({all})              | sys.innodb_lock_waits                | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                                         |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX        | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                                |
-| mt.top({interval, ns})       | sys.schema_table_statistics          | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                                           |
-| mt.latency('db', {interval}) | sys.statement_analysis               | 读 / 写 / 命令的平均延迟（毫秒），整台和各集合；interval 采样秒数，0 = 启动以来；默认所有用户库                                                                      |
-| mt.builds()                  | ALTER TABLE progress                 | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                                                                     |
-+------------------------------+--------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                                    | description                                                                                                                                                          |
++------------------------------+------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.check({quick, issues})    | mysqltuner / pt-summary                  | 一键体检：复制、oplog、缓存、连接、长操作、长事务、TTL、冗余 / 没用的索引等，每项给 OK / WARN / CRIT / UNKNOWN 和建议；quick 跳过逐个集合的检查，issues 只看有问题的 |
+| mt.status({interval})        | SHOW GLOBAL STATUS                       | 版本、角色、ops/s、连接、缓存等关键指标                                                                                                                              |
+| mt.engine({interval})        | SHOW ENGINE INNODB STATUS                | 存储引擎（WiredTiger）：缓存用量、脏数据、驱逐、检查点、读写票据、日志和磁盘读写；interval 采样秒数，0 = 启动以来累计                                                |
+| mt.host({all})               | SHOW VARIABLES LIKE 'version%'           | 机器和进程：CPU、内存、操作系统、文件句柄数、mongod 版本和编译信息、存储引擎、启动参数；all 列出全部启动参数                                                         |
+| mt.mem()                     | sys.memory_global_by_current_bytes       | 内存都花在哪：常驻内存分成 WiredTiger 缓存、缓存以外的分配、tcmalloc 留着的空闲和 tcmalloc 以外；提示内存快满、缓存设得太大、脏数据多、空闲内存没还给系统            |
+| mt.vars('pattern')           | SHOW VARIABLES                           | 运行参数（getParameter）：名字、当前值、能不能在运行时改（4.2 起）；可传关键字、通配符或正则过滤，如 mt.vars('ttl')                                                  |
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                         | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                                      |
+| mt.cursors({secs, ns})       | SHOW PROCESSLIST WHERE Command = 'Sleep' | 打开着的游标：总数、noTimeout、超时回收的；每个空闲游标的集合、空闲多久、读了多少、原始查询（4.2 起）；可传 secs、ns                                                 |
+| mt.conns()                   | PROCESSLIST GROUP BY host                | 按客户端 IP 统计连接数                                                                                                                                               |
+| mt.pool({all})               | ProxySQL stats_mysql_connection_pool     | 连出去的连接池（mongos 到各分片、成员之间），按目标主机汇总；all 再按连接池列出                                                                                      |
+| mt.users('db')               | SELECT * FROM mysql.user                 | 用户和自定义角色：每个用户的库、角色、登录方式，自定义角色的权限和被几个用户直接用到；提示没开认证、权限过大、只能用 SHA-1、没有角色的用户；可传 'db'                |
+| mt.locks({all})              | sys.innodb_lock_waits                    | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                                         |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX            | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                                |
+| mt.top({interval, ns})       | sys.schema_table_statistics              | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                                           |
+| mt.latency('db', {interval}) | sys.statement_analysis                   | 读 / 写 / 命令的平均延迟（毫秒），整台和各集合；interval 采样秒数，0 = 启动以来；默认所有用户库                                                                      |
+| mt.builds()                  | ALTER TABLE progress                     | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                                                                     |
++------------------------------+------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── 慢查询和执行计划 ──
 +-------------------------+-----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -445,7 +446,7 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
 - **只读**：不会改任何设置，`mt.slow()` 也不会打开 profiler。
 - **大小分逻辑和磁盘**：列名里带 `logical` 的是未压缩的数据量（BSON 大小），带 `disk` 的是磁盘上实际占的（WiredTiger 压缩后），带 `cached` 的是在内存缓存里占的（解压后）。同一份数据三者可以差好几倍。
 - **权限**：需要监控类权限，如 `clusterMonitor` 角色。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()`、在 mongos 上执行 `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` 时，只打印一行说明，不抛异常。
-- **版本**：老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过。经 mongos 测过的有 `mt.shards()`、`mt.balancer()`、`mt.pool()`（包括有分片连不上时），以及 `mt.status()`、`mt.vars()`、`mt.mem()`（能用）和 `mt.check()`、`mt.engine()`、`mt.qstats()`、`mt.profile()`、`mt.rsconf()`（打印一行说明）；其余命令经 mongos 还没测过。
+- **版本**：老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过。经 mongos 测过的有 `mt.shards()`、`mt.balancer()`、`mt.pool()`（包括有分片连不上时），以及 `mt.status()`、`mt.vars()`、`mt.mem()`、`mt.cursors()`（能用）和 `mt.check()`、`mt.engine()`、`mt.qstats()`、`mt.profile()`、`mt.rsconf()`（打印一行说明）；其余命令经 mongos 还没测过。
 
 ### mt.check()：一键体检
 
@@ -582,6 +583,59 @@ CRIT 2，WARN 5，OK 13，INFO 1 （逐个集合的检查：2/2 个集合）
 +------+------+---------+-------------+---------------------+----------------+
 5 rows in set  (共 78 行，只显示前 5 行)
 ```
+
+### mt.cursors()：打开着的游标
+
+`mt.ps()` 看的是正在执行的操作；`mt.cursors()` 看的是查到一半、等着客户端来取下一批的游标。程序打开游标不读完也不关，游标会一直留在服务端。类似 MySQL 里 `SHOW PROCESSLIST` 中 `Sleep` 的连接。
+
+```js
+mt.cursors()                // 计数，以及每个空闲的游标
+mt.cursors({secs: 600})     // 只看空闲了 10 分钟以上的
+mt.cursors({ns: 'shop'})    // 只看一个库；也可以写 'shop.orders'
+```
+
+| 字段 | 说明 |
+|---|---|
+| 表头 | `open` 打开着的游标数、`noTimeout` 其中设了 noCursorTimeout 的、`pinned` 正在被读的、`timedOut` 启动以来因为空闲超时被回收的、`totalOpened` 启动以来一共打开过多少（5.0 起）、`cursorTimeout` 和 `sessionTimeout`（见下面的说明） |
+| `cursorId` | 游标 ID，关掉它时要用 |
+| `shard` | 经 mongos 时，游标在哪个分片上 |
+| `idleSecs` / `ageSecs` | 空闲了多少秒、打开了多少秒 |
+| `docs` / `batches` | 已经返回了多少文档、多少批 |
+| `flags` | `noTimeout`、`tailable`、`awaitData` |
+| `command` | 打开这个游标的命令：find 的条件或 aggregate 的管道；程序带了 `comment` 时放在最前面；`batchSize` 之类游标本身的设置不列 |
+
+下面是 MongoDB 7.0 上几个程序读到一半的游标：一个导出任务开了 noCursorTimeout、读了 3000 条就停了；一个带 `comment: 'daily-report'` 的报表；还有两个查询只取了第一批。
+
+```
+> mt.cursors()
+-- db.serverStatus().metrics.cursor; getParameter cursorTimeoutMillis, localLogicalSessionTimeoutMinutes; aggregate([{$currentOp: {allUsers: true, idleCursors: true}}, {$match: {type: 'idleCursor'}}])
+          open: 4
+     noTimeout: 1
+        pinned: 0
+      timedOut: 0
+   totalOpened: 7
+ cursorTimeout: 10m 0s
+sessionTimeout: 30m 0s
+
+── 空闲的游标 ──
++---------------------+----------------+----------+---------+------+---------+-----------+-------------------------------------+--------------------------------------------------------------+
+| cursorId            | ns             | idleSecs | ageSecs | docs | batches | flags     | plan                                | command                                                      |
++---------------------+----------------+----------+---------+------+---------+-----------+-------------------------------------+--------------------------------------------------------------+
+| 4382608709592319410 | shop.orders    |      103 |     103 | 3000 |       3 | noTimeout | COLLSCAN                            | {find: orders, filter: {}, projection: {orderNo: 1, amoun... |
+| 5178228565502310856 | shop.orders    |       63 |      63 |  500 |       1 |           | IXSCAN { status: 1, createdAt: -1 } | {comment: daily-report, aggregate: orders, pipeline: [{$m... |
+| 5282542937179335357 | shop.orders    |       33 |      33 |  101 |       1 |           | IXSCAN { status: 1, createdAt: -1 } | {find: orders, filter: {status: new}, sort: {createdAt: -1}} |
+| 8019749106198471030 | shop.customers |       33 |      33 |    2 |       1 |           | COLLSCAN                            | {find: customers, filter: {}}                                |
++---------------------+----------------+----------+---------+------+---------+-----------+-------------------------------------+--------------------------------------------------------------+
+4 rows in set
+注意：有 1 个 noCursorTimeout 的游标：不受 cursorTimeout 限制，程序不读完也不关就可能一直留在服务端；确认没用了可以用 killCursors 关掉
+```
+
+- 每个空闲的游标来自 `$currentOp` 的 `idleCursors`，4.2 起才有；之前只有表头的计数。
+- 空闲游标的记录里没有客户端地址，要靠 `ns`、查询和 `comment` 判断是哪个程序。让程序给查询带上 `comment` 最方便。
+- 空闲多久会被回收：4.4 之前是 `cursorTimeout`（参数 `cursorTimeoutMillis`，默认 10 分钟）。4.4 起，会话里打开的游标不按它回收，要等会话过期（`sessionTimeout`，参数 `localLogicalSessionTimeoutMinutes`，默认 30 分钟）才关；现在的驱动和 mongosh 默认都用会话。本地在 4.2 和 4.4.30、5.0、6.0、7.0 上试过。
+- 关掉一个游标：`db.getSiblingDB('库').runCommand({killCursors: '集合', cursors: [NumberLong('游标 ID')]})`。
+- 经 mongos 时，表头是 mongos 自己的计数；表里列的是各分片上的空闲游标，客户端的一个游标在每个涉及的分片上各有一个，`command` 里去掉了 mongos 加的内部字段。
+- 这些情况会在最后提示：有 noCursorTimeout 的游标；启动以来有游标因为空闲超时被回收。
 
 ### mt.slow()：慢查询
 
