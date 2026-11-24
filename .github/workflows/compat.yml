@@ -146,12 +146,37 @@ jobs:
           if [ "${{ matrix.shell }}" = mongo ]; then export MONGO_SHELL=mongo; fi
           test/auth.sh mongo:${{ matrix.mongodb }} ${{ matrix.client }}
 
+  # mt.flow() on a two-member replica set (test/flow.sh): normal, throttled while
+  # the secondary is fsyncLock'ed, after it caught up, and on the secondary.
+  flow:
+    name: flow ${{ matrix.mongodb }} / ${{ matrix.shell }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mongodb: '4.2'
+            shell: mongo
+            client: mongo:4.2
+          - mongodb: '4.4'
+            shell: mongosh 1.x
+            client: mongo:6.0.4   # mongosh 1.8.0
+          - mongodb: '8.0'
+            shell: mongosh 2.x
+            client: mongo:8.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run test/flow.js
+        run: |
+          if [ "${{ matrix.shell }}" = mongo ]; then export MONGO_SHELL=mongo; fi
+          test/flow.sh mongo:${{ matrix.mongodb }} ${{ matrix.client }}
+
   # One stable check name for branch protection, so the jobs above can change
   # without editing the required checks.
   compat:
     name: compat
     if: always()
-    needs: [test, format, legacy, sharded, auth]
+    needs: [test, format, legacy, sharded, auth, flow]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs passed
@@ -161,3 +186,4 @@ jobs:
           test "${{ needs.legacy.result }}" = success
           test "${{ needs.sharded.result }}" = success
           test "${{ needs.auth.result }}" = success
+          test "${{ needs.flow.result }}" = success

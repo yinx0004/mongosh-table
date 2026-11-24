@@ -390,15 +390,16 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 +--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Replication ──
-+-------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                       | mysql                         | description                                                                                                                                                                                                                                    |
-+-------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.repl()                     | SHOW SLAVE STATUS             | Replica set members, replication lag (seconds), sync source                                                                                                                                                                                    |
-| mt.rsconf()                   | SHOW SLAVE HOSTS              | Replica set configuration (rs.conf()): each member's priority, votes, hidden, delay, tags and current state, election settings, default read/write concern; notes an even number of voters, arbiters, and delayed members that vote            |
-| mt.oplog()                    | SHOW BINARY LOGS              | Oplog size and how much time it covers                                                                                                                                                                                                         |
-| mt.shards('db')               | sh.status()                   | Sharded cluster (on a mongos): balancer, each shard's draining state, zones, chunks, data size and the databases it is primary for, each sharded collection's key and chunk distribution; pass 'db' for one database's collections             |
-| mt.balancer('ns', {hours, n}) | sh.status() migration results | Balancer and recent chunk migrations: collection, from / to, range, documents, duration and result of each, migrations in progress, balancer rounds; hours = how far back (24 by default), n = max rows, ns = db or collection; needs a mongos |
-+-------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++-------------------------------+--------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                       | mysql                          | description                                                                                                                                                                                                                                    |
++-------------------------------+--------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.repl()                     | SHOW SLAVE STATUS              | Replica set members, replication lag (seconds), sync source                                                                                                                                                                                    |
+| mt.rsconf()                   | SHOW SLAVE HOSTS               | Replica set configuration (rs.conf()): each member's priority, votes, hidden, delay, tags and current state, election settings, default read/write concern; notes an even number of voters, arbiters, and delayed members that vote            |
+| mt.flow({interval})           | Group Replication flow control | Flow control: on or off, throttling or not, majority lag, wait time (per second), times throttled; how far each member is behind; operations held up and how many times they waited                                                            |
+| mt.oplog()                    | SHOW BINARY LOGS               | Oplog size and how much time it covers                                                                                                                                                                                                         |
+| mt.shards('db')               | sh.status()                    | Sharded cluster (on a mongos): balancer, each shard's draining state, zones, chunks, data size and the databases it is primary for, each sharded collection's key and chunk distribution; pass 'db' for one database's collections             |
+| mt.balancer('ns', {hours, n}) | sh.status() migration results  | Balancer and recent chunk migrations: collection, from / to, range, documents, duration and result of each, migrations in progress, balancer rounds; hours = how far back (24 by default), n = max rows, ns = db or collection; needs a mongos |
++-------------------------------+--------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 All accept t() options such as {cols: ...} or {vertical: true}; mt.config({showCmd: false}) hides the native command
 mt.help('ps') shows the detailed usage, options and output columns of one command
@@ -1526,6 +1527,71 @@ Note: delayed members can vote (db3:27017): w: 'majority' writes may wait for th
 - The delay field is `secondaryDelaySecs` since 5.0 and `slaveDelay` before; both show as `delay`.
 - Replica sets only; on a standalone or a mongos it prints a one-line explanation. For each member's replication lag, use `mt.repl()`.
 
+### mt.flow(): flow control
+
+When secondaries cannot keep up, the primary throttles writes itself (flow control, 4.2+) so the majority commit point does not fall further and further behind. When writes suddenly slow down while the primary's own CPU and disk are not busy, check whether this is throttling them. Like flow control in MySQL Group Replication.
+
+```js
+mt.flow()                // samples twice 1 second apart, wait time per second
+mt.flow({interval: 0})   // one read, totals since startup only
+```
+
+| Field | Meaning |
+|---|---|
+| `state` | this node's state; flow control only acts on the primary |
+| `enabled` / `isLagged` | whether it is on, and whether it is throttling now |
+| `targetLag` / `threshold` | the target lag (`flowControlTargetLagSeconds`, 10 seconds by default), and the lag at which throttling starts (times `flowControlThresholdLagPercentage`, half by default) |
+| `majorityLag` | how far the majority commit point is behind the primary |
+| `rateLimit` | write tickets handed out per second while throttling; hidden otherwise |
+| `waitMs/s` / `waitTotal` | milliseconds per second writes spent waiting for tickets (summed over writes, so it can exceed 1000); total time waited since startup |
+| `laggedCount` / `laggedTime` | times throttling started since startup; how long the periods that ended lasted in total |
+| `waitingOps` | operations waiting for a ticket now |
+| members table | how many seconds each member is behind the primary (`lagSecs`), and whether it votes: voting members decide the majority commit point |
+| operations held up | operations waiting or that waited for tickets: `waits` times waited, `waitMs` time waited in total; hidden when there are none |
+
+Below is a two-member replica set on MongoDB 7.0: `db2` is `fsyncLock`'ed and stops applying the oplog while two programs keep writing on `db1`. Once the majority commit point is more than 5 seconds behind, throttling starts, and the two writes together wait almost 2 seconds per second:
+
+```
+> mt.flow()
+-- db.serverStatus().flowControl; getParameter flowControl*; rs.status(); currentOp → waitingForFlowControl, flowControlStats; sampled twice 1 s apart, /s values are per second
+      state: PRIMARY
+    enabled: true
+   isLagged: true
+  targetLag: 10s
+  threshold: 5s
+majorityLag: 40.1s
+  rateLimit: 117/s
+   waitMs/s: 1937
+  waitTotal: 56s
+laggedCount: 1
+ laggedTime: 0s
+ waitingOps: 2
+
+── how far each member is behind the primary ──
++-----------+-----------+-------+---------+------+
+| name      | state     | votes | lagSecs | self |
++-----------+-----------+-------+---------+------+
+| db1:27017 | PRIMARY   |     1 |       0 | *    |
+| db2:27017 | SECONDARY |     1 |      40 |      |
++-----------+-----------+-------+---------+------+
+2 rows in set
+
+── operations held up by flow control ──
++-------+------+--------+-------------+-----------------+---------+-------+--------+
+| opid  | secs | op     | ns          | client          | waiting | waits | waitMs |
++-------+------+--------+-------------+-----------------+---------+-------+--------+
+| 93426 |    0 | update | shop.stock  | 127.0.0.1:48040 | true    |     1 |      0 |
+| 93427 |    0 | insert | shop.orders | 127.0.0.1:48008 | true    |     1 |      0 |
++-------+------+--------+-------------+-----------------+---------+-------+--------+
+2 rows in set
+Note: throttling now: the majority commit point is 40.1s behind, more than 5s; the primary hands out only 117 write tickets per second, so writes slow down. Voting members behind: db2:27017 (40s)
+```
+
+- The server keeps no count of waits overall; the number of waits is per operation (`flowControlStats` in `currentOp`). Slow query log lines and the profiler also have `flowControl` figures per operation.
+- Common causes: a voting secondary on a slow machine (disk, CPU), a slow network, a long operation or `fsyncLock` on a secondary.
+- A note is printed at the end when this is not the primary, flow control is off, it is throttling now (listing voting members more than `threshold` behind), or it has throttled since startup.
+- Replica sets only; on a standalone or a mongos it prints one line.
+
 ### mt.shards(): sharded cluster
 
 Like `sh.status()`, as two tables: the shards, and the chunk distribution of each sharded collection. Needs a mongos.
@@ -2643,7 +2709,7 @@ Every PR and every push to main runs [test/compat.js](test/compat.js) against a 
 - mongosh: MongoDB 4.4, 5.0, 6.0, 7.0 and 8.0, each with mongosh 1.8.0 and the newest 2.x; MongoDB 4.0 with mongosh 1.8.0 and 1.10.6 (mongosh 2.x cannot connect to 4.0). 12 jobs.
 - Legacy mongo shell: MongoDB 3.6, 4.0, 4.2, 4.4 and 5.0, each with its own `mongo` against a server of the same version. 5 jobs.
 
-All on single-node replica sets. [test/shard.js](test/shard.js) also runs on a sharded cluster (config server, 3 shards, mongos; see [test/shard.sh](test/shard.sh)), followed by [test/shard-down.js](test/shard-down.js) with one shard stopped, with MongoDB 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0), 5.0, 7.0 and 8.0 (mongosh 2.x): 5 jobs. [test/auth.js](test/auth.js) runs against a mongod started with `--auth` (see [test/auth.sh](test/auth.sh); logged in as root and as a user that may not list users) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
+All on single-node replica sets. [test/shard.js](test/shard.js) also runs on a sharded cluster (config server, 3 shards, mongos; see [test/shard.sh](test/shard.sh)), followed by [test/shard-down.js](test/shard-down.js) with one shard stopped, with MongoDB 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0), 5.0, 7.0 and 8.0 (mongosh 2.x): 5 jobs. [test/auth.js](test/auth.js) runs against a mongod started with `--auth` (see [test/auth.sh](test/auth.sh); logged in as root and as a user that may not list users) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/flow.js](test/flow.js) runs on a two-member replica set (see [test/flow.sh](test/flow.sh): normal, throttled while the secondary is `fsyncLock`'ed, after it caught up, and on the secondary) with 4.2 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
 
 To run them locally (needs Docker):
 
@@ -2672,6 +2738,12 @@ MONGO_SHELL=mongo test/shard.sh mongo:3.6
 # against a mongod with authentication on
 test/auth.sh mongo:7.0
 MONGO_SHELL=mongo test/auth.sh mongo:3.6
+```
+
+```bash
+# flow control on a two-member replica set
+test/flow.sh mongo:7.0
+MONGO_SHELL=mongo test/flow.sh mongo:4.2
 ```
 
 ```bash

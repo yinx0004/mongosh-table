@@ -90,11 +90,11 @@ run('mongos: mt.cursors', function () {
   c.close();
 }, ['one per shard', 'clean command']);
 run('mongos: mongod-only commands', function () {
-  ['check', 'engine', 'qstats', 'profile', 'rsconf'].forEach(function (k) {
+  ['check', 'engine', 'qstats', 'profile', 'rsconf', 'flow'].forEach(function (k) {
     var out = capOut(function () { mt[k]({ interval: 0 }); });
     print(/当前连的是 mongos/.test(out) ? k + ': mongos message' : k + ': ' + out);
   });
-}, ['check: mongos message', 'engine: mongos message', 'qstats: mongos message', 'profile: mongos message', 'rsconf: mongos message']);
+}, ['check: mongos message', 'engine: mongos message', 'qstats: mongos message', 'profile: mongos message', 'rsconf: mongos message', 'flow: mongos message']);
 // mongos 连出去的连接池：各分片和配置服务器都在表里（sh3 没连接也会从复制集监视器列出来），都是主节点，没有提示
 run('mongos: mt.pool', function () {
   db.getSiblingDB('shop').orders.find({ customerId: { $gt: 0 } }).itcount();

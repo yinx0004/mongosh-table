@@ -86,7 +86,7 @@ run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '─�
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
 var ALL_CMDS = ['host', 'latency', 'desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
-  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'balancer', 'pool', 'users', 'mem', 'cursors'];
+  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'balancer', 'pool', 'users', 'mem', 'cursors', 'flow'];
 run('mt.help each command', function () {
   var bad = [];
   ['zh', 'en'].forEach(function (lang) {
@@ -99,7 +99,7 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 38 ok']);
+}, ['all 39 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
 run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'mem'、'vars'"]);
@@ -619,6 +619,14 @@ run('mt.cursors timed out', function () {
   print(String(a.runCommand({ getParameter: 1, cursorTimeoutMillis: 1 }).cursorTimeoutMillis) === String(old) ? 'restored' : 'not restored');
   db.getSiblingDB('mtcur').dropDatabase();
 }, ['timed out note right', 'session cursor right', 'restored']);
+// mt.flow：单节点副本集上 flow control 开着、不限流；4.2 之前打印一行（限流时的样子在 test/flow.js）
+run('mt.flow', function () {
+  var out = capOut(function () { mt.flow({ interval: 0 }); });
+  if (cur42) {
+    print(/state: PRIMARY\n/.test(out) && /enabled: true\n/.test(out) && /isLagged: false\n/.test(out) && /targetLag: 10s\n/.test(out) && /laggedCount: 0\n/.test(out) ? 'header' : out);
+    print(/── 各成员落后主节点 ──/.test(out) && /\| PRIMARY \| +1 \| +0 \| \* +\|/.test(out) && !/注意：/.test(out) ? 'one member, no notes' : out);
+  } else print(/flow control 4\.2 起才有/.test(out) ? 'header\none member, no notes' : out);
+}, ['header', 'one member, no notes']);
 run('mt.rsconf versions', function () {
   var conf = rs.conf(), out = capOut(function () { mt.rsconf({ showCmd: false }); });
   print(/term: \d+/.test(out) === (conf.term != null) ? 'term right' : out);
