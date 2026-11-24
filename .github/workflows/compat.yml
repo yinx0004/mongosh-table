@@ -89,8 +89,9 @@ jobs:
       - name: Run test/format.js
         run: test/format.sh mongo:${{ matrix.mongodb }}
 
-  # mt.shards() and the mongos behaviour of the other commands, on a throwaway
-  # sharded cluster (config server, three shards, mongos; see test/shard.sh).
+  # mt.shards(), mt.pool() and the mongos behaviour of the other commands, on a
+  # throwaway sharded cluster (config server, three shards, mongos; see
+  # test/shard.sh), then again with one shard stopped (test/shard-down.js).
   sharded:
     name: sharded ${{ matrix.mongodb }} / ${{ matrix.shell }}
     runs-on: ubuntu-latest
