@@ -390,15 +390,16 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 +--------------------+----------------------------------+-------------------------------------------------------------------------------------------------------------+
 
 ── 复制 ──
-+-------------------------------+-------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                       | mysql                         | description                                                                                                                                                       |
-+-------------------------------+-------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.repl()                     | SHOW SLAVE STATUS             | 副本集成员状态、复制延迟（秒）、同步源                                                                                                                            |
-| mt.rsconf()                   | SHOW SLAVE HOSTS              | 副本集配置（rs.conf()）：每个成员的优先级、投票、隐藏、延迟、标签和现在的状态，选举设置、默认读写关注；提示偶数个投票成员、仲裁节点、有投票权的延迟成员           |
-| mt.oplog()                    | SHOW BINARY LOGS              | oplog 大小和能覆盖多长时间                                                                                                                                        |
-| mt.shards('db')               | sh.status()                   | 分片集群（要连 mongos）：均衡器、各分片的排空、区域、块数、数据量、哪些库的主分片，各分片集合的分片键和块分布；可传 'db' 只看一个库的集合                         |
-| mt.balancer('ns', {hours, n}) | sh.status() migration results | 均衡器和最近的块迁移：每次迁移的集合、从哪到哪、范围、文档数、耗时、结果，正在进行的迁移，均衡轮次；hours 看多久（默认 24），n 最多几条，ns 库或集合；要连 mongos |
-+-------------------------------+-------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++-------------------------------+--------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                       | mysql                          | description                                                                                                                                                       |
++-------------------------------+--------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.repl()                     | SHOW SLAVE STATUS              | 副本集成员状态、复制延迟（秒）、同步源                                                                                                                            |
+| mt.rsconf()                   | SHOW SLAVE HOSTS               | 副本集配置（rs.conf()）：每个成员的优先级、投票、隐藏、延迟、标签和现在的状态，选举设置、默认读写关注；提示偶数个投票成员、仲裁节点、有投票权的延迟成员           |
+| mt.flow({interval})           | Group Replication flow control | flow control：是否开着、是否正在限流、多数派落后多少、等了多久（每秒）、进入过几次限流；各成员落后多少；被拖住的操作和等待次数                                    |
+| mt.oplog()                    | SHOW BINARY LOGS               | oplog 大小和能覆盖多长时间                                                                                                                                        |
+| mt.shards('db')               | sh.status()                    | 分片集群（要连 mongos）：均衡器、各分片的排空、区域、块数、数据量、哪些库的主分片，各分片集合的分片键和块分布；可传 'db' 只看一个库的集合                         |
+| mt.balancer('ns', {hours, n}) | sh.status() migration results  | 均衡器和最近的块迁移：每次迁移的集合、从哪到哪、范围、文档数、耗时、结果，正在进行的迁移，均衡轮次；hours 看多久（默认 24），n 最多几条，ns 库或集合；要连 mongos |
++-------------------------------+--------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 都可以加 t() 的选项，如 {cols: ...}、{vertical: true}；mt.config({showCmd: false}) 不打印原生命令
 mt.help('ps') 看某个命令的详细用法、选项和输出的每一列
@@ -1526,6 +1527,71 @@ heartbeatIntervalMillis: 2000
 - 延迟的字段 5.0 起叫 `secondaryDelaySecs`，之前叫 `slaveDelay`，这里都显示成 `delay`。
 - 只适用于副本集；单机、mongos 上只打印一行说明。各成员的复制延迟看 `mt.repl()`。
 
+### mt.flow()：flow control
+
+从节点跟不上时，主节点会主动给写入限流（flow control，4.2 起），让多数派提交点不至于越落越远。写入突然变慢、但主节点自己 CPU、磁盘都不忙时，先看是不是它在限流。类似 MySQL Group Replication 的 flow control。
+
+```js
+mt.flow()                // 间隔 1 秒采样两次，等待时间按每秒算
+mt.flow({interval: 0})   // 只取一次，只有启动以来的累计值
+```
+
+| 字段 | 说明 |
+|---|---|
+| `state` | 这个节点现在的状态；flow control 只在主节点上起作用 |
+| `enabled` / `isLagged` | 是否开着、现在是否在限流 |
+| `targetLag` / `threshold` | 目标落后时间（`flowControlTargetLagSeconds`，默认 10 秒），以及开始限流的落后时间（乘以 `flowControlThresholdLagPercentage`，默认一半） |
+| `majorityLag` | 多数派提交点落后主节点多少 |
+| `rateLimit` | 限流时每秒发多少张写入票据；不限流时不显示 |
+| `waitMs/s` / `waitTotal` | 写入每秒在等票据上花了多少毫秒（几个写入的加起来，可以超过 1000）；启动以来一共等了多久 |
+| `laggedCount` / `laggedTime` | 启动以来进入过几次限流；结束了的几次一共限流了多久 |
+| `waitingOps` | 现在正在等票据的操作数 |
+| 成员表 | 各成员落后主节点几秒（`lagSecs`），以及有没有投票权：多数派提交点由有投票权的成员决定 |
+| 被拖住的操作 | 正在等或等过票据的操作：`waits` 等了几次、`waitMs` 一共等了多久；没有时不显示 |
+
+下面是 MongoDB 7.0 的两成员副本集：`db2` 被 `fsyncLock` 锁住、停止应用 oplog，`db1` 上有两个程序一直在写。多数派提交点落后超过 5 秒后开始限流，两个写入每秒加起来等了将近 2 秒：
+
+```
+> mt.flow()
+-- db.serverStatus().flowControl; getParameter flowControl*; rs.status(); currentOp → waitingForFlowControl, flowControlStats，间隔 1 秒采样两次，带 /s 的是每秒的量
+      state: PRIMARY
+    enabled: true
+   isLagged: true
+  targetLag: 10s
+  threshold: 5s
+majorityLag: 35.1s
+  rateLimit: 132/s
+   waitMs/s: 1919
+  waitTotal: 47s
+laggedCount: 1
+ laggedTime: 0s
+ waitingOps: 0
+
+── 各成员落后主节点 ──
++-----------+-----------+-------+---------+------+
+| name      | state     | votes | lagSecs | self |
++-----------+-----------+-------+---------+------+
+| db1:27017 | PRIMARY   |     1 |       0 | *    |
+| db2:27017 | SECONDARY |     1 |      35 |      |
++-----------+-----------+-------+---------+------+
+2 rows in set
+
+── 被 flow control 拖住的操作 ──
++-------+------+--------+-------------+-----------------+---------+-------+--------+
+| opid  | secs | op     | ns          | client          | waiting | waits | waitMs |
++-------+------+--------+-------------+-----------------+---------+-------+--------+
+| 92567 |    0 | update | shop.stock  | 127.0.0.1:48040 |         |     1 |    969 |
+| 92566 |    0 | insert | shop.orders | 127.0.0.1:48008 |         |     1 |    969 |
++-------+------+--------+-------------+-----------------+---------+-------+--------+
+2 rows in set
+注意：正在限流：多数派提交点落后 35.1s，超过了 5s；主节点每秒只发 132 张写入票据，写入会变慢。落后的有投票权的成员：db2:27017 (35s)
+```
+
+- 服务端没有“一共等了几次”的计数，等待次数是每个操作自己的（`currentOp` 的 `flowControlStats`）。慢日志和 profiler 里每条操作也有 `flowControl` 的统计。
+- 限流的常见原因：有投票权的从节点所在机器慢（磁盘、CPU）、网络慢、从节点上有长时间的操作或 `fsyncLock`。
+- 这些情况会在最后提示：不是主节点；flow control 关着；正在限流（列出落后超过 `threshold` 的有投票权的成员）；启动以来限流过。
+- 只适用于副本集；单机、mongos 上只打印一行说明。
+
 ### mt.shards()：分片集群
 
 相当于 `sh.status()`，排成两张表：各分片的情况，以及各分片集合的块分布。要连 mongos。
@@ -2643,7 +2709,7 @@ attr: {type: remove, ns: shop.orders, appName: mongosh 2.14.2, command: {q: {amo
 - mongosh：MongoDB 4.4、5.0、6.0、7.0、8.0 各配 mongosh 1.8.0 和 2.x 最新版；MongoDB 4.0 配 mongosh 1.8.0 和 1.10.6（mongosh 2.x 连不了 4.0）。共 12 组。
 - 老的 mongo shell：MongoDB 3.6、4.0、4.2、4.4、5.0，各用自带的 `mongo` 连同版本的服务器。共 5 组。
 
-都是单节点副本集。另外在一个分片集群（配置服务器、3 个分片、mongos，见 [test/shard.sh](test/shard.sh)）上跑 [test/shard.js](test/shard.js)，再停掉一个分片跑 [test/shard-down.js](test/shard-down.js)：MongoDB 3.6（老 `mongo`）、4.4（mongosh 1.8.0）、5.0、7.0、8.0（mongosh 2.x），共 5 组。在开了 `--auth` 的 mongod 上跑 [test/auth.js](test/auth.js)（见 [test/auth.sh](test/auth.sh)，以 root 和一个没有查看用户权限的用户登录）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。还跑 [test/format.js](test/format.js)（不连数据库，只测排版、`load()` 路径和 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量）：Linux、macOS、Windows 上的 mongosh 1.8.0 和 2.14.2，以及上面 5 个版本的老 `mongo`。
+都是单节点副本集。另外在一个分片集群（配置服务器、3 个分片、mongos，见 [test/shard.sh](test/shard.sh)）上跑 [test/shard.js](test/shard.js)，再停掉一个分片跑 [test/shard-down.js](test/shard-down.js)：MongoDB 3.6（老 `mongo`）、4.4（mongosh 1.8.0）、5.0、7.0、8.0（mongosh 2.x），共 5 组。在开了 `--auth` 的 mongod 上跑 [test/auth.js](test/auth.js)（见 [test/auth.sh](test/auth.sh)，以 root 和一个没有查看用户权限的用户登录）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。在一个两成员的副本集上跑 [test/flow.js](test/flow.js)（见 [test/flow.sh](test/flow.sh)：正常时、从节点 `fsyncLock` 后主节点限流时、从节点追上之后，以及在从节点上）：4.2（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。还跑 [test/format.js](test/format.js)（不连数据库，只测排版、`load()` 路径和 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量）：Linux、macOS、Windows 上的 mongosh 1.8.0 和 2.14.2，以及上面 5 个版本的老 `mongo`。
 
 本地跑（需要 Docker）：
 
@@ -2672,6 +2738,12 @@ MONGO_SHELL=mongo test/shard.sh mongo:3.6
 # 开了认证的 mongod 上的测试
 test/auth.sh mongo:7.0
 MONGO_SHELL=mongo test/auth.sh mongo:3.6
+```
+
+```bash
+# 两成员副本集上的 flow control 测试
+test/flow.sh mongo:7.0
+MONGO_SHELL=mongo test/flow.sh mongo:4.2
 ```
 
 ```bash
