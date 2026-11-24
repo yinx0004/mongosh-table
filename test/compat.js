@@ -86,7 +86,7 @@ run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '─�
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
 var ALL_CMDS = ['host', 'latency', 'desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
-  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'balancer', 'pool', 'users', 'mem', 'cursors', 'flow', 'initialSync'];
+  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'balancer', 'pool', 'users', 'mem', 'cursors', 'flow', 'initialSync', 'concern'];
 run('mt.help each command', function () {
   var bad = [];
   ['zh', 'en'].forEach(function (lang) {
@@ -99,7 +99,7 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 40 ok']);
+}, ['all 41 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
 run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'mem'、'vars'"]);
@@ -630,6 +630,16 @@ run('mt.flow', function () {
 // mt.initialSync：单节点副本集不在初始同步（同步中的样子在 test/isync.js）
 run('mt.initialSync', function () { mt.initialSync(); }, [
   '-- db.adminCommand({replSetGetStatus: 1, initialSync: 1}).initialSyncStatus', 'state: PRIMARY', 'sinceStartup: completed 0, failedAttempts 0, failures 0', '这个节点没有在初始同步']);
+// mt.concern：单节点副本集、没打开写关注计数（PSA、计数和显式设置的样子在 test/concern.js）
+run('mt.concern', function () {
+  var out = capOut(function () { mt.concern(); });
+  var v44c = vmaj > 4 || (vmaj === 4 && Number(db.version().split('.')[1]) >= 4);
+  print((vmaj >= 5 ? /defaultWriteConcern: \{w: majority, wtimeout: 0\} \(implicit\)\n/.test(out) && /defaultReadConcern: \{level: local\} \(implicit\)\n/.test(out) :
+    /defaultWriteConcern: \{w: 1, wtimeout: 0\} \(getLastErrorDefaults\)\n/.test(out)) ? 'defaults' : out);
+  print(/writeConcern: 没设，用服务端的默认值\n/.test(out) && /readPreference: primary\n/.test(out) ? 'this connection' : out);
+  print((v44c ? /写关注没有计数：要在启动时加 --setParameter reportOpWriteConcernCountersInServerStatus=true/.test(out) : /4\.4 之前没有写关注的计数/.test(out)) ? 'no write counts' : out);
+  print(/── 读关注的使用次数（启动以来） ──\n\+/.test(out) && !/注意：/.test(out) ? 'read counts, no notes' : out);
+}, ['defaults', 'this connection', 'no write counts', 'read counts, no notes']);
 run('mt.rsconf versions', function () {
   var conf = rs.conf(), out = capOut(function () { mt.rsconf({ showCmd: false }); });
   print(/term: \d+/.test(out) === (conf.term != null) ? 'term right' : out);

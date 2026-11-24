@@ -390,17 +390,18 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 +--------------------+----------------------------------+-------------------------------------------------------------------------------------------------------------+
 
 ── 复制 ──
-+-------------------------------+--------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                       | mysql                                | description                                                                                                                                                       |
-+-------------------------------+--------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.repl()                     | SHOW SLAVE STATUS                    | 副本集成员状态、复制延迟（秒）、同步源                                                                                                                            |
-| mt.rsconf()                   | SHOW SLAVE HOSTS                     | 副本集配置（rs.conf()）：每个成员的优先级、投票、隐藏、延迟、标签和现在的状态，选举设置、默认读写关注；提示偶数个投票成员、仲裁节点、有投票权的延迟成员           |
-| mt.flow({interval})           | Group Replication flow control       | flow control：是否开着、是否正在限流、多数派落后多少、等了多久（每秒）、进入过几次限流；各成员落后多少；被拖住的操作和等待次数                                    |
-| mt.initialSync({all})         | CLONE plugin progress (clone_status) | 初始同步的进度：同步源、阶段、已复制多少、剩余估算（4.2 起）、oplog 起止和缓冲、应用了多少、失败和重试；各库、正在复制的集合；all 列出所有集合                    |
-| mt.oplog()                    | SHOW BINARY LOGS                     | oplog 大小和能覆盖多长时间                                                                                                                                        |
-| mt.shards('db')               | sh.status()                          | 分片集群（要连 mongos）：均衡器、各分片的排空、区域、块数、数据量、哪些库的主分片，各分片集合的分片键和块分布；可传 'db' 只看一个库的集合                         |
-| mt.balancer('ns', {hours, n}) | sh.status() migration results        | 均衡器和最近的块迁移：每次迁移的集合、从哪到哪、范围、文档数、耗时、结果，正在进行的迁移，均衡轮次；hours 看多久（默认 24），n 最多几条，ns 库或集合；要连 mongos |
-+-------------------------------+--------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++-------------------------------+--------------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                       | mysql                                                        | description                                                                                                                                                       |
++-------------------------------+--------------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.repl()                     | SHOW SLAVE STATUS                                            | 副本集成员状态、复制延迟（秒）、同步源                                                                                                                            |
+| mt.rsconf()                   | SHOW SLAVE HOSTS                                             | 副本集配置（rs.conf()）：每个成员的优先级、投票、隐藏、延迟、标签和现在的状态，选举设置、默认读写关注；提示偶数个投票成员、仲裁节点、有投票权的延迟成员           |
+| mt.concern()                  | SHOW VARIABLES LIKE 'rpl_semi_sync%' / transaction_isolation | 读写关注的各层：服务端默认（来源）、写关注模式、当前连接的设置、各级别的使用次数（写关注要启动参数打开）、正在执行的操作带的读写关注                              |
+| mt.flow({interval})           | Group Replication flow control                               | flow control：是否开着、是否正在限流、多数派落后多少、等了多久（每秒）、进入过几次限流；各成员落后多少；被拖住的操作和等待次数                                    |
+| mt.initialSync({all})         | CLONE plugin progress (clone_status)                         | 初始同步的进度：同步源、阶段、已复制多少、剩余估算（4.2 起）、oplog 起止和缓冲、应用了多少、失败和重试；各库、正在复制的集合；all 列出所有集合                    |
+| mt.oplog()                    | SHOW BINARY LOGS                                             | oplog 大小和能覆盖多长时间                                                                                                                                        |
+| mt.shards('db')               | sh.status()                                                  | 分片集群（要连 mongos）：均衡器、各分片的排空、区域、块数、数据量、哪些库的主分片，各分片集合的分片键和块分布；可传 'db' 只看一个库的集合                         |
+| mt.balancer('ns', {hours, n}) | sh.status() migration results                                | 均衡器和最近的块迁移：每次迁移的集合、从哪到哪、范围、文档数、耗时、结果，正在进行的迁移，均衡轮次；hours 看多久（默认 24），n 最多几条，ns 库或集合；要连 mongos |
++-------------------------------+--------------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 都可以加 t() 的选项，如 {cols: ...}、{vertical: true}；mt.config({showCmd: false}) 不打印原生命令
 mt.help('ps') 看某个命令的详细用法、选项和输出的每一列
@@ -1528,6 +1529,63 @@ heartbeatIntervalMillis: 2000
 - 延迟的字段 5.0 起叫 `secondaryDelaySecs`，之前叫 `slaveDelay`，这里都显示成 `delay`。
 - 只适用于副本集；单机、mongos 上只打印一行说明。各成员的复制延迟看 `mt.repl()`。
 
+### mt.concern()：读写关注的各层
+
+读写关注可以在好几层设置：服务端的默认值、副本集配置、连接串、每个操作自己。`mt.concern()` 把这几层从上到下列出来，再加上启动以来各级别实际用了多少次，看应用到底用的是什么。类似 MySQL 里看半同步复制的设置和事务隔离级别。
+
+```js
+mt.concern()
+```
+
+| 部分 | 说明 |
+|---|---|
+| 表头 | `defaultWriteConcern` / `defaultReadConcern`：服务端默认的读写关注，括号里是来源：`global`（用 `setDefaultRWConcern` 设过）、`implicit`（没设过，用隐含默认值，5.0 起）、`getLastErrorDefaults`（4.4 之前副本集配置里的默认写关注）、内置默认。还有设置时间、自定义的写关注模式、`writeConcernMajorityJournalDefault` |
+| 当前连接 | 这个 shell 的写关注、读关注、读偏好；mongosh 认连接串里的 `w`、`readConcernLevel`、`readPreference` |
+| 写关注的使用次数 | 启动以来每种写操作用了 `majority`、`w: 数字`、标签各多少次，没指定的有多少；5.0 起还分没指定的用了全局默认（`default`）还是隐含默认（`implicit`） |
+| 读关注的使用次数 | 启动以来各级别读关注的次数；5.0 起分事务外 / 事务内 |
+| 正在执行的操作 | 自己指定了读写关注的操作；没有时不显示 |
+
+下面是 MongoDB 7.0、带一个仲裁节点的副本集（`db1` 启动时打开了写关注计数）。订单服务的连接串里写了 `w=majority`；老的报表服务什么都没设，用的是隐含的 `w: 1`；埋点批处理用 `w: 0`；对账任务在事务里用 `snapshot` 读：
+
+```
+> mt.concern()
+-- db.adminCommand({getDefaultRWConcern: 1}); rs.conf(); db.getMongo() write / read concern, read preference; serverStatus().opWriteConcernCounters / readConcernCounters; currentOp
+   defaultWriteConcern: {w: 1} (implicit)
+    defaultReadConcern: {level: local} (implicit)
+majorityJournalDefault: true
+
+── 当前连接（这个 shell） ──
+  writeConcern: 没设，用服务端的默认值
+   readConcern: 没设，用服务端的默认值
+readPreference: primary
+
+── 写关注的使用次数（启动以来） ──
++--------+----------+-----+-------+------------------+
+| op     | majority | w:0 | unset | unsetUsed        |
++--------+----------+-----+-------+------------------+
+| insert |      120 |  80 |   307 | implicit w:1 307 |
+| update |       40 |   0 |     0 |                  |
+| delete |        0 |   0 |     1 | implicit w:1 1   |
++--------+----------+-----+-------+------------------+
+3 rows in set
+
+── 读关注的使用次数（启动以来） ──
++-------------+-------+-----------+----------+----------+--------------+-------+--------------------+
+| scope       | local | available | majority | snapshot | linearizable | unset | unsetUsed          |
++-------------+-------+-----------+----------+----------+--------------+-------+--------------------+
+| outside txn |     9 |         0 |       81 |        0 |            0 |   164 | implicit local 164 |
+| in txn      |     0 |           |        0 |        5 |              |     0 |                    |
++-------------+-------+-----------+----------+----------+--------------+-------+--------------------+
+2 rows in set
+注意：有 1 个仲裁节点，隐含的默认写关注是 w: 1：主节点挂掉时，已经确认的写入可能回滚；可以用 setDefaultRWConcern 显式设置（设成 majority 后，一个数据节点挂掉时写入会等不到确认）
+注意：有 80 次写入是 w: 0：不等任何确认，写失败了应用也不知道
+```
+
+- 写关注的计数 4.4 起才有，而且要在启动时加 `--setParameter reportOpWriteConcernCountersInServerStatus=true`，不能运行时改；没打开时这一部分打印一行说明。
+- 5.0 起没设过默认写关注时用隐含默认值：一般是 `w: majority`，但有仲裁节点（PSA）时是 `w: 1`，已经确认的写入在主节点挂掉时可能回滚，最后会提示。
+- 老的 mongo shell 不认连接串里的读写关注选项，要用 `db.getMongo().setWriteConcern()` 等设置。
+- 这些情况会在最后提示：隐含默认写关注是 `w: 1`（有仲裁节点）；有 `w: 0` 的写入；`writeConcernMajorityJournalDefault` 是 false。
+
 ### mt.flow()：flow control
 
 从节点跟不上时，主节点会主动给写入限流（flow control，4.2 起），让多数派提交点不至于越落越远。写入突然变慢、但主节点自己 CPU、磁盘都不忙时，先看是不是它在限流。类似 MySQL Group Replication 的 flow control。
@@ -1661,7 +1719,7 @@ failedAttempts: 0 / 10
 
 - STARTUP2 很久不结束：先看 `phase` 和正在复制的集合；`failedAttempts` 在涨说明在反复失败重来，原因在“之前的尝试”里。
 - 磁盘一直涨：除了复制的数据本身，复制期间同步源上的写入都先存在 `local.temp_oplog_buffer`，等数据复制完才应用；写入多、复制慢时它会越来越大，超过 1 GB 会提示。
-- 3.6 同步完后 `initialSyncStatus` 还保留着，显示为“已完成”；4.2 起完成后就没有了，只剩 `sinceStartup` 的计数。4.2 之前，在其他成员上看不到同步中成员的同步源。
+- 3.6 同步完后 `initialSyncStatus` 还保留着，显示为“已完成”；4.2 起完成后就没有了，只剩 `sinceStartup` 的计数。
 - 这些情况会在最后提示：已经失败过（列出最近一次的原因）；同步源现在连不上；oplog 缓冲超过 1 GB；其他成员正在初始同步。
 
 ### mt.shards()：分片集群
@@ -2781,7 +2839,7 @@ attr: {type: remove, ns: shop.orders, appName: mongosh 2.14.2, command: {q: {amo
 - mongosh：MongoDB 4.4、5.0、6.0、7.0、8.0 各配 mongosh 1.8.0 和 2.x 最新版；MongoDB 4.0 配 mongosh 1.8.0 和 1.10.6（mongosh 2.x 连不了 4.0）。共 12 组。
 - 老的 mongo shell：MongoDB 3.6、4.0、4.2、4.4、5.0，各用自带的 `mongo` 连同版本的服务器。共 5 组。
 
-都是单节点副本集。另外在一个分片集群（配置服务器、3 个分片、mongos，见 [test/shard.sh](test/shard.sh)）上跑 [test/shard.js](test/shard.js)，再停掉一个分片跑 [test/shard-down.js](test/shard-down.js)：MongoDB 3.6（老 `mongo`）、4.4（mongosh 1.8.0）、5.0、7.0、8.0（mongosh 2.x），共 5 组。在开了 `--auth` 的 mongod 上跑 [test/auth.js](test/auth.js)（见 [test/auth.sh](test/auth.sh)，以 root 和一个没有查看用户权限的用户登录）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。在一个两成员的副本集上跑 [test/flow.js](test/flow.js)（见 [test/flow.sh](test/flow.sh)：正常时、从节点 `fsyncLock` 后主节点限流时、从节点追上之后，以及在从节点上）：4.2（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。让一个新成员做初始同步，用 failpoint 停在各个阶段跑 [test/isync.js](test/isync.js)（见 [test/isync.sh](test/isync.sh)：前两次尝试失败后复制到一半、在主节点上、快完成时、完成后）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。还跑 [test/format.js](test/format.js)（不连数据库，只测排版、`load()` 路径和 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量）：Linux、macOS、Windows 上的 mongosh 1.8.0 和 2.14.2，以及上面 5 个版本的老 `mongo`。
+都是单节点副本集。另外在一个分片集群（配置服务器、3 个分片、mongos，见 [test/shard.sh](test/shard.sh)）上跑 [test/shard.js](test/shard.js)，再停掉一个分片跑 [test/shard-down.js](test/shard-down.js)：MongoDB 3.6（老 `mongo`）、4.4（mongosh 1.8.0）、5.0、7.0、8.0（mongosh 2.x），共 5 组。在开了 `--auth` 的 mongod 上跑 [test/auth.js](test/auth.js)（见 [test/auth.sh](test/auth.sh)，以 root 和一个没有查看用户权限的用户登录）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。在一个两成员的副本集上跑 [test/flow.js](test/flow.js)（见 [test/flow.sh](test/flow.sh)：正常时、从节点 `fsyncLock` 后主节点限流时、从节点追上之后，以及在从节点上）：4.2（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。让一个新成员做初始同步，用 failpoint 停在各个阶段跑 [test/isync.js](test/isync.js)（见 [test/isync.sh](test/isync.sh)：前两次尝试失败后复制到一半、在主节点上、快完成时、完成后）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。在一个带仲裁节点的副本集（主节点打开了写关注计数）上跑 [test/concern.js](test/concern.js)（见 [test/concern.sh](test/concern.sh)：隐含默认值、各级别的计数、连接上的设置、用 `setDefaultRWConcern` 设置之后）：4.2（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。还跑 [test/format.js](test/format.js)（不连数据库，只测排版、`load()` 路径和 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量）：Linux、macOS、Windows 上的 mongosh 1.8.0 和 2.14.2，以及上面 5 个版本的老 `mongo`。
 
 本地跑（需要 Docker）：
 
@@ -2822,6 +2880,12 @@ MONGO_SHELL=mongo test/flow.sh mongo:4.2
 # 初始同步的测试
 test/isync.sh mongo:7.0
 MONGO_SHELL=mongo test/isync.sh mongo:3.6
+```
+
+```bash
+# 读写关注的测试（带仲裁节点的副本集）
+test/concern.sh mongo:7.0
+MONGO_SHELL=mongo test/concern.sh mongo:4.2
 ```
 
 ```bash
