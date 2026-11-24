@@ -86,7 +86,7 @@ run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '─�
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
 var ALL_CMDS = ['host', 'latency', 'desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
-  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'balancer', 'pool', 'users'];
+  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'balancer', 'pool', 'users', 'mem'];
 run('mt.help each command', function () {
   var bad = [];
   ['zh', 'en'].forEach(function (lang) {
@@ -99,10 +99,10 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 36 ok']);
+}, ['all 37 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
-run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'vars'、'engine'"]);
+run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'mem'、'vars'"]);
 run('mt.ps', function () { mt.ps(); }, ['-- db.adminCommand({currentOp: 1, active: true})']);
 run('mt.ps slow query', function () {
   for (var i = 0; i < 20 && !db.currentOp({ ns: 'mtslow.slow' }).inprog.length; i++) sleep(500);
@@ -549,6 +549,29 @@ run('mt.pool', function () {
   out = capOut(function () { mt.pool({ all: true, showCmd: false }); });
   print(/── 各连接池 ──/.test(out) ? 'per pool' : out);
 }, ['header', 'rows or none', 'no notes', 'slowWaits right', 'per pool']);
+// mt.mem：常驻内存分成几部分，各部分的比例加起来是 100%；测试机内存很空，不该有提示
+run('mt.mem', function () {
+  var out = capOut(function () { mt.mem(); });
+  print(/^-- db\.serverStatus\(\{tcmalloc: 1\}\)[^\n]*\n +memory: [\d.]+ [KMGT]?B\n/.test(out) ? 'header' : out);
+  print(/resident: [\d.]+ [KMG]?B \([\d.]+%\)/.test(out) && /cacheMax: [\d.]+ [KMG]?B \([\d.]+%\)/.test(out) && /connections: \d+/.test(out) ? 'resident, cacheMax' : out);
+  print(/── 常驻内存的去向 ──/.test(out) && /\| WiredTiger cache +\| +[\d.]+ [KMG]?B \| +[\d.]+% \| 占上限 [\d.]+%，脏数据 [\d.]+% +\|/.test(out) ? 'cache row' : out);
+  print(/\| other in use +\|[^\n]*\| 连接 \d+ 个/.test(out) && /\| tcmalloc free +\|[^\n]*\| 页堆 [\d.]+ [KMG]?B，各级缓存 /.test(out) ? 'tcmalloc rows' : out);
+  var sum = 0, re = /\| (WiredTiger cache|other in use|tcmalloc free|outside tcmalloc) +\|[^|]+\| +([\d.]+)% \|/g, mm;
+  while ((mm = re.exec(out))) sum += Number(mm[2]);
+  print(sum > 99 && sum < 101 || (sum > 0 && sum <= 100.1 && !/outside tcmalloc/.test(out)) ? 'shares add up' : sum + '\n' + out);
+  print(/注意：/.test(out) ? out : 'no notes');
+}, ['header', 'resident, cacheMax', 'cache row', 'tcmalloc rows', 'shares add up', 'no notes']);
+// 把缓存上限临时调到可用内存的 90%，看提示；测完调回来
+run('mt.mem big cache', function () {
+  var a = db.getSiblingDB('admin'), num = function (v) { return v != null && v.toNumber ? v.toNumber() : Number(v); };
+  var max = num(a.runCommand({ serverStatus: 1 }).wiredTiger.cache['maximum bytes configured']), sy = a.runCommand({ hostInfo: 1 }).system;
+  var avail = Math.min(num(sy.memSizeMB), sy.memLimitMB != null ? num(sy.memLimitMB) : Infinity);
+  a.runCommand({ setParameter: 1, wiredTigerEngineRuntimeConfig: 'cache_size=' + Math.round(avail * 0.9) + 'M' });
+  var out = capOut(function () { mt.mem({ showCmd: false }); });
+  a.runCommand({ setParameter: 1, wiredTigerEngineRuntimeConfig: 'cache_size=' + Math.round(max / 1048576) + 'M' });
+  print(/注意：缓存上限占可用内存的 (89|90)\.\d%/.test(out) ? 'big cache note' : out);
+  print(num(a.runCommand({ serverStatus: 1 }).wiredTiger.cache['maximum bytes configured']) === max ? 'restored' : 'not restored');
+}, ['big cache note', 'restored']);
 run('mt.rsconf versions', function () {
   var conf = rs.conf(), out = capOut(function () { mt.rsconf({ showCmd: false }); });
   print(/term: \d+/.test(out) === (conf.term != null) ? 'term right' : out);
