@@ -33,8 +33,13 @@ if (MT_PHASE === 'lagged') {
     var lag = /majorityLag: ([\d.]+)s/.exec(out);
     print(lag && Number(lag[1]) >= 1 ? 'majority lag' : out);
     print(new RegExp('注意：正在限流：多数派提交点落后 [\\d.]+s，超过了 1s；主节点每秒只发 \\d+ 张写入票据，写入会变慢。落后的有投票权的成员：' + MT_SECONDARY.replace(/\./g, '\\.') + ' \\(\\d+s\\)').test(out) ? 'lagged note' : out);
-    print(/── 被 flow control 拖住的操作 ──/.test(out) && /\| insert +\| mtflow\.t +\|[^\n]*\| +[1-9]\d* \| +\d+ \|/.test(out) ? 'held-up insert' : out);
-  }, ['throttling', 'majority lag', 'lagged note', 'held-up insert']);
+  }, ['throttling', 'majority lag', 'lagged note']);
+  // 写入是一条接一条的，两条之间的瞬间 currentOp 里没有它：多取几次，看到等过票据的 insert 为止
+  run('flow: lagged, held-up insert', function () {
+    var heldUp = /── 被 flow control 拖住的操作 ──[\s\S]*\| insert +\| mtflow\.t +\|[^\n]*\| +[1-9]\d* \| +\d+ \|/, out = '';
+    for (var i = 0; i < 10 && !heldUp.test(out); i++) out = capOut(function () { mt.flow({ interval: 0, showCmd: false, width: 300 }); });
+    print(heldUp.test(out) ? 'held-up insert' : out);
+  }, ['held-up insert']);
 }
 
 if (MT_PHASE === 'after') {
