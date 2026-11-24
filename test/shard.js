@@ -40,6 +40,32 @@ run('mt.shards one db', function () {
   print(/shop\.orders/.test(out) && /shop\.events/.test(out) ? 'shop by handle' : out);
 }, ['crm has none', 'shop by handle']);
 
+// 迁移记录：shard.sh 把 shop.orders 的两块从 sh1 迁到了 sh2（哈希分片建集合时有的版本也会迁，不检查条数）
+run('mt.balancer', function () {
+  var out = capOut(function () { mt.balancer({ n: 0 }); });
+  print(/-- balancerStatus; config\.settings/.test(out) && /balancer: off/.test(out) && /migrations: \d+ \(success \d+\)/.test(out) ? 'header' : out);
+  print(/── 最近 24 小时的迁移 ──/.test(out) ? 'title' : out);
+  ['200 → 300', '300 → MaxKey'].forEach(function (r) {
+    print(new RegExp('\\| shop\\.orders \\| sh1 +\\| sh2 \\| ' + r + ' +\\| +1000 \\| [^|]+\\| +\\d+ \\| success \\|').test(out) ? r + ' success' : r + ': ' + out);
+  });
+  print(/注意：均衡器关着/.test(out) && !/没有成功/.test(out) ? 'notes' : out);
+}, ['header', 'title', '200 → 300 success', '300 → MaxKey success', 'notes']);
+run('mt.balancer filters', function () {
+  var out = capOut(function () { mt.balancer('crm', { showCmd: false }); });
+  print(/migrations: 0/.test(out) && /最近 24 小时没有迁移/.test(out) ? 'crm none' : out);
+  out = capOut(function () { mt.balancer('shop.orders', { n: 1, hours: 2, showCmd: false }); });
+  print(/── 最近 2 小时的迁移 ──/.test(out) && /1 row in set/.test(out) && /300 → MaxKey/.test(out) && !/shop\.events/.test(out) ? 'one newest row' : out);
+}, ['crm none', 'one newest row']);
+// 迁到正在排空的 sh3：7.0 起源分片先开始迁移再中止，记一条 aborted；之前的版本直接拒绝，不留记录
+run('mt.balancer aborted', function () {
+  try { db.adminCommand({ moveChunk: 'shop.orders', find: { customerId: 150 }, to: 'sh3' }); } catch (e) { }
+  var out = capOut(function () { mt.balancer('shop.orders', { showCmd: false }); });
+  var ab = /\| shop\.orders \| sh1 +\| sh3 \| 100 → 200 +\|[^\n]*\| aborted \|/.test(out);
+  print(ab === (vmaj >= 7) ? 'aborted row right' : out);
+  print(/注意：1 次迁移没有成功/.test(out) === ab ? 'aborted note right' : out);
+}, ['aborted row right', 'aborted note right']);
+run('mongos: mt.balancer help', function () { mt.help('balancer'); }, ['mt.balancer() — ', 'MySQL: sh.status() migration results']);
+
 // 经 mongos 时其他命令：能用的照常输出，只能连 mongod 的打印一行说明
 run('mongos: mt.status', function () { mt.status({ interval: 0, cols: 'role' }); }, ['role: mongos']);
 run('mongos: mt.vars', function () { mt.vars('ttlMonitor'); }, ['-- db.adminCommand({getParameter: ']);

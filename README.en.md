@@ -387,14 +387,15 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 +--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Replication ──
-+-----------------+-------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command         | mysql             | description                                                                                                                                                                                                                         |
-+-----------------+-------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.repl()       | SHOW SLAVE STATUS | Replica set members, replication lag (seconds), sync source                                                                                                                                                                         |
-| mt.rsconf()     | SHOW SLAVE HOSTS  | Replica set configuration (rs.conf()): each member's priority, votes, hidden, delay, tags and current state, election settings, default read/write concern; notes an even number of voters, arbiters, and delayed members that vote |
-| mt.oplog()      | SHOW BINARY LOGS  | Oplog size and how much time it covers                                                                                                                                                                                              |
-| mt.shards('db') | sh.status()       | Sharded cluster (on a mongos): balancer, each shard's draining state, zones, chunks, data size and the databases it is primary for, each sharded collection's key and chunk distribution; pass 'db' for one database's collections  |
-+-----------------+-------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++-------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                       | mysql                         | description                                                                                                                                                                                                                                    |
++-------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.repl()                     | SHOW SLAVE STATUS             | Replica set members, replication lag (seconds), sync source                                                                                                                                                                                    |
+| mt.rsconf()                   | SHOW SLAVE HOSTS              | Replica set configuration (rs.conf()): each member's priority, votes, hidden, delay, tags and current state, election settings, default read/write concern; notes an even number of voters, arbiters, and delayed members that vote            |
+| mt.oplog()                    | SHOW BINARY LOGS              | Oplog size and how much time it covers                                                                                                                                                                                                         |
+| mt.shards('db')               | sh.status()                   | Sharded cluster (on a mongos): balancer, each shard's draining state, zones, chunks, data size and the databases it is primary for, each sharded collection's key and chunk distribution; pass 'db' for one database's collections             |
+| mt.balancer('ns', {hours, n}) | sh.status() migration results | Balancer and recent chunk migrations: collection, from / to, range, documents, duration and result of each, migrations in progress, balancer rounds; hours = how far back (24 by default), n = max rows, ns = db or collection; needs a mongos |
++-------------------------------+-------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 All accept t() options such as {cols: ...} or {vertical: true}; mt.config({showCmd: false}) hides the native command
 mt.help('ps') shows the detailed usage, options and output columns of one command
@@ -442,7 +443,7 @@ All of them:
 - **Are read-only**: they never change settings; `mt.slow()` does not turn the profiler on either.
 - **Tell logical from disk sizes**: columns with `logical` in the name are the uncompressed data size (BSON), `disk` is what it actually takes on disk (compressed by WiredTiger), and `cached` is what it takes in the in-memory cache (uncompressed). The three can differ several times over for the same data.
 - **Need monitoring privileges**, such as the `clusterMonitor` role. Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, or `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` on a mongos, they print a one-line explanation instead of throwing.
-- **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version. Through a mongos, CI tests `mt.shards()` and `mt.pool()` (including a shard that cannot be reached), plus `mt.status()` and `mt.vars()` (they work) and `mt.check()`, `mt.engine()`, `mt.qstats()`, `mt.profile()`, `mt.rsconf()` (they print a one-line explanation); the other commands are not tested through a mongos yet.
+- **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version. Through a mongos, CI tests `mt.shards()`, `mt.balancer()` and `mt.pool()` (including a shard that cannot be reached), plus `mt.status()` and `mt.vars()` (they work) and `mt.check()`, `mt.engine()`, `mt.qstats()`, `mt.profile()`, `mt.rsconf()` (they print a one-line explanation); the other commands are not tested through a mongos yet.
 
 ### mt.check(): health check
 
@@ -1525,6 +1526,53 @@ Note: sh3 draining (after removeShard): the shard cannot be removed until its ch
 - Since 6.0.3 the balancer balances data size per shard rather than chunk counts, so uneven chunk counts are not necessarily a problem; look at `size`.
 - Chunks are matched to collections by uuid since 5.0 and by ns before; both are handled.
 - Needs a mongos; on a mongod it prints a one-line explanation.
+
+### mt.balancer(): balancer and chunk migrations
+
+`sh.status()` only says how many migrations succeeded and failed in the last 24 hours; `mt.balancer()` lists each one: which collection, from which shard to which, which range, how many documents were copied, how long it took and whether it succeeded. Needs a mongos.
+
+```js
+mt.balancer()                      // migrations in the last 24 hours, newest first, up to 20
+mt.balancer('shop.orders')         // one collection; a database name gives all its collections
+mt.balancer({hours: 168, n: 0})    // every migration in the last 7 days
+```
+
+| Field | Meaning |
+|---|---|
+| header | `balancer` (mode), `activeWindow` (only if set), `rounds` (balancer rounds in the period and chunks moved; only when `config.actionlog` has entries), `migrations` (count, how many succeeded and failed) |
+| migrating now | migrations in progress, from `config.migrations` (shown only if any) |
+| `time` | when the migration ended |
+| `from` / `to` | source and destination shard |
+| `range` | chunk range (just the values when the shard key has one field) |
+| `docs` / `size` | documents and bytes copied; not for failed migrations |
+| `ms` | milliseconds from start to end |
+| `result` | `success`; `aborted` (did not succeed); followed by the error message if there is one |
+
+On MongoDB 7.0, after two chunks of `shop.orders` moved to `sh2` and a manual move to the draining `sh3` was aborted:
+
+```
+> mt.balancer()
+-- balancerStatus; config.settings / migrations / actionlog / changelog
+  balancer: off
+migrations: 3 (success 2, failed 1)
+
+── migrations in the last 24 hours ──
++-------------------------+-------------+------+-----+--------------+------+---------+-----+---------+
+| time                    | ns          | from | to  | range        | docs | size    | ms  | result  |
++-------------------------+-------------+------+-----+--------------+------+---------+-----+---------+
+| 2026-11-24 01:04:24.405 | shop.orders | sh1  | sh3 | 100 → 200    |      |         | 216 | aborted |
+| 2026-11-24 01:04:19.909 | shop.orders | sh1  | sh2 | 300 → MaxKey | 1000 | 68.2 KB | 174 | success |
+| 2026-11-24 01:04:19.697 | shop.orders | sh1  | sh2 | 200 → 300    | 1000 | 68.2 KB | 277 | success |
++-------------------------+-------------+------+-----+--------------+------+---------+-----+---------+
+3 rows in set
+Note: the balancer is off: chunks are not migrated, so data can drift out of balance; turn it on with sh.startBalancer()
+Note: migrations that did not succeed: 1; the reason is in the log of the source (from) shard primary; search for moveChunk
+```
+
+- Reads `config.changelog` (`moveChunk.start` / `commit` / `from` / `error`), `config.actionlog` and `config.migrations`, and runs `balancerStatus`.
+- Manual `moveChunk` / `moveRange` are recorded too, not just the balancer's migrations.
+- `config.changelog` is a 200 MB capped collection, so with many migrations older entries get overwritten.
+- A note is printed at the end when the balancer is off, when migrations did not succeed (the reason is in the source shard primary's log), or when balancer rounds failed.
 
 ### mt.dbs(): database sizes
 
