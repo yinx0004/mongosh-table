@@ -76,6 +76,19 @@ run('mongos: mt.mem', function () {
   print(/resident: /.test(out) && !/cacheMax/.test(out) && !/WiredTiger cache/.test(out) && /\| other in use +\|/.test(out) && /\| tcmalloc free +\|/.test(out) ? 'no cache, tcmalloc rows' : out);
   print(/注意：/.test(out) ? out : 'no notes');
 }, ['no cache, tcmalloc rows', 'no notes']);
+// 经 mongos 开一个跨两个分片的游标：列出 sh1、sh2 上各一个空闲游标，command 里没有 mongos 加的内部字段
+run('mongos: mt.cursors', function () {
+  var c = db.getSiblingDB('shop').orders.find({ customerId: { $gte: 0 } }).batchSize(2);
+  c.next();
+  var out = capOut(function () { mt.cursors({ ns: 'shop.orders', width: 400, maxCol: 0 }); });
+  var v42 = /^(3\.|4\.0)/.test(db.version());
+  if (v42) print(/4\.2 之前/.test(out) ? 'one per shard\nclean command' : out);
+  else {
+    print(/\| shop\.orders \| sh1 +\|/.test(out) && /\| shop\.orders \| sh2 +\|/.test(out) ? 'one per shard' : out);
+    print(/\{find: orders, filter: \{customerId: \{\$gte: 0\}\}\} +\|/.test(out) && !/shardVersion|clientOperationKey|provenance/.test(out) ? 'clean command' : out);
+  }
+  c.close();
+}, ['one per shard', 'clean command']);
 run('mongos: mongod-only commands', function () {
   ['check', 'engine', 'qstats', 'profile', 'rsconf'].forEach(function (k) {
     var out = capOut(function () { mt[k]({ interval: 0 }); });

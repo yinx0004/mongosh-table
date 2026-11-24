@@ -339,25 +339,26 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 ```
 > mt.cmds()
 ── Server activity ──
-+------------------------------+--------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                                | description                                                                                                                                                                                                                                           |
-+------------------------------+--------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.check({quick, issues})    | mysqltuner / pt-summary              | Health check: replication, oplog, cache, connections, long operations and transactions, TTL, redundant / unused indexes and more, each with OK / WARN / CRIT / UNKNOWN and advice; quick skips per-collection checks, issues shows only problems      |
-| mt.status({interval})        | SHOW GLOBAL STATUS                   | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                                        |
-| mt.engine({interval})        | SHOW ENGINE INNODB STATUS            | Storage engine (WiredTiger): cache usage, dirty data, eviction, checkpoints, read/write tickets, journal and disk I/O; interval = seconds to sample, 0 = totals since startup                                                                         |
-| mt.host({all})               | SHOW VARIABLES LIKE 'version%'       | Machine and process: CPU, memory, OS, open files limit, mongod version and build, storage engine, startup options; all lists every startup option                                                                                                     |
-| mt.mem()                     | sys.memory_global_by_current_bytes   | Where memory goes: resident memory split into the WiredTiger cache, other allocations, free memory tcmalloc keeps and memory outside tcmalloc; notes memory running out, an oversized cache, much dirty data and free memory not returned to the OS   |
-| mt.vars('pattern')           | SHOW VARIABLES                       | Runtime parameters (getParameter): name, current value, whether it can be changed at runtime (4.2+); filter with text, a wildcard or a regex, e.g. mt.vars('ttl')                                                                                     |
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                     | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                                  |
-| mt.conns()                   | PROCESSLIST GROUP BY host            | Connections per client IP                                                                                                                                                                                                                             |
-| mt.pool({all})               | ProxySQL stats_mysql_connection_pool | Outgoing connection pools (mongos to shards, between members) per target host; all = per pool too                                                                                                                                                     |
-| mt.users('db')               | SELECT * FROM mysql.user             | Users and custom roles: each user's database, roles and login mechanisms, each custom role's privileges and how many users have it directly; notes authentication being off, overly powerful users, SHA-1 only and users without roles; optional 'db' |
-| mt.locks({all})              | sys.innodb_lock_waits                | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                                             |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX        | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                                  |
-| mt.top({interval, ns})       | sys.schema_table_statistics          | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                                          |
-| mt.latency('db', {interval}) | sys.statement_analysis               | Average latency (ms) of reads / writes / commands, server-wide and per collection; interval = seconds to sample, 0 = since startup; all user databases by default                                                                                     |
-| mt.builds()                  | ALTER TABLE progress                 | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                                                               |
-+------------------------------+--------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                                    | description                                                                                                                                                                                                                                           |
++------------------------------+------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.check({quick, issues})    | mysqltuner / pt-summary                  | Health check: replication, oplog, cache, connections, long operations and transactions, TTL, redundant / unused indexes and more, each with OK / WARN / CRIT / UNKNOWN and advice; quick skips per-collection checks, issues shows only problems      |
+| mt.status({interval})        | SHOW GLOBAL STATUS                       | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                                        |
+| mt.engine({interval})        | SHOW ENGINE INNODB STATUS                | Storage engine (WiredTiger): cache usage, dirty data, eviction, checkpoints, read/write tickets, journal and disk I/O; interval = seconds to sample, 0 = totals since startup                                                                         |
+| mt.host({all})               | SHOW VARIABLES LIKE 'version%'           | Machine and process: CPU, memory, OS, open files limit, mongod version and build, storage engine, startup options; all lists every startup option                                                                                                     |
+| mt.mem()                     | sys.memory_global_by_current_bytes       | Where memory goes: resident memory split into the WiredTiger cache, other allocations, free memory tcmalloc keeps and memory outside tcmalloc; notes memory running out, an oversized cache, much dirty data and free memory not returned to the OS   |
+| mt.vars('pattern')           | SHOW VARIABLES                           | Runtime parameters (getParameter): name, current value, whether it can be changed at runtime (4.2+); filter with text, a wildcard or a regex, e.g. mt.vars('ttl')                                                                                     |
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                         | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                                  |
+| mt.cursors({secs, ns})       | SHOW PROCESSLIST WHERE Command = 'Sleep' | Open cursors: totals, noTimeout, timed out; each idle cursor with its collection, idle time, documents returned and the query that opened it (4.2+); options secs, ns                                                                                 |
+| mt.conns()                   | PROCESSLIST GROUP BY host                | Connections per client IP                                                                                                                                                                                                                             |
+| mt.pool({all})               | ProxySQL stats_mysql_connection_pool     | Outgoing connection pools (mongos to shards, between members) per target host; all = per pool too                                                                                                                                                     |
+| mt.users('db')               | SELECT * FROM mysql.user                 | Users and custom roles: each user's database, roles and login mechanisms, each custom role's privileges and how many users have it directly; notes authentication being off, overly powerful users, SHA-1 only and users without roles; optional 'db' |
+| mt.locks({all})              | sys.innodb_lock_waits                    | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                                             |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX            | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                                  |
+| mt.top({interval, ns})       | sys.schema_table_statistics              | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                                          |
+| mt.latency('db', {interval}) | sys.statement_analysis                   | Average latency (ms) of reads / writes / commands, server-wide and per collection; interval = seconds to sample, 0 = since startup; all user databases by default                                                                                     |
+| mt.builds()                  | ALTER TABLE progress                     | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                                                               |
++------------------------------+------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Slow queries and plans ──
 +-------------------------+-----------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -445,7 +446,7 @@ All of them:
 - **Are read-only**: they never change settings; `mt.slow()` does not turn the profiler on either.
 - **Tell logical from disk sizes**: columns with `logical` in the name are the uncompressed data size (BSON), `disk` is what it actually takes on disk (compressed by WiredTiger), and `cached` is what it takes in the in-memory cache (uncompressed). The three can differ several times over for the same data.
 - **Need monitoring privileges**, such as the `clusterMonitor` role. Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, or `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` on a mongos, they print a one-line explanation instead of throwing.
-- **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version. Through a mongos, CI tests `mt.shards()`, `mt.balancer()` and `mt.pool()` (including a shard that cannot be reached), plus `mt.status()`, `mt.vars()` and `mt.mem()` (they work) and `mt.check()`, `mt.engine()`, `mt.qstats()`, `mt.profile()`, `mt.rsconf()` (they print a one-line explanation); the other commands are not tested through a mongos yet.
+- **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version. Through a mongos, CI tests `mt.shards()`, `mt.balancer()` and `mt.pool()` (including a shard that cannot be reached), plus `mt.status()`, `mt.vars()`, `mt.mem()` and `mt.cursors()` (they work) and `mt.check()`, `mt.engine()`, `mt.qstats()`, `mt.profile()`, `mt.rsconf()` (they print a one-line explanation); the other commands are not tested through a mongos yet.
 
 ### mt.check(): health check
 
@@ -582,6 +583,59 @@ Hidden by default: idle connections, internal threads with no client, drivers' a
 +------+------+---------+-------------+---------------------+----------------+
 5 rows in set  (showing the first 5 of 74 rows)
 ```
+
+### mt.cursors(): open cursors
+
+`mt.ps()` shows operations that are running; `mt.cursors()` shows cursors that are part way through, waiting for the client to fetch the next batch. If a program opens a cursor and neither reads it to the end nor closes it, the cursor stays on the server. Somewhat like the `Sleep` connections in MySQL's `SHOW PROCESSLIST`.
+
+```js
+mt.cursors()                // counts, and each idle cursor
+mt.cursors({secs: 600})     // only cursors idle for 10 minutes or more
+mt.cursors({ns: 'shop'})    // only one database; 'shop.orders' works too
+```
+
+| Field | Meaning |
+|---|---|
+| header | `open` cursors open now, `noTimeout` of those with noCursorTimeout, `pinned` being read now, `timedOut` closed for being idle since startup, `totalOpened` opened since startup (5.0+), `cursorTimeout` and `sessionTimeout` (see below) |
+| `cursorId` | cursor ID, needed to close it |
+| `shard` | through a mongos, the shard the cursor is on |
+| `idleSecs` / `ageSecs` | seconds idle, and seconds since it was opened |
+| `docs` / `batches` | documents and batches returned so far |
+| `flags` | `noTimeout`, `tailable`, `awaitData` |
+| `command` | the command that opened the cursor: the find filter or the aggregate pipeline; the program's `comment` comes first if it set one; cursor settings such as `batchSize` are left out |
+
+Below are cursors left part way through by a few programs on MongoDB 7.0: an export job that set noCursorTimeout and stopped after 3000 documents, a report with `comment: 'daily-report'`, and two queries that only fetched their first batch.
+
+```
+> mt.cursors()
+-- db.serverStatus().metrics.cursor; getParameter cursorTimeoutMillis, localLogicalSessionTimeoutMinutes; aggregate([{$currentOp: {allUsers: true, idleCursors: true}}, {$match: {type: 'idleCursor'}}])
+          open: 4
+     noTimeout: 1
+        pinned: 0
+      timedOut: 0
+   totalOpened: 9
+ cursorTimeout: 10m 0s
+sessionTimeout: 30m 0s
+
+── idle cursors ──
++---------------------+----------------+----------+---------+------+---------+-----------+-------------------------------------+--------------------------------------------------------------+
+| cursorId            | ns             | idleSecs | ageSecs | docs | batches | flags     | plan                                | command                                                      |
++---------------------+----------------+----------+---------+------+---------+-----------+-------------------------------------+--------------------------------------------------------------+
+| 4382608709592319410 | shop.orders    |      106 |     106 | 3000 |       3 | noTimeout | COLLSCAN                            | {find: orders, filter: {}, projection: {orderNo: 1, amoun... |
+| 5178228565502310856 | shop.orders    |       66 |      66 |  500 |       1 |           | IXSCAN { status: 1, createdAt: -1 } | {comment: daily-report, aggregate: orders, pipeline: [{$m... |
+| 5282542937179335357 | shop.orders    |       36 |      36 |  101 |       1 |           | IXSCAN { status: 1, createdAt: -1 } | {find: orders, filter: {status: new}, sort: {createdAt: -1}} |
+| 8019749106198471030 | shop.customers |       36 |      36 |    2 |       1 |           | COLLSCAN                            | {find: customers, filter: {}}                                |
++---------------------+----------------+----------+---------+------+---------+-----------+-------------------------------------+--------------------------------------------------------------+
+4 rows in set
+Note: noCursorTimeout cursors: 1; cursorTimeout does not apply to them, so if the program neither reads them to the end nor closes them they may stay on the server; close unused ones with killCursors
+```
+
+- Each idle cursor comes from `$currentOp` with `idleCursors`, which needs 4.2+; before that there are only the counts on top.
+- Idle cursors do not record the client address, so tell the program by `ns`, query and `comment`. Having programs set a `comment` on queries makes this easy.
+- When an idle cursor is closed: before 4.4 after `cursorTimeout` (`cursorTimeoutMillis`, 10 minutes by default). From 4.4, cursors opened in a session are not closed after it but when the session expires (`sessionTimeout`, `localLogicalSessionTimeoutMinutes`, 30 minutes by default); current drivers and mongosh use sessions by default. Tried locally on 4.2 and on 4.4.30, 5.0, 6.0, 7.0.
+- To close a cursor: `db.getSiblingDB('db').runCommand({killCursors: 'collection', cursors: [NumberLong('cursor ID')]})`.
+- Through a mongos, the header counts the mongos's own cursors; the table lists idle cursors on the shards, one per shard involved for each client cursor, with the internal fields mongos adds removed from `command`.
+- A note is printed at the end when there are noCursorTimeout cursors, or cursors were closed for being idle since startup.
 
 ### mt.slow(): slow queries
 

@@ -86,7 +86,7 @@ run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '─�
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
 var ALL_CMDS = ['host', 'latency', 'desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
-  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'balancer', 'pool', 'users', 'mem'];
+  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'balancer', 'pool', 'users', 'mem', 'cursors'];
 run('mt.help each command', function () {
   var bad = [];
   ['zh', 'en'].forEach(function (lang) {
@@ -99,7 +99,7 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 37 ok']);
+}, ['all 38 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
 run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'mem'、'vars'"]);
@@ -572,6 +572,53 @@ run('mt.mem big cache', function () {
   print(/注意：缓存上限占可用内存的 (89|90)\.\d%/.test(out) ? 'big cache note' : out);
   print(num(a.runCommand({ serverStatus: 1 }).wiredTiger.cache['maximum bytes configured']) === max ? 'restored' : 'not restored');
 }, ['big cache note', 'restored']);
+// mt.cursors：开三个没读完的游标（一个 noCursorTimeout，一个带 comment 的聚合）；4.2 起逐个列出，之前只有计数
+var cur42 = vmaj > 4 || (vmaj === 4 && Number(db.version().split('.')[1]) >= 2), curs = [];
+(function () {
+  var d = db.getSiblingDB('mtcur'), docs = [];
+  d.dropDatabase();
+  for (var i = 0; i < 50; i++) docs.push({ _id: i, a: i % 5 });
+  d.t.insertMany(docs);
+  curs.push(d.t.find({ a: { $gte: 0 } }).batchSize(2));
+  curs.push((d.t.find().noCursorTimeout ? d.t.find().noCursorTimeout() : d.t.find().addOption(16)).batchSize(2));
+  curs.push(d.t.aggregate([{ $match: { a: 1 } }], { cursor: { batchSize: 1 }, comment: 'mtcur report' }));
+  curs.forEach(function (c) { c.next(); });
+})();
+run('mt.cursors', function () {
+  var out = capOut(function () { mt.cursors({ ns: 'mtcur', width: 400, maxCol: 0 }); });
+  print(/^-- db\.serverStatus\(\)\.metrics\.cursor[^\n]*\n +open: \d+\n +noTimeout: [1-9]\d*\n +pinned: \d+\n +timedOut: \d+\n/.test(out) && /cursorTimeout: 10m 0s\n *sessionTimeout: 30m 0s/.test(out) ? 'header' : out);
+  print(/totalOpened: \d+/.test(out) === (vmaj >= 5) ? 'totalOpened right' : out);
+  if (cur42) {
+    print((out.match(/\| \d+ +\| mtcur\.t +\| +\d+ \| +\d+ \| +\d+ \| +\d+ \|/g) || []).length === 3 && /3 rows in set/.test(out) ? 'three cursors' : out);
+    print(/\| noTimeout +\| COLLSCAN \| \{find: t, filter: \{\}\} +\|/.test(out) ? 'noTimeout row' : out);
+    print(/\{comment: mtcur report, aggregate: t, pipeline: \[\{\$match: \{a: 1\}\}\]\} +\|/.test(out) ? 'aggregate with comment' : out);
+  } else {
+    print(/4\.2 之前 \$currentOp 列不出空闲的游标/.test(out) ? 'three cursors\nnoTimeout row\naggregate with comment' : out);
+  }
+  print(/注意：有 [1-9]\d* 个 noCursorTimeout 的游标/.test(out) ? 'noTimeout note' : out);
+}, ['header', 'totalOpened right', 'three cursors', 'noTimeout row', 'aggregate with comment', 'noTimeout note']);
+run('mt.cursors filters', function () {
+  var o1 = capOut(function () { mt.cursors({ ns: 'mtcur.other', showCmd: false }); });
+  var o2 = capOut(function () { mt.cursors({ ns: 'mtcur', secs: 3600, showCmd: false }); });
+  var o3 = capOut(function () { mt.cursors({ ns: 'mtcur.t', showCmd: false }); });
+  print(!cur42 || /没有空闲的游标/.test(o1) && /没有空闲的游标/.test(o2) && /mtcur\.t/.test(o3) ? 'filters' : o1 + o2 + o3);
+}, ['filters']);
+// 空闲超时：把 cursorTimeoutMillis 临时调成 1 秒，开一个游标，等过检查线程（默认 4 秒一次），测完调回来。
+// 4.4 之前会被回收，有提示；4.4 起会话里的游标不按它回收，游标还在
+run('mt.cursors timed out', function () {
+  var a = db.getSiblingDB('admin'), old = a.runCommand({ getParameter: 1, cursorTimeoutMillis: 1 }).cursorTimeoutMillis;
+  var reaps = vmaj < 4 || (vmaj === 4 && Number(db.version().split('.')[1]) < 4);
+  a.runCommand({ setParameter: 1, cursorTimeoutMillis: 1000 });
+  var c = db.getSiblingDB('mtcur').t.find({ a: 4 }).batchSize(2);
+  c.next();
+  sleep(9000);
+  var out = capOut(function () { mt.cursors({ ns: 'mtcur', width: 400, maxCol: 0, showCmd: false }); });
+  a.runCommand({ setParameter: 1, cursorTimeoutMillis: old });
+  print(/cursorTimeout: 1s/.test(out) && /注意：启动以来有 [1-9]\d* 个游标空闲超过 1s 被回收了/.test(out) === reaps ? 'timed out note right' : out);
+  print(!cur42 || /filter: \{a: 4\}/.test(out) === !reaps ? 'session cursor right' : out);
+  print(String(a.runCommand({ getParameter: 1, cursorTimeoutMillis: 1 }).cursorTimeoutMillis) === String(old) ? 'restored' : 'not restored');
+  db.getSiblingDB('mtcur').dropDatabase();
+}, ['timed out note right', 'session cursor right', 'restored']);
 run('mt.rsconf versions', function () {
   var conf = rs.conf(), out = capOut(function () { mt.rsconf({ showCmd: false }); });
   print(/term: \d+/.test(out) === (conf.term != null) ? 'term right' : out);
