@@ -121,12 +121,37 @@ jobs:
           if [ "${{ matrix.shell }}" = mongo ]; then export MONGO_SHELL=mongo; fi
           test/shard.sh mongo:${{ matrix.mongodb }} ${{ matrix.client }}
 
+  # mt.users() against a mongod started with --auth (test/auth.sh): logged in
+  # as root, and as a user that may not list users.
+  auth:
+    name: auth ${{ matrix.mongodb }} / ${{ matrix.shell }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mongodb: '3.6'
+            shell: mongo
+            client: mongo:3.6
+          - mongodb: '4.4'
+            shell: mongosh 1.x
+            client: mongo:6.0.4   # mongosh 1.8.0
+          - mongodb: '8.0'
+            shell: mongosh 2.x
+            client: mongo:8.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run test/auth.js
+        run: |
+          if [ "${{ matrix.shell }}" = mongo ]; then export MONGO_SHELL=mongo; fi
+          test/auth.sh mongo:${{ matrix.mongodb }} ${{ matrix.client }}
+
   # One stable check name for branch protection, so the jobs above can change
   # without editing the required checks.
   compat:
     name: compat
     if: always()
-    needs: [test, format, legacy, sharded]
+    needs: [test, format, legacy, sharded, auth]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs passed
@@ -135,3 +160,4 @@ jobs:
           test "${{ needs.format.result }}" = success
           test "${{ needs.legacy.result }}" = success
           test "${{ needs.sharded.result }}" = success
+          test "${{ needs.auth.result }}" = success

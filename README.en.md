@@ -339,23 +339,24 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 ```
 > mt.cmds()
 ── Server activity ──
-+------------------------------+--------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                      | mysql                                | description                                                                                                                                                                                                                                      |
-+------------------------------+--------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.check({quick, issues})    | mysqltuner / pt-summary              | Health check: replication, oplog, cache, connections, long operations and transactions, TTL, redundant / unused indexes and more, each with OK / WARN / CRIT / UNKNOWN and advice; quick skips per-collection checks, issues shows only problems |
-| mt.status({interval})        | SHOW GLOBAL STATUS                   | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                                   |
-| mt.engine({interval})        | SHOW ENGINE INNODB STATUS            | Storage engine (WiredTiger): cache usage, dirty data, eviction, checkpoints, read/write tickets, journal and disk I/O; interval = seconds to sample, 0 = totals since startup                                                                    |
-| mt.host({all})               | SHOW VARIABLES LIKE 'version%'       | Machine and process: CPU, memory, OS, open files limit, mongod version and build, storage engine, startup options; all lists every startup option                                                                                                |
-| mt.vars('pattern')           | SHOW VARIABLES                       | Runtime parameters (getParameter): name, current value, whether it can be changed at runtime (4.2+); filter with text, a wildcard or a regex, e.g. mt.vars('ttl')                                                                                |
-| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                     | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                             |
-| mt.conns()                   | PROCESSLIST GROUP BY host            | Connections per client IP                                                                                                                                                                                                                        |
-| mt.pool({all})               | ProxySQL stats_mysql_connection_pool | Outgoing connection pools (mongos to shards, between members) per target host; all = per pool too                                                                                                                                                |
-| mt.locks({all})              | sys.innodb_lock_waits                | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                                        |
-| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX        | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                             |
-| mt.top({interval, ns})       | sys.schema_table_statistics          | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                                     |
-| mt.latency('db', {interval}) | sys.statement_analysis               | Average latency (ms) of reads / writes / commands, server-wide and per collection; interval = seconds to sample, 0 = since startup; all user databases by default                                                                                |
-| mt.builds()                  | ALTER TABLE progress                 | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                                                          |
-+------------------------------+--------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++------------------------------+--------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                      | mysql                                | description                                                                                                                                                                                                                                           |
++------------------------------+--------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.check({quick, issues})    | mysqltuner / pt-summary              | Health check: replication, oplog, cache, connections, long operations and transactions, TTL, redundant / unused indexes and more, each with OK / WARN / CRIT / UNKNOWN and advice; quick skips per-collection checks, issues shows only problems      |
+| mt.status({interval})        | SHOW GLOBAL STATUS                   | Version, role, ops/s, connections, cache and other key metrics                                                                                                                                                                                        |
+| mt.engine({interval})        | SHOW ENGINE INNODB STATUS            | Storage engine (WiredTiger): cache usage, dirty data, eviction, checkpoints, read/write tickets, journal and disk I/O; interval = seconds to sample, 0 = totals since startup                                                                         |
+| mt.host({all})               | SHOW VARIABLES LIKE 'version%'       | Machine and process: CPU, memory, OS, open files limit, mongod version and build, storage engine, startup options; all lists every startup option                                                                                                     |
+| mt.vars('pattern')           | SHOW VARIABLES                       | Runtime parameters (getParameter): name, current value, whether it can be changed at runtime (4.2+); filter with text, a wildcard or a regex, e.g. mt.vars('ttl')                                                                                     |
+| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                     | Running operations; secs = minimum seconds, ns = db or collection, all = include idle, sort: 'desc' longest running first (default) / 'asc' / 'opid'                                                                                                  |
+| mt.conns()                   | PROCESSLIST GROUP BY host            | Connections per client IP                                                                                                                                                                                                                             |
+| mt.pool({all})               | ProxySQL stats_mysql_connection_pool | Outgoing connection pools (mongos to shards, between members) per target host; all = per pool too                                                                                                                                                     |
+| mt.users('db')               | SELECT * FROM mysql.user             | Users and custom roles: each user's database, roles and login mechanisms, each custom role's privileges and how many users have it directly; notes authentication being off, overly powerful users, SHA-1 only and users without roles; optional 'db' |
+| mt.locks({all})              | sys.innodb_lock_waits                | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                                             |
+| mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX        | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                                  |
+| mt.top({interval, ns})       | sys.schema_table_statistics          | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                                          |
+| mt.latency('db', {interval}) | sys.statement_analysis               | Average latency (ms) of reads / writes / commands, server-wide and per collection; interval = seconds to sample, 0 = since startup; all user databases by default                                                                                     |
+| mt.builds()                  | ALTER TABLE progress                 | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                                                               |
++------------------------------+--------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Slow queries and plans ──
 +-------------------------+-----------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -1979,6 +1980,65 @@ Note: replica set sh3 has no primary (as the replica set monitor sees it): write
 - Pool sizes from mongos to the shards are set by `ShardingTaskExecutorPoolMinSize` / `MaxSize` / `MaxConnecting`; see them with `mt.vars('ShardingTaskExecutorPool')`.
 - A standalone or a one-member replica set usually has no outgoing connections; one line says so.
 
+### mt.users(): users and custom roles
+
+Like `SELECT * FROM mysql.user`: users in every database, their roles and login mechanisms, and the privileges of custom roles.
+
+```js
+mt.users()         // every database
+mt.users('shop')   // only users and roles created in shop; a db object works too
+```
+
+| Field | Meaning |
+|---|---|
+| header | `authorization` (whether authentication is on; hidden when startup options cannot be read), `currentUser` (who is logged in), number of users and custom roles |
+| users: `user` / `db` | user name and the database it was created in (its authSource) |
+| `roles` | roles; just the name for roles in the user's own database, `role@db` for others |
+| `mechanisms` | login mechanisms it can use (4.0+) |
+| custom roles: `inherits` | roles it inherits |
+| `privileges` | its own privileges: resource (`db.collection`, `*` for all; `cluster`) and actions, only the first 5 when there are more |
+| `users` | how many users have this role directly; 0 means nobody uses it |
+
+```
+> mt.users()
+-- db.adminCommand({usersInfo: {forAllDBs: true}}); admin.system.roles / rolesInfo; getCmdLineOpts; connectionStatus
+authorization: enabled
+  currentUser: root@admin
+        users: 7
+  customRoles: 2
+
+── users ──
++---------+-------+--------------------------------------+----------------------------+
+| user    | db    | roles                                | mechanisms                 |
++---------+-------+--------------------------------------+----------------------------+
+| dba     | admin | userAdminAnyDatabase, clusterMonitor | SCRAM-SHA-1, SCRAM-SHA-256 |
+| root    | admin | root                                 | SCRAM-SHA-1, SCRAM-SHA-256 |
+| zabbix  | admin | monitor                              | SCRAM-SHA-1, SCRAM-SHA-256 |
+| app     | shop  | readWrite                            | SCRAM-SHA-1, SCRAM-SHA-256 |
+| bi      | shop  | reporter                             | SCRAM-SHA-1, SCRAM-SHA-256 |
+| etl     | shop  | readWrite                            | SCRAM-SHA-1                |
+| olduser | shop  |                                      | SCRAM-SHA-1, SCRAM-SHA-256 |
++---------+-------+--------------------------------------+----------------------------+
+7 rows in set
+
+── custom roles ──
++----------+-------+----------------+-----------------------------------------+-------+
+| role     | db    | inherits       | privileges                              | users |
++----------+-------+----------------+-----------------------------------------+-------+
+| monitor  | admin | clusterMonitor | cluster: replSetGetStatus, serverStatus |     1 |
+| reporter | shop  |                | shop.orders: collStats, find            |     1 |
++----------+-------+----------------+-----------------------------------------+-------+
+2 rows in set
+Note: users that can grant themselves any privilege: dba@admin, root@admin; keep them few, and keep applications off them
+Note: users that can only log in with SCRAM-SHA-1: etl@shop; add mechanisms: ['SCRAM-SHA-256'] when changing their passwords
+Note: users with no roles: olduser@shop; they can do nothing after logging in, so they were probably never granted anything or are no longer used
+```
+
+- Runs `usersInfo` (`forAllDBs`, 4.0+; before that it reads `admin.system.users` without credentials), reads `admin.system.roles`, plus `getCmdLineOpts` and `connectionStatus`.
+- Needs `viewUser` and `viewRole` (`userAdminAnyDatabase` and `root` have them); without them it prints one line.
+- A note is printed at the end when authentication is off, for users that can grant themselves any privilege (`root`, `__system`, `userAdminAnyDatabase`, and `userAdmin` or `dbOwner` on admin), users that can only log in with SCRAM-SHA-1, and users with no roles.
+- IP restrictions (`authenticationRestrictions`) can only be read per user, so they are not listed: `db.getUser('name', {showAuthenticationRestrictions: true})`.
+
 ### mt.oplog(): oplog window
 
 Like `SHOW BINARY LOGS`; it answers the same question as `rs.printReplicationInfo()`: how much time the oplog covers. Only works on a replica set member.
@@ -2477,7 +2537,7 @@ Every PR and every push to main runs [test/compat.js](test/compat.js) against a 
 - mongosh: MongoDB 4.4, 5.0, 6.0, 7.0 and 8.0, each with mongosh 1.8.0 and the newest 2.x; MongoDB 4.0 with mongosh 1.8.0 and 1.10.6 (mongosh 2.x cannot connect to 4.0). 12 jobs.
 - Legacy mongo shell: MongoDB 3.6, 4.0, 4.2, 4.4 and 5.0, each with its own `mongo` against a server of the same version. 5 jobs.
 
-All on single-node replica sets. [test/shard.js](test/shard.js) also runs on a sharded cluster (config server, 3 shards, mongos; see [test/shard.sh](test/shard.sh)), followed by [test/shard-down.js](test/shard-down.js) with one shard stopped, with MongoDB 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0), 5.0, 7.0 and 8.0 (mongosh 2.x): 5 jobs. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
+All on single-node replica sets. [test/shard.js](test/shard.js) also runs on a sharded cluster (config server, 3 shards, mongos; see [test/shard.sh](test/shard.sh)), followed by [test/shard-down.js](test/shard-down.js) with one shard stopped, with MongoDB 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0), 5.0, 7.0 and 8.0 (mongosh 2.x): 5 jobs. [test/auth.js](test/auth.js) runs against a mongod started with `--auth` (see [test/auth.sh](test/auth.sh); logged in as root and as a user that may not list users) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
 
 To run them locally (needs Docker):
 
@@ -2500,6 +2560,12 @@ MONGO_SHELL=mongo test/run.sh mongo:5.0
 # on a sharded cluster
 test/shard.sh mongo:7.0
 MONGO_SHELL=mongo test/shard.sh mongo:3.6
+```
+
+```bash
+# against a mongod with authentication on
+test/auth.sh mongo:7.0
+MONGO_SHELL=mongo test/auth.sh mongo:3.6
 ```
 
 ```bash

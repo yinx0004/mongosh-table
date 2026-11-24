@@ -350,6 +350,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 | mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST                     | 正在执行的操作；secs 最短秒数，ns 库或集合，all 含空闲连接，sort: 'desc' 运行最久的在前（默认）/ 'asc' / 'opid'                                                      |
 | mt.conns()                   | PROCESSLIST GROUP BY host            | 按客户端 IP 统计连接数                                                                                                                                               |
 | mt.pool({all})               | ProxySQL stats_mysql_connection_pool | 连出去的连接池（mongos 到各分片、成员之间），按目标主机汇总；all 再按连接池列出                                                                                      |
+| mt.users('db')               | SELECT * FROM mysql.user             | 用户和自定义角色：每个用户的库、角色、登录方式，自定义角色的权限和被几个用户直接用到；提示没开认证、权限过大、只能用 SHA-1、没有角色的用户；可传 'db'                |
 | mt.locks({all})              | sys.innodb_lock_waits                | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                                         |
 | mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX        | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                                |
 | mt.top({interval, ns})       | sys.schema_table_statistics          | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                                           |
@@ -1979,6 +1980,65 @@ replicaSetMatchingStrategy: matchPrimaryNode
 - mongos 连各分片的连接池大小由 `ShardingTaskExecutorPoolMinSize` / `MaxSize` / `MaxConnecting` 控制，用 `mt.vars('ShardingTaskExecutorPool')` 看。
 - 单机和单节点副本集一般没有连出去的连接，只打印一行说明。
 
+### mt.users()：用户和自定义角色
+
+相当于 `SELECT * FROM mysql.user`：所有库的用户、每个用户的角色和登录方式，以及自定义角色的权限。
+
+```js
+mt.users()         // 所有库
+mt.users('shop')   // 只看在 shop 库里建的用户和角色，也可以传 db 对象
+```
+
+| 字段 | 说明 |
+|---|---|
+| 表头 | `authorization`（认证是否打开，看不到启动参数时不显示）、`currentUser`（当前登录的用户）、用户数、自定义角色数 |
+| 用户：`user` / `db` | 用户名、建在哪个库（登录时的 authSource） |
+| `roles` | 角色；和用户在同一个库的只写名字，其他库的写成 `角色@库` |
+| `mechanisms` | 能用哪些方式登录（4.0 起） |
+| 自定义角色：`inherits` | 继承的角色 |
+| `privileges` | 自己定义的权限：资源（`库.集合`，`*` 表示全部；`cluster`）和操作，多于 5 个时只列前 5 个 |
+| `users` | 有几个用户直接被授予了这个角色；0 表示没人用 |
+
+```
+> mt.users()
+-- db.adminCommand({usersInfo: {forAllDBs: true}}); admin.system.roles / rolesInfo; getCmdLineOpts; connectionStatus
+authorization: enabled
+  currentUser: root@admin
+        users: 7
+  customRoles: 2
+
+── 用户 ──
++---------+-------+--------------------------------------+----------------------------+
+| user    | db    | roles                                | mechanisms                 |
++---------+-------+--------------------------------------+----------------------------+
+| dba     | admin | userAdminAnyDatabase, clusterMonitor | SCRAM-SHA-1, SCRAM-SHA-256 |
+| root    | admin | root                                 | SCRAM-SHA-1, SCRAM-SHA-256 |
+| zabbix  | admin | monitor                              | SCRAM-SHA-1, SCRAM-SHA-256 |
+| app     | shop  | readWrite                            | SCRAM-SHA-1, SCRAM-SHA-256 |
+| bi      | shop  | reporter                             | SCRAM-SHA-1, SCRAM-SHA-256 |
+| etl     | shop  | readWrite                            | SCRAM-SHA-1                |
+| olduser | shop  |                                      | SCRAM-SHA-1, SCRAM-SHA-256 |
++---------+-------+--------------------------------------+----------------------------+
+7 rows in set
+
+── 自定义角色 ──
++----------+-------+----------------+-----------------------------------------+-------+
+| role     | db    | inherits       | privileges                              | users |
++----------+-------+----------------+-----------------------------------------+-------+
+| monitor  | admin | clusterMonitor | cluster: replSetGetStatus, serverStatus |     1 |
+| reporter | shop  |                | shop.orders: collStats, find            |     1 |
++----------+-------+----------------+-----------------------------------------+-------+
+2 rows in set
+注意：能给自己授予任何权限的用户：dba@admin、root@admin；越少越好，应用不要用这些账号
+注意：只能用 SCRAM-SHA-1 登录的用户：etl@shop；改密码时加上 mechanisms: ['SCRAM-SHA-256']
+注意：没有任何角色的用户：olduser@shop；登录后什么都做不了，可能是忘了授权或者已经不用了
+```
+
+- 执行的是 `usersInfo`（`forAllDBs`，4.0 起；之前读 `admin.system.users`，不取密码），读 `admin.system.roles`，再加 `getCmdLineOpts`、`connectionStatus`。
+- 要有 `viewUser`、`viewRole` 权限（`userAdminAnyDatabase` 或 `root` 都有）；没有时打印一行说明。
+- 这些情况会在最后提示：没开认证；有能给自己授予任何权限的用户（`root`、`__system`、`userAdminAnyDatabase`，以及 admin 库上的 `userAdmin`、`dbOwner`）；只能用 SCRAM-SHA-1 登录的用户；没有任何角色的用户。
+- IP 白名单（`authenticationRestrictions`）要按用户名单独查，这里不列：`db.getUser('名字', {showAuthenticationRestrictions: true})`。
+
 ### mt.oplog()：oplog 窗口
 
 相当于 `SHOW BINARY LOGS`，和 `rs.printReplicationInfo()` 看的是同一件事：oplog 能覆盖多长时间。只能在副本集成员上执行。
@@ -2477,7 +2537,7 @@ attr: {type: remove, ns: shop.orders, appName: mongosh 2.14.2, command: {q: {amo
 - mongosh：MongoDB 4.4、5.0、6.0、7.0、8.0 各配 mongosh 1.8.0 和 2.x 最新版；MongoDB 4.0 配 mongosh 1.8.0 和 1.10.6（mongosh 2.x 连不了 4.0）。共 12 组。
 - 老的 mongo shell：MongoDB 3.6、4.0、4.2、4.4、5.0，各用自带的 `mongo` 连同版本的服务器。共 5 组。
 
-都是单节点副本集。另外在一个分片集群（配置服务器、3 个分片、mongos，见 [test/shard.sh](test/shard.sh)）上跑 [test/shard.js](test/shard.js)，再停掉一个分片跑 [test/shard-down.js](test/shard-down.js)：MongoDB 3.6（老 `mongo`）、4.4（mongosh 1.8.0）、5.0、7.0、8.0（mongosh 2.x），共 5 组。还跑 [test/format.js](test/format.js)（不连数据库，只测排版、`load()` 路径和 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量）：Linux、macOS、Windows 上的 mongosh 1.8.0 和 2.14.2，以及上面 5 个版本的老 `mongo`。
+都是单节点副本集。另外在一个分片集群（配置服务器、3 个分片、mongos，见 [test/shard.sh](test/shard.sh)）上跑 [test/shard.js](test/shard.js)，再停掉一个分片跑 [test/shard-down.js](test/shard-down.js)：MongoDB 3.6（老 `mongo`）、4.4（mongosh 1.8.0）、5.0、7.0、8.0（mongosh 2.x），共 5 组。在开了 `--auth` 的 mongod 上跑 [test/auth.js](test/auth.js)（见 [test/auth.sh](test/auth.sh)，以 root 和一个没有查看用户权限的用户登录）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。还跑 [test/format.js](test/format.js)（不连数据库，只测排版、`load()` 路径和 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量）：Linux、macOS、Windows 上的 mongosh 1.8.0 和 2.14.2，以及上面 5 个版本的老 `mongo`。
 
 本地跑（需要 Docker）：
 
@@ -2500,6 +2560,12 @@ MONGO_SHELL=mongo test/run.sh mongo:5.0
 # 分片集群上的测试
 test/shard.sh mongo:7.0
 MONGO_SHELL=mongo test/shard.sh mongo:3.6
+```
+
+```bash
+# 开了认证的 mongod 上的测试
+test/auth.sh mongo:7.0
+MONGO_SHELL=mongo test/auth.sh mongo:3.6
 ```
 
 ```bash
