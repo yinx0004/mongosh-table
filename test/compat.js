@@ -86,7 +86,7 @@ run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '─�
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
 var ALL_CMDS = ['host', 'latency', 'desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
-  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'balancer', 'pool'];
+  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'balancer', 'pool', 'users'];
 run('mt.help each command', function () {
   var bad = [];
   ['zh', 'en'].forEach(function (lang) {
@@ -99,7 +99,7 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 35 ok']);
+}, ['all 36 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
 run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'vars'、'engine'"]);
@@ -506,6 +506,39 @@ run('mt.rsconf', function () { mt.rsconf(); }, [
 ]);
 run('mt.shards not mongos', function () { mt.shards(); }, ['mt.shards() 要连 mongos（分片集群的路由）']);   // 分片集群的测试在 test/shard.js
 run('mt.balancer not mongos', function () { mt.balancer(); }, ['mt.balancer() 要连 mongos（分片集群的路由）']);
+// 用户和自定义角色（这里没开认证；开了认证的情况在 test/auth.js）。测完删掉
+(function () {
+  var a = db.getSiblingDB('admin'), d = db.getSiblingDB('mtusr');
+  var tryIt = function (fn) { try { fn(); return true; } catch (e) { return false; } };
+  d.createRole({ role: 'reporter', privileges: [{ resource: { db: 'mtusr', collection: 'orders' }, actions: ['find'] }], roles: [{ role: 'read', db: 'mtusr' }] });
+  a.createRole({ role: 'mtmon', privileges: [{ resource: { cluster: true }, actions: ['serverStatus'] }], roles: ['clusterMonitor'] });
+  // mechanisms 4.0 起才有：只给 SHA-1
+  if (!tryIt(function () { d.createUser({ user: 'app', pwd: 'x', roles: ['readWrite', 'reporter'], mechanisms: ['SCRAM-SHA-1'] }); })) d.createUser({ user: 'app', pwd: 'x', roles: ['readWrite', 'reporter'] });
+  d.createUser({ user: 'nobody', pwd: 'x', roles: [] });
+  a.createUser({ user: 'mtops', pwd: 'x', roles: ['root'] });
+  a.createUser({ user: 'mtmon', pwd: 'x', roles: ['mtmon', { role: 'read', db: 'mtusr' }] });
+})();
+run('mt.users', function () {
+  var out = capOut(function () { mt.users(); });
+  print(/-- db\.adminCommand\(\{usersInfo: \{forAllDBs: true\}\}\)/.test(out) && /authorization: disabled/.test(out) ? 'header' : out);
+  print(/\| mtmon +\| admin \| mtmon, read@mtusr +\|/.test(out) && /\| mtops +\| admin \| root +\|/.test(out) &&
+    /\| app +\| mtusr \| readWrite, reporter \|/.test(out) && /\| nobody +\| mtusr \| +\|/.test(out) ? 'users' : out);
+  print(/\| mechanisms +\|/.test(out) === (vmaj >= 4) ? 'mechanisms column right' : out);
+  print(/\| mtmon +\| admin \| clusterMonitor \| cluster: serverStatus +\| +1 \|/.test(out) &&
+    /\| reporter +\| mtusr \| read +\| mtusr\.orders: find +\| +1 \|/.test(out) ? 'roles' : out);
+  print(/注意：没开认证/.test(out) ? 'no auth note' : out);
+  print(/注意：能给自己授予任何权限的用户：[^\n]*mtops@admin/.test(out) ? 'power note' : out);
+  print(/注意：没有任何角色的用户：nobody@mtusr/.test(out) ? 'no roles note' : out);
+  print(/注意：只能用 SCRAM-SHA-1 登录的用户：app@mtusr/.test(out) === (vmaj >= 4) ? 'sha1 note right' : out);
+}, ['header', 'users', 'mechanisms column right', 'roles', 'no auth note', 'power note', 'no roles note', 'sha1 note right']);
+run('mt.users one db', function () {
+  var out = capOut(function () { mt.users(db.getSiblingDB('mtusr'), { showCmd: false }); });
+  print(/users: 2\n/.test(out) && /customRoles: 1\n/.test(out) && !/mtops/.test(out) && !/能给自己授予/.test(out) ? 'mtusr only' : out);
+}, ['mtusr only']);
+(function () {
+  var a = db.getSiblingDB('admin'), d = db.getSiblingDB('mtusr');
+  d.runCommand({ dropAllUsersFromDatabase: 1 }); d.runCommand({ dropAllRolesFromDatabase: 1 }); a.dropUser('mtops'); a.dropUser('mtmon'); a.dropRole('mtmon');
+})();
 // 单节点副本集通常没有连出去的连接：要么是空表的提示，要么是表；不该有提示
 run('mt.pool', function () {
   var out = capOut(function () { mt.pool(); });

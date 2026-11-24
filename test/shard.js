@@ -69,6 +69,7 @@ run('mongos: mt.balancer help', function () { mt.help('balancer'); }, ['mt.balan
 // 经 mongos 时其他命令：能用的照常输出，只能连 mongod 的打印一行说明
 run('mongos: mt.status', function () { mt.status({ interval: 0, cols: 'role' }); }, ['role: mongos']);
 run('mongos: mt.vars', function () { mt.vars('ttlMonitor'); }, ['-- db.adminCommand({getParameter: ']);
+run('mongos: mt.users', function () { mt.users(); }, ['-- db.adminCommand({usersInfo: {forAllDBs: true}})', 'authorization: disabled', '── 用户 ──', '注意：没开认证']);
 run('mongos: mongod-only commands', function () {
   ['check', 'engine', 'qstats', 'profile', 'rsconf'].forEach(function (k) {
     var out = capOut(function () { mt[k]({ interval: 0 }); });
