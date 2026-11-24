@@ -390,16 +390,17 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 +--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Replication ──
-+-------------------------------+--------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                       | mysql                          | description                                                                                                                                                                                                                                    |
-+-------------------------------+--------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.repl()                     | SHOW SLAVE STATUS              | Replica set members, replication lag (seconds), sync source                                                                                                                                                                                    |
-| mt.rsconf()                   | SHOW SLAVE HOSTS               | Replica set configuration (rs.conf()): each member's priority, votes, hidden, delay, tags and current state, election settings, default read/write concern; notes an even number of voters, arbiters, and delayed members that vote            |
-| mt.flow({interval})           | Group Replication flow control | Flow control: on or off, throttling or not, majority lag, wait time (per second), times throttled; how far each member is behind; operations held up and how many times they waited                                                            |
-| mt.oplog()                    | SHOW BINARY LOGS               | Oplog size and how much time it covers                                                                                                                                                                                                         |
-| mt.shards('db')               | sh.status()                    | Sharded cluster (on a mongos): balancer, each shard's draining state, zones, chunks, data size and the databases it is primary for, each sharded collection's key and chunk distribution; pass 'db' for one database's collections             |
-| mt.balancer('ns', {hours, n}) | sh.status() migration results  | Balancer and recent chunk migrations: collection, from / to, range, documents, duration and result of each, migrations in progress, balancer rounds; hours = how far back (24 by default), n = max rows, ns = db or collection; needs a mongos |
-+-------------------------------+--------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++-------------------------------+--------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                       | mysql                                | description                                                                                                                                                                                                                                    |
++-------------------------------+--------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.repl()                     | SHOW SLAVE STATUS                    | Replica set members, replication lag (seconds), sync source                                                                                                                                                                                    |
+| mt.rsconf()                   | SHOW SLAVE HOSTS                     | Replica set configuration (rs.conf()): each member's priority, votes, hidden, delay, tags and current state, election settings, default read/write concern; notes an even number of voters, arbiters, and delayed members that vote            |
+| mt.flow({interval})           | Group Replication flow control       | Flow control: on or off, throttling or not, majority lag, wait time (per second), times throttled; how far each member is behind; operations held up and how many times they waited                                                            |
+| mt.initialSync({all})         | CLONE plugin progress (clone_status) | Initial sync progress: sync source, phase, data copied, time left (4.2+), oplog start / end and buffer, ops applied, failures and retries; per database and the collections being copied; all = every collection                               |
+| mt.oplog()                    | SHOW BINARY LOGS                     | Oplog size and how much time it covers                                                                                                                                                                                                         |
+| mt.shards('db')               | sh.status()                          | Sharded cluster (on a mongos): balancer, each shard's draining state, zones, chunks, data size and the databases it is primary for, each sharded collection's key and chunk distribution; pass 'db' for one database's collections             |
+| mt.balancer('ns', {hours, n}) | sh.status() migration results        | Balancer and recent chunk migrations: collection, from / to, range, documents, duration and result of each, migrations in progress, balancer rounds; hours = how far back (24 by default), n = max rows, ns = db or collection; needs a mongos |
++-------------------------------+--------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 All accept t() options such as {cols: ...} or {vertical: true}; mt.config({showCmd: false}) hides the native command
 mt.help('ps') shows the detailed usage, options and output columns of one command
@@ -1617,9 +1618,45 @@ Connect to the member that is syncing (`mongosh "mongodb://host:port/?directConn
 | databases / collections being copied | status, collections, documents, data size (4.2+), percent, seconds taken |
 | attempts so far | each attempt's seconds, result (why it failed) and sync source |
 
+Below, on MongoDB 7.0, a new member `db2` is in initial sync from `db1`, part way through `shop.orders` (held at this step with a failpoint). Writes keep coming in on `db1`; they pile up in the oplog buffer, about 100,000 entries within seconds:
+
 ```
 > mt.initialSync()
-x
+-- db.adminCommand({replSetGetStatus: 1, initialSync: 1}).initialSyncStatus; serverStatus().metrics.repl.initialSync; local.temp_oplog_buffer
+         state: STARTUP2
+         phase: copying data: shop.orders
+    syncSource: db1:27017
+        method: logical
+       started: 2026-11-24 16:21:41.912
+       elapsed: 30s
+        copied: 194.2 MB / 258.3 MB (75.2%)
+     remaining: ~10s
+     databases: 3 / 4
+   collections: 15 / 16
+    oplogStart: 2026-11-24 16:21:42
+    appliedOps: 0
+   oplogBuffer: 107823 ops, 37.1 MB
+failedAttempts: 0 / 10
+  sinceStartup: completed 0, failedAttempts 0, failures 0
+
+── databases ──
++--------+---------+-------------+---------------------+------+
+| db     | status  | collections | size                | secs |
++--------+---------+-------------+---------------------+------+
+| admin  | done    | 2 / 2       |       229 B / 229 B |    0 |
+| config | done    | 10 / 10     |       332 B / 332 B |    0 |
+| crm    | done    | 1 / 1       |   20.3 MB / 20.3 MB |    0 |
+| shop   | copying | 2 / 3       | 173.9 MB / 238.0 MB |   29 |
++--------+---------+-------------+---------------------+------+
+4 rows in set
+
+── collections being copied ──
++-------------+---------+-----------------+---------------------+-------+---------+------+
+| ns          | status  | docs            | size                | pct   | indexes | secs |
++-------------+---------+-----------------+---------------------+-------+---------+------+
+| shop.orders | copying | 138217 / 200000 | 143.3 MB / 207.4 MB | 69.1% |       3 |   29 |
++-------------+---------+-----------------+---------------------+-------+---------+------+
+1 row in set
 ```
 
 - STARTUP2 that never ends: look at `phase` and the collections being copied first; a rising `failedAttempts` means it keeps failing and starting over, with the reasons under attempts so far.
