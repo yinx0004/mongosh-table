@@ -31,8 +31,11 @@ cleanup() {
 trap cleanup EXIT
 
 docker network create "$net" >/dev/null
-# the counters need 4.4+; older versions do not know the parameter
-param=$(docker run --rm --entrypoint mongod "$server" --version | grep -qE 'db version v(3\.|4\.[0-2]\.)' && echo '' || echo '--setParameter reportOpWriteConcernCountersInServerStatus=true')
+# the counters need 4.4+; older versions do not know the parameter. Read the version first: piping
+# straight into grep -q can end in a broken pipe, which pipefail turns into "not older" on 4.2
+ver=$(docker run --rm --entrypoint mongod "$server" --version)
+param='--setParameter reportOpWriteConcernCountersInServerStatus=true'
+if grep -qE 'db version v(3\.|4\.[0-2]\.)' <<<"$ver"; then param=''; fi
 docker run -d --name "$name-p" --network "$net" "$server" mongod --replSet rs --bind_ip_all $param >/dev/null
 for m in s a d; do docker run -d --name "$name-$m" --network "$net" "$server" mongod --replSet rs --bind_ip_all >/dev/null; done
 
