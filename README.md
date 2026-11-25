@@ -398,6 +398,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 +-------------------------------+--------------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | mt.repl()                     | SHOW SLAVE STATUS                                            | 副本集成员状态、复制延迟（秒）、同步源                                                                                                                            |
 | mt.rsconf()                   | SHOW SLAVE HOSTS                                             | 副本集配置（rs.conf()）：每个成员的优先级、投票、隐藏、延迟、标签和现在的状态，选举设置、默认读写关注；提示偶数个投票成员、仲裁节点、有投票权的延迟成员           |
+| mt.elections({history})       | MHA / orchestrator failover history                          | 选举：谁什么时候当的主、为什么、多久后可写，启动以来按原因分的选举次数；history: true 看 oplog 里的换主历史                                                       |
 | mt.concern()                  | SHOW VARIABLES LIKE 'rpl_semi_sync%' / transaction_isolation | 读写关注的各层：服务端默认（来源）、写关注模式、当前连接的设置、各级别的使用次数（写关注要启动参数打开）、正在执行的操作带的读写关注                              |
 | mt.flow({interval})           | Group Replication flow control                               | flow control：是否开着、是否正在限流、多数派落后多少、等了多久（每秒）、进入过几次限流；各成员落后多少；被拖住的操作和等待次数                                    |
 | mt.initialSync({all})         | CLONE plugin progress (clone_status)                         | 初始同步的进度：同步源、阶段、已复制多少、剩余估算（4.2 起）、oplog 起止和缓冲、应用了多少、失败和重试；各库、正在复制的集合；all 列出所有集合                    |
@@ -458,7 +459,7 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
   - `mt.desc()` 在视图和时序集合上不做会全表扫描的 `$sample`，见 [mt.desc()](#mtdesc集合的字段结构)。
 - **大小分逻辑和磁盘**：列名里带 `logical` 的是未压缩的数据量（BSON 大小），带 `disk` 的是磁盘上实际占的（WiredTiger 压缩后），带 `cached` 的是在内存缓存里占的（解压后）。同一份数据三者可以差好几倍。
 - **权限**：需要监控类权限，如 `clusterMonitor` 角色。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()`、在 mongos 上执行 `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` 时，只打印一行说明，不抛异常。
-- **版本**：老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过。经 mongos 测过的有 `mt.shards()`、`mt.balancer()`、`mt.pool()`（包括有分片连不上时），以及 `mt.status()`、`mt.vars()`、`mt.mem()`、`mt.cursors()`（能用）和 `mt.check()`、`mt.engine()`、`mt.qstats()`、`mt.profile()`、`mt.rsconf()`（打印一行说明）；其余命令经 mongos 还没测过。
+- **版本**：老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过。经 mongos 测过的有 `mt.shards()`、`mt.balancer()`、`mt.pool()`（包括有分片连不上时），以及 `mt.status()`、`mt.vars()`、`mt.mem()`、`mt.cursors()`（能用）和 `mt.check()`、`mt.engine()`、`mt.qstats()`、`mt.profile()`、`mt.rsconf()`、`mt.elections()`（打印一行说明）；其余命令经 mongos 还没测过。
 
 ### mt.check()：一键体检
 
@@ -1544,6 +1545,84 @@ heartbeatIntervalMillis: 2000
 - 这些情况会在最后提示：有投票权的成员是偶数个；有仲裁节点（PSA 架构里一个数据节点挂掉后，`w: 'majority'` 的写入等不到确认）；延迟成员有投票权。
 - 延迟的字段 5.0 起叫 `secondaryDelaySecs`，之前叫 `slaveDelay`，这里都显示成 `delay`。
 - 只适用于副本集；单机、mongos 上只打印一行说明。各成员的复制延迟看 `mt.repl()`。
+
+### mt.elections()：选举和换主
+
+谁什么时候当的主、为什么选举、当选后多久能写，以及这个成员启动以来按原因分的选举次数；相当于 MySQL 那边 MHA / orchestrator 的切换记录。
+
+```js
+mt.elections()                                // 现在的主节点、最近一次选举、这个成员的投票、启动以来的选举次数
+mt.elections({history: true})                 // 再加上 oplog 窗口内的换主历史（要扫整个 oplog）
+mt.elections({history: true, maxTimeMS: 0})   // 扫 oplog 不限时间
+```
+
+| 部分 | 说明 |
+|---|---|
+| 表头 | `term`（副本集建立以来发起过几次选举，失败的也算）、`primary`、`electedAt` / `primaryFor`（主节点什么时候当选、当了多久）、`voters`（有投票权的成员数、选主要几票）、`electionTimeout`、`uptime`（下面的次数从这时算起） |
+| 最近一次选举 | 只在主节点上有：`reason`（原因和解释）、`priorPrimary`（前任）、`votesNeeded`、`catchUpOps`（当选后追了多少条 oplog）、`writableAfter` / `majorityWritableAfter`（当选后多久能写、多久能 `w: 'majority'` 写） |
+| 这个成员最近一次投票 | 给谁投、投没投赞成、没投的原因 |
+| 启动以来自己发起的选举 | 按原因分：`electionTimeout` 一段时间看不到主节点，`priorityTakeover` 优先级高的成员抢主，`catchUpTakeover` 新主节点追数据时被抢，`stepUpCmd` 退位时交接或手动，`freezeTimeout`；下面是当选后追数据的结果，和当主节点时被更高的 term 赶下来的次数 |
+| 换主历史 | `{history: true}` 才有：oplog 里每次换主写的那条记录（`{op: 'n', o: {msg: 'new primary'}}`），`term`、`primary`（哪个成员）、`held`（这一任当了多久） |
+
+下面是一个 3 成员的副本集，`db1` 优先级是 2。`db1` 卡住了一段时间（`docker pause`），`db3` 当选；`db1` 恢复后追上数据，又凭优先级把主抢了回来：
+
+```
+> mt.elections({history: true})
+-- rs.status(); rs.conf(); db.serverStatus().electionMetrics; getLog global; local.oplog.rs.find({op: 'n', 'o.msg': 'new primary'}).sort({$natural: -1})
+            set: rs
+          state: PRIMARY
+           term: 3
+        primary: db1:27017
+      electedAt: 2026-11-25 15:39:27
+     primaryFor: 1m 9s
+         voters: 3 个有投票权，选主要 2 票
+electionTimeout: 10s
+         uptime: 4m 6s
+
+── 最近一次选举（这个主节点当选）──
+              elected: 2026-11-25 15:39:27.748
+                 term: 3
+               reason: priorityTakeover — 优先级比主节点高，追上数据后抢主
+         priorPrimary: db3:27017
+          votesNeeded: 2
+             priority: 2
+           catchUpOps: 0
+        writableAfter: 19 ms
+majorityWritableAfter: 29 ms
+
+── 这个成员启动以来自己发起的选举 ──
++------------------+--------+------------+------------------------------------------------------------+
+| cause            | called | successful | meaning                                                    |
++------------------+--------+------------+------------------------------------------------------------+
+| electionTimeout  |      1 |          1 | 看不到主节点（挂了、卡住、网络断了，或者刚建好、整个重启） |
+| priorityTakeover |      1 |          1 | 优先级比主节点高，抢主                                     |
+| catchUpTakeover  |      0 |          0 | 新主节点追数据时它的数据更新，抢主                         |
+| stepUpCmd        |      0 |          0 | 收到 replSetStepUp：旧主节点退位时交接，或手动             |
+| freezeTimeout    |      0 |          0 | rs.freeze() 到期后参选                                     |
++------------------+--------+------------+------------------------------------------------------------+
+5 rows in set
+             catchUps: 2 次（已经是最新 2，追上 0，跳过 0，超时 0，失败 0）
+stepDownsByHigherTerm: 1
+
+── 换主历史（oplog 里每次换主的记录，新的在前）──
++-------------------------+------+-----------+---------------+
+| time                    | term | primary   | held          |
++-------------------------+------+-----------+---------------+
+| 2026-11-25 15:39:27.767 |    3 | db1:27017 | 1m 8s（至今） |
+| 2026-11-25 15:39:13.525 |    2 | db3:27017 | 14s           |
+| 2026-11-25 15:36:44.373 |    1 |           | 2m 29s        |
++-------------------------+------+-----------+---------------+
+3 rows in set
+注意：这个成员因为一段时间看不到主节点发起过 1 次选举并当选：副本集刚建好、整个副本集重启时也算在这里，除此之外就是主节点挂过、卡住过或网络断过，看当时的日志
+注意：优先级高的成员追上后又抢了 1 次主：一次故障会换两次主；不需要固定主节点时把优先级设成一样
+注意：这个成员当主节点时看到更高的 term、退位 1 次：别的成员在它当主时发起了选举（网络分区，或者它卡住了）
+```
+
+- 数据来自 `replSetGetStatus`、`replSetGetConfig`、`serverStatus().electionMetrics` 和 `getLog`。最近一次选举、投票、按原因分的次数 4.0 后期版本起才有；3.6 只有表头和换主历史。
+- 按原因分的次数只算这个成员自己发起的，重启后清零。`electionTimeout` 里也包括副本集刚建好、整个副本集重启时的那次（上面 `db1` 的 1 次就是建好时那次），所以要对照换主历史和当时的日志看。
+- 换主历史要扫整个 oplog（没有能用的索引），所以默认不查。从新往旧扫，带 `maxTimeMS`（默认 10 秒），超时就只列出扫到的最近几条。oplog 里只有 term 和时间、没有是哪个成员：现在的主节点、主节点记得的前任能直接填上，其余按 term 对上内存里的日志（只有最近 1024 行；4.4 之前投票的成员不记投票请求），对不上时空着，上面 term 1 就是这样。
+- 这些情况会在最后提示：最近一次是联系不上主节点才选举的；当选后 10 秒以上才能 `w: 'majority'` 写；因为看不到主节点、优先级抢主、追数据时被抢而选举过；当选后追数据没完成（旧主节点上没同步出去的写入会回滚）；当主节点时被更高的 term 赶下来；24 小时内换了 3 次以上主（不算副本集建好后的第一次）；连的不是主节点（最近一次选举的详情只在主节点上有）。
+- 只适用于副本集；单机、mongos 上只打印一行说明。仲裁节点没有 oplog，看不到换主历史。配置里的选举超时、优先级看 `mt.rsconf()`。
 
 ### mt.concern()：读写关注的各层
 
@@ -2865,7 +2944,7 @@ attr: {type: remove, ns: shop.orders, appName: mongosh 2.14.2, command: {q: {amo
 - mongosh：MongoDB 4.4、5.0、6.0、7.0、8.0 各配 mongosh 1.8.0 和 2.x 最新版；MongoDB 4.0 配 mongosh 1.8.0 和 1.10.6（mongosh 2.x 连不了 4.0）。共 12 组。
 - 老的 mongo shell：MongoDB 3.6、4.0、4.2、4.4、5.0，各用自带的 `mongo` 连同版本的服务器。共 5 组。
 
-都是单节点副本集。另外在一个分片集群（配置服务器、3 个分片、mongos，见 [test/shard.sh](test/shard.sh)）上跑 [test/shard.js](test/shard.js)，再停掉一个分片跑 [test/shard-down.js](test/shard-down.js)：MongoDB 3.6（老 `mongo`）、4.4（mongosh 1.8.0）、5.0、7.0、8.0（mongosh 2.x），共 5 组。在开了 `--auth` 的 mongod 上跑 [test/auth.js](test/auth.js)（见 [test/auth.sh](test/auth.sh)，以 root 和一个没有查看用户权限的用户登录）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。在一个两成员的副本集上跑 [test/flow.js](test/flow.js)（见 [test/flow.sh](test/flow.sh)：正常时、从节点 `fsyncLock` 后主节点限流时、从节点追上之后，以及在从节点上）：4.2（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。让一个新成员做初始同步，用 failpoint 停在各个阶段跑 [test/isync.js](test/isync.js)（见 [test/isync.sh](test/isync.sh)：前两次尝试失败后复制到一半、在主节点上、快完成时、完成后）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。在一个带仲裁节点的副本集（主节点打开了写关注计数）上跑 [test/concern.js](test/concern.js)（见 [test/concern.sh](test/concern.sh)：隐含默认值、各级别的计数、连接上的设置、用 `setDefaultRWConcern` 设置之后；之后再加一个延迟 30 秒的成员跑 [test/lag.js](test/lag.js)，看 `mt.check()` 的复制延迟只算超出设定的部分）：4.2（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。还跑 [test/format.js](test/format.js)（不连数据库，只测排版、`load()` 路径和 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量）：Linux、macOS、Windows 上的 mongosh 1.8.0 和 2.14.2，以及上面 5 个版本的老 `mongo`。
+都是单节点副本集。另外在一个分片集群（配置服务器、3 个分片、mongos，见 [test/shard.sh](test/shard.sh)）上跑 [test/shard.js](test/shard.js)，再停掉一个分片跑 [test/shard-down.js](test/shard-down.js)：MongoDB 3.6（老 `mongo`）、4.4（mongosh 1.8.0）、5.0、7.0、8.0（mongosh 2.x），共 5 组。在开了 `--auth` 的 mongod 上跑 [test/auth.js](test/auth.js)（见 [test/auth.sh](test/auth.sh)，以 root 和一个没有查看用户权限的用户登录）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。在一个两成员的副本集上跑 [test/flow.js](test/flow.js)（见 [test/flow.sh](test/flow.sh)：正常时、从节点 `fsyncLock` 后主节点限流时、从节点追上之后，以及在从节点上）：4.2（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。让一个新成员做初始同步，用 failpoint 停在各个阶段跑 [test/isync.js](test/isync.js)（见 [test/isync.sh](test/isync.sh)：前两次尝试失败后复制到一半、在主节点上、快完成时、完成后）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。在一个带仲裁节点的副本集（主节点打开了写关注计数）上跑 [test/concern.js](test/concern.js)（见 [test/concern.sh](test/concern.sh)：隐含默认值、各级别的计数、连接上的设置、用 `setDefaultRWConcern` 设置之后；之后再加一个延迟 30 秒的成员跑 [test/lag.js](test/lag.js)，看 `mt.check()` 的复制延迟只算超出设定的部分；最后让主节点退位，等它凭优先级把主抢回来，跑 [test/elect.js](test/elect.js) 看 `mt.elections()` 的当选原因、前任和换主历史）：4.2（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。还跑 [test/format.js](test/format.js)（不连数据库，只测排版、`load()` 路径和 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量）：Linux、macOS、Windows 上的 mongosh 1.8.0 和 2.14.2，以及上面 5 个版本的老 `mongo`。
 
 本地跑（需要 Docker）：
 

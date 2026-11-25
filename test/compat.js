@@ -86,7 +86,7 @@ run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '─�
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
 var ALL_CMDS = ['host', 'latency', 'desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
-  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'balancer', 'pool', 'users', 'mem', 'cursors', 'flow', 'initialSync', 'concern'];
+  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'balancer', 'pool', 'users', 'mem', 'cursors', 'flow', 'initialSync', 'concern', 'elections'];
 run('mt.help each command', function () {
   var bad = [];
   ['zh', 'en'].forEach(function (lang) {
@@ -99,7 +99,7 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 41 ok']);
+}, ['all 42 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
 run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'mem'、'vars'"]);
@@ -530,6 +530,19 @@ run('mt.rsconf', function () { mt.rsconf(); }, [
   '-- rs.conf(); rs.status(); db.adminCommand({getDefaultRWConcern: 1})', 'set: rs0', 'version: ', 'protocolVersion: 1', 'chainingAllowed: true',
   'electionTimeoutMillis: 10000', '| id | host ', '| state   | priority | votes |', '| PRIMARY |        1 |     1 |', '1 row in set'
 ]);
+// mt.elections：测试用的单节点副本集，一个成员一票。最近一次选举和按原因分的次数 4.0 后期版本起才有，3.6 打印一行说明；
+// 换主历史只有建好时的那一次，是现在的主节点（有换主的样子在 test/elect.js）
+run('mt.elections', function () {
+  var hasEm = !!db.serverStatus().electionMetrics, me = rs.status().members.filter(function (x) { return x.self; })[0].name;
+  var out = capOut(function () { mt.elections(); });
+  print(/set: rs0/.test(out) && /state: PRIMARY/.test(out) && /voters: 1 个有投票权，选主要 1 票/.test(out) ? 'head' : out);
+  print(hasEm ? (/── 最近一次选举（这个主节点当选）──/.test(out) && /\| cause +\| called \| successful \|/.test(out) ? 'metrics' : out) :
+    (/这个版本没有选举的原因和统计/.test(out) ? 'metrics' : out));
+  print(out.indexOf('换主历史用 mt.elections({history: true}) 看') >= 0 ? 'history hint' : out);
+  var h = capOut(function () { mt.elections({ history: true, showCmd: false }); });
+  print(h.split('\n').some(function (l) { return / 1 \| /.test(l) && l.indexOf(' ' + me + ' ') > 0 && /（至今）/.test(l); }) ? 'history' : h);
+  print(h.indexOf('换主历史用') < 0 && !/24 小时内换了/.test(h) ? 'no notes' : h);
+}, ['head', 'metrics', 'history hint', 'history', 'no notes']);
 run('mt.shards not mongos', function () { mt.shards(); }, ['mt.shards() 要连 mongos（分片集群的路由）']);   // 分片集群的测试在 test/shard.js
 run('mt.balancer not mongos', function () { mt.balancer(); }, ['mt.balancer() 要连 mongos（分片集群的路由）']);
 // 用户和自定义角色（这里没开认证；开了认证的情况在 test/auth.js）。测完删掉

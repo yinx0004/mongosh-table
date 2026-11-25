@@ -398,6 +398,7 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 +-------------------------------+--------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | mt.repl()                     | SHOW SLAVE STATUS                                            | Replica set members, replication lag (seconds), sync source                                                                                                                                                                                    |
 | mt.rsconf()                   | SHOW SLAVE HOSTS                                             | Replica set configuration (rs.conf()): each member's priority, votes, hidden, delay, tags and current state, election settings, default read/write concern; notes an even number of voters, arbiters, and delayed members that vote            |
+| mt.elections({history})       | MHA / orchestrator failover history                          | Elections: who became primary when, why, and how soon writes were possible, plus elections by cause since startup; history: true for the primary changes in the oplog                                                                          |
 | mt.concern()                  | SHOW VARIABLES LIKE 'rpl_semi_sync%' / transaction_isolation | Read and write concern at each level: server defaults (and where they come from), write concern modes, this connection, how often each level is used (write concerns need a startup option), running operations that set one                   |
 | mt.flow({interval})           | Group Replication flow control                               | Flow control: on or off, throttling or not, majority lag, wait time (per second), times throttled; how far each member is behind; operations held up and how many times they waited                                                            |
 | mt.initialSync({all})         | CLONE plugin progress (clone_status)                         | Initial sync progress: sync source, phase, data copied, time left (4.2+), oplog start / end and buffer, ops applied, failures and retries; per database and the collections being copied; all = every collection                               |
@@ -458,7 +459,7 @@ All of them:
   - `mt.desc()` does not run a `$sample` that would scan a whole view or time series collection; see [mt.desc()](#mtdesc-field-structure-of-a-collection).
 - **Tell logical from disk sizes**: columns with `logical` in the name are the uncompressed data size (BSON), `disk` is what it actually takes on disk (compressed by WiredTiger), and `cached` is what it takes in the in-memory cache (uncompressed). The three can differ several times over for the same data.
 - **Need monitoring privileges**, such as the `clusterMonitor` role. Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, or `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` on a mongos, they print a one-line explanation instead of throwing.
-- **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version. Through a mongos, CI tests `mt.shards()`, `mt.balancer()` and `mt.pool()` (including a shard that cannot be reached), plus `mt.status()`, `mt.vars()`, `mt.mem()` and `mt.cursors()` (they work) and `mt.check()`, `mt.engine()`, `mt.qstats()`, `mt.profile()`, `mt.rsconf()` (they print a one-line explanation); the other commands are not tested through a mongos yet.
+- **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version. Through a mongos, CI tests `mt.shards()`, `mt.balancer()` and `mt.pool()` (including a shard that cannot be reached), plus `mt.status()`, `mt.vars()`, `mt.mem()` and `mt.cursors()` (they work) and `mt.check()`, `mt.engine()`, `mt.qstats()`, `mt.profile()`, `mt.rsconf()`, `mt.elections()` (they print a one-line explanation); the other commands are not tested through a mongos yet.
 
 ### mt.check(): health check
 
@@ -1544,6 +1545,84 @@ Note: delayed members can vote (db3:27017): w: 'majority' writes may wait for th
 - A note is printed at the end when the number of voting members is even, when there is an arbiter (in a PSA set, `w: 'majority'` writes cannot be acknowledged once a data-bearing member is down), or when a delayed member votes.
 - The delay field is `secondaryDelaySecs` since 5.0 and `slaveDelay` before; both show as `delay`.
 - Replica sets only; on a standalone or a mongos it prints a one-line explanation. For each member's replication lag, use `mt.repl()`.
+
+### mt.elections(): elections and primary changes
+
+Who became primary when, why there was an election, how soon writes were possible after it, and the elections this member called since startup, by cause; roughly the failover history of MHA / orchestrator on the MySQL side.
+
+```js
+mt.elections()                                // the current primary, the last election, this member's vote, elections since startup
+mt.elections({history: true})                 // plus the primary changes within the oplog window (scans the whole oplog)
+mt.elections({history: true, maxTimeMS: 0})   // no time limit on the oplog scan
+```
+
+| Part | Meaning |
+|---|---|
+| header | `term` (elections called since the set was created, failed ones too), `primary`, `electedAt` / `primaryFor` (when the primary was elected, for how long), `voters` (voting members, votes needed), `electionTimeout`, `uptime` (the counts below start here) |
+| last election | only on the primary: `reason` (with an explanation), `priorPrimary`, `votesNeeded`, `catchUpOps` (oplog entries caught up after the election), `writableAfter` / `majorityWritableAfter` (how soon writes, and `w: 'majority'` writes, were possible) |
+| this member's last vote | for whom, whether it voted yes, and why not |
+| elections called since startup | by cause: `electionTimeout` no primary seen for a while, `priorityTakeover` a higher-priority member taking over, `catchUpTakeover` taken over while the new primary was catching up, `stepUpCmd` a handover on step-down or by hand, `freezeTimeout`; below that, how catch-up went after elections, and how often it was pushed out as primary by a higher term |
+| primary changes | only with `{history: true}`: the oplog entry written on each primary change (`{op: 'n', o: {msg: 'new primary'}}`), `term`, `primary` (which member), `held` (how long that term lasted) |
+
+Below, a 3-member replica set where `db1` has priority 2. `db1` stalled for a while (`docker pause`) and `db3` was elected; once `db1` came back and caught up, it took the primary back on priority:
+
+```
+> mt.elections({history: true})
+-- rs.status(); rs.conf(); db.serverStatus().electionMetrics; getLog global; local.oplog.rs.find({op: 'n', 'o.msg': 'new primary'}).sort({$natural: -1})
+            set: rs
+          state: PRIMARY
+           term: 3
+        primary: db1:27017
+      electedAt: 2026-11-25 15:39:27
+     primaryFor: 1m 5s
+         voters: 3 voting, 2 votes needed to elect
+electionTimeout: 10s
+         uptime: 4m 2s
+
+── last election (this primary was elected) ──
+              elected: 2026-11-25 15:39:27.748
+                 term: 3
+               reason: priorityTakeover — higher priority than the primary, took over once caught up
+         priorPrimary: db3:27017
+          votesNeeded: 2
+             priority: 2
+           catchUpOps: 0
+        writableAfter: 19 ms
+majorityWritableAfter: 29 ms
+
+── elections this member called since startup ──
++------------------+--------+------------+-----------------------------------------------------------------------+
+| cause            | called | successful | meaning                                                               |
++------------------+--------+------------+-----------------------------------------------------------------------+
+| electionTimeout  |      1 |          1 | no primary seen (down, stuck, network cut, or a new or restarted set) |
+| priorityTakeover |      1 |          1 | higher priority than the primary, took over                           |
+| catchUpTakeover  |      0 |          0 | newer data while the new primary was catching up                      |
+| stepUpCmd        |      0 |          0 | got replSetStepUp: a handover on step-down, or by hand                |
+| freezeTimeout    |      0 |          0 | stood after rs.freeze() ran out                                       |
++------------------+--------+------------+-----------------------------------------------------------------------+
+5 rows in set
+             catchUps: 2 (2 already up to date, 0 caught up, 0 skipped, 0 timed out, 0 failed)
+stepDownsByHigherTerm: 1
+
+── primary changes (one oplog entry per change, newest first) ──
++-------------------------+------+-----------+----------------+
+| time                    | term | primary   | held           |
++-------------------------+------+-----------+----------------+
+| 2026-11-25 15:39:27.767 |    3 | db1:27017 | 1m 5s (so far) |
+| 2026-11-25 15:39:13.525 |    2 | db3:27017 | 14s            |
+| 2026-11-25 15:36:44.373 |    1 |           | 2m 29s         |
++-------------------------+------+-----------+----------------+
+3 rows in set
+Note: elections this member called and won because it saw no primary for a while: 1. A newly created set or a restart of the whole set counts here too; otherwise the primary went down, stalled or lost the network, so check the logs from then
+Note: priority takeovers (a higher-priority member taking over once caught up): 1. One failure then means two primary changes; give members equal priority unless a fixed primary is needed
+Note: step-downs of this member as primary on seeing a higher term: 1. Another member called an election while it was primary (a network partition, or it stalled)
+```
+
+- Reads `replSetGetStatus`, `replSetGetConfig`, `serverStatus().electionMetrics` and `getLog`. The last election, the vote and the counts by cause need late 4.0 versions or later; 3.6 shows the header and the primary changes only.
+- The counts by cause only cover elections this member called, and reset on restart. `electionTimeout` also includes the election right after the set was created or fully restarted (the 1 for `db1` above is that one), so compare with the primary changes and the logs from then.
+- The primary changes need a scan of the whole oplog (no usable index), so they are off by default. The scan runs newest first with `maxTimeMS` (10 seconds by default); on timeout only the latest entries scanned are listed. The oplog has only the term and time, not the member: the current primary and the predecessor the primary remembers are filled in directly, others by matching the term in the log in memory (only the last 1024 lines; before 4.4 voters do not log vote requests), and left blank when nothing matches, like term 1 above.
+- A note is printed at the end when the last election happened because the primary could not be reached, `w: 'majority'` writes took 10 seconds or more after an election, elections were called because no primary was seen, by priority takeover or catch-up takeover, catch-up did not finish (writes on the old primary that were not replicated get rolled back), the member was pushed out as primary by a higher term, the primary changed 3 or more times in 24 hours (not counting the set's first election), or this is not the primary (the details of the last election are only there).
+- Replica sets only; on a standalone server or a mongos it prints a one-line explanation. An arbiter has no oplog, so no primary changes there. For the election timeout and priorities in the configuration see `mt.rsconf()`.
 
 ### mt.concern(): read and write concern at each level
 
@@ -2865,7 +2944,7 @@ Every PR and every push to main runs [test/compat.js](test/compat.js) against a 
 - mongosh: MongoDB 4.4, 5.0, 6.0, 7.0 and 8.0, each with mongosh 1.8.0 and the newest 2.x; MongoDB 4.0 with mongosh 1.8.0 and 1.10.6 (mongosh 2.x cannot connect to 4.0). 12 jobs.
 - Legacy mongo shell: MongoDB 3.6, 4.0, 4.2, 4.4 and 5.0, each with its own `mongo` against a server of the same version. 5 jobs.
 
-All on single-node replica sets. [test/shard.js](test/shard.js) also runs on a sharded cluster (config server, 3 shards, mongos; see [test/shard.sh](test/shard.sh)), followed by [test/shard-down.js](test/shard-down.js) with one shard stopped, with MongoDB 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0), 5.0, 7.0 and 8.0 (mongosh 2.x): 5 jobs. [test/auth.js](test/auth.js) runs against a mongod started with `--auth` (see [test/auth.sh](test/auth.sh); logged in as root and as a user that may not list users) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/flow.js](test/flow.js) runs on a two-member replica set (see [test/flow.sh](test/flow.sh): normal, throttled while the secondary is `fsyncLock`'ed, after it caught up, and on the secondary) with 4.2 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/isync.js](test/isync.js) runs while a new member goes through initial sync, held at each step with failpoints (see [test/isync.sh](test/isync.sh): part way through copying after two failed attempts, on the primary, just before it finishes, and after) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/concern.js](test/concern.js) runs on a replica set with an arbiter whose primary counts write concerns (see [test/concern.sh](test/concern.sh): implicit defaults, counts per level, the connection's settings, and after `setDefaultRWConcern`; then a member delayed by 30 seconds is added for [test/lag.js](test/lag.js), checking that `mt.check()` counts only the lag beyond the delay) with 4.2 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
+All on single-node replica sets. [test/shard.js](test/shard.js) also runs on a sharded cluster (config server, 3 shards, mongos; see [test/shard.sh](test/shard.sh)), followed by [test/shard-down.js](test/shard-down.js) with one shard stopped, with MongoDB 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0), 5.0, 7.0 and 8.0 (mongosh 2.x): 5 jobs. [test/auth.js](test/auth.js) runs against a mongod started with `--auth` (see [test/auth.sh](test/auth.sh); logged in as root and as a user that may not list users) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/flow.js](test/flow.js) runs on a two-member replica set (see [test/flow.sh](test/flow.sh): normal, throttled while the secondary is `fsyncLock`'ed, after it caught up, and on the secondary) with 4.2 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/isync.js](test/isync.js) runs while a new member goes through initial sync, held at each step with failpoints (see [test/isync.sh](test/isync.sh): part way through copying after two failed attempts, on the primary, just before it finishes, and after) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/concern.js](test/concern.js) runs on a replica set with an arbiter whose primary counts write concerns (see [test/concern.sh](test/concern.sh): implicit defaults, counts per level, the connection's settings, and after `setDefaultRWConcern`; then a member delayed by 30 seconds is added for [test/lag.js](test/lag.js), checking that `mt.check()` counts only the lag beyond the delay; finally the primary steps down and takes the primary back on priority, and [test/elect.js](test/elect.js) checks the reason, the predecessor and the primary changes in `mt.elections()`) with 4.2 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
 
 To run them locally (needs Docker):
 

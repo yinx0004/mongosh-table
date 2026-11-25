@@ -12,6 +12,8 @@
 #
 # Afterwards it adds a fourth member, hidden, non-voting and delayed by 30
 # seconds, and runs test/lag.js: mt.check() counts only the lag beyond the delay.
+# Then it steps the primary down; once it takes the primary back (priority 2),
+# test/elect.js checks mt.elections() on it.
 set -euo pipefail
 
 server=${1:?usage: test/concern.sh <mongodb image> [client image]}
@@ -60,3 +62,10 @@ srv p --eval "var c = rs.conf(), v = db.version().split('.').map(Number), m = {_
 wait_true p "(function () { var ms = rs.status().members, p = ms.filter(function (x) { return x.state === 1; })[0], d = ms.filter(function (x) { return x.name === '$name-d:27017'; })[0];
   return !!(p && d && d.state === 2 && p.optimeDate - d.optimeDate >= 20000); })()"
 docker run --rm -i --network "$net" -v "$root":/w -w /w --entrypoint "$shell" "$client" --quiet "$uri" test/lag.js
+
+# A failover: step the primary (priority 2) down for 15 seconds; the other data member takes over, and the
+# old primary takes it back once it may stand again (priority takeover). test/elect.js runs on it.
+srv p --eval "try { rs.stepDown(15) } catch (e) {}" >/dev/null 2>&1 || true
+wait_true s 'db.isMaster().ismaster'
+wait_true p 'db.isMaster().ismaster'
+docker run --rm -i --network "$net" -v "$root":/w -w /w --entrypoint "$shell" "$client" --quiet "$uri" test/elect.js

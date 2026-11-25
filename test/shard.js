@@ -81,6 +81,7 @@ run('mt.balancer same time', function () {
 // 经 mongos 看不到各分片打开了多少文件：逐个集合查的命令照常出结果，表下写明打开文件数保护不可用
 run('mongos: mt.colls open file guard off', function () { mt.colls('shop', { showCmd: false }); }, [
   '| orders ', '打开文件数保护不可用（serverStatus 里没有 WiredTiger 打开的文件数：连的是 mongos，或者存储引擎不是 WiredTiger）']);
+run('mongos: mt.elections', function () { mt.elections(); }, ['mt.elections() 要连到副本集成员上执行，当前连的是 mongos']);
 run('mongos: mt.balancer help', function () { mt.help('balancer'); }, ['mt.balancer() — ', 'MySQL: sh.status() migration results']);
 
 // 经 mongos 时其他命令：能用的照常输出，只能连 mongod 的打印一行说明
