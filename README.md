@@ -453,7 +453,7 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
 - **生产上的保护**：
   - 较重的读（逐集合的 `$collStats` / `$indexStats`、`mt.desc()` 的抽样、`$currentOp`）都带 `maxTimeMS`，默认 10 秒，碰到被锁住或太慢的集合不会一直卡着。
   - 逐个集合查的命令（`mt.colls()`、`mt.frag()`、`mt.cache()`、`mt.ttl()`、`mt.unusedIdx()`、`mt.dupIdx()`、`mt.latency()`、`mt.check()`）默认最多查 1000 个集合、30 秒（`maxColls`、`budgetMs`；`mt.config()` 或这一次的选项可以改，`0` = 不限），没查全时表下注明“只查了前 N/M 个集合”。
-  - 打开的文件和连接到了上限（`maxOpenFiles`）的 80% 时也会停，这一条不能关：`$collStats` 会让 WiredTiger 打开平时关着的集合和索引文件，实测 3000 个集合时，`mt.cache()` 让 mongod 打开的文件从 48 个涨到 9051 个，集合再多可能超过上限（Too many open files）。
+  - 打开的文件和连接快到上限（`maxOpenFiles`）的 80% 时也会停，这一条不能关。多久看一次按离 80% 还剩多少定：一个集合最多打开 65 个文件（集合本身和最多 64 个索引），余量不到 65 个就停，所以不会越过 80%，余量大时很少看。拿不到上限或打开文件数时（不是 Linux、连的是 mongos），表下会写明这层保护不可用。原因是：`$collStats` 会让 WiredTiger 打开平时关着的集合和索引文件，实测 3000 个集合时，`mt.cache()` 让 mongod 打开的文件从 48 个涨到 9051 个，集合再多可能超过上限（Too many open files）。
   - 查运行中的操作（`mt.ps()`、`mt.conns()`、`mt.locks()`、`mt.txns()`、`mt.builds()` 等）用 `$currentOp` 聚合分批取：`currentOp` 命令的结果装在一个文档里，连接、会话很多时超过 16MB 就失败。
   - `mt.desc()` 在视图和时序集合上不做会全表扫描的 `$sample`，见 [mt.desc()](#mtdesc集合的字段结构)。
 - **大小分逻辑和磁盘**：列名里带 `logical` 的是未压缩的数据量（BSON 大小），带 `disk` 的是磁盘上实际占的（WiredTiger 压缩后），带 `cached` 的是在内存缓存里占的（解压后）。同一份数据三者可以差好几倍。
@@ -468,6 +468,7 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
 mt.check()                  // 全部检查
 mt.check({issues: true})    // 只看 WARN / CRIT / UNKNOWN
 mt.check({quick: true})     // 跳过逐个集合的检查（索引、TTL、磁盘空间）
+mt.check({deep: true})      // 服务器压力大时也照样做逐个集合的检查（默认会跳过）
 mt.check({maxColls: 5000, budgetMs: 120000})   // 逐个集合的检查最多查 5000 个集合、2 分钟；0 = 不限
 mt.check({thresholds: {lag: [30, 300], oplog: [48, 6]}})   // 这一次用别的阈值
 mt.config({checkThresholds: {longOps: [600, 3600]}})      // 改本会话的默认阈值
@@ -479,8 +480,8 @@ mt.config({checkThresholds: {longOps: [600, 3600]}})      // 改本会话的默�
 | 写入被锁（fsyncLock） | `currentOp` | | 被锁着 | |
 | FCV 版本 | `featureCompatibilityVersion` 和二进制版本 | 低于二进制版本（升级后忘了提升） | | |
 | 副本集成员 | `rs.status()` | | 有成员不是 PRIMARY / SECONDARY / ARBITER，或 health 不是 1 | |
-| 复制延迟 | 最大的 lagSecs | ≥ 10 秒 | ≥ 60 秒 | `lag` |
-| oplog 窗口 | 最早到最晚一条 | < 24 小时 | < 3 小时 | `oplog`（小时，越低越坏） |
+| 复制延迟 | 最大的 lagSecs；延迟成员只算超出设定延迟的部分 | ≥ 10 秒 | ≥ 60 秒 | `lag` |
+| oplog 窗口 | 最早到最晚一条；没写满时按估算的写满后能覆盖多久判断，运行不到 1 小时估不出，是 INFO | < 24 小时 | < 3 小时 | `oplog`（小时，越低越坏） |
 | 缓存使用率 / 缓存脏数据 | WiredTiger 缓存 | ≥ 90% / ≥ 10% | ≥ 95% / ≥ 20% | `cacheUsed` / `cacheDirty` |
 | 读写并发票据 | 已用 / 总数（7.0 之前） | ≥ 80% | ≥ 95% | `tickets` |
 | 等锁队列 | `globalLock.currentQueue` 读 + 写 | ≥ 5 | ≥ 50 | `queue` |
@@ -502,7 +503,7 @@ mt.config({checkThresholds: {longOps: [600, 3600]}})      // 改本会话的默�
    host: db1
 version: 7.0.48
    role: PRIMARY (rs0)
- uptime: 20s
+ uptime: 19s
 +-----------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
 | check                 | status | value                                                            | advice                                                      |
 +-----------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
@@ -511,12 +512,12 @@ version: 7.0.48
 | FCV 版本              | OK     | FCV 7.0，二进制 7.0                                              |                                                             |
 | 副本集成员            | OK     | 1 个成员，都正常                                                 | mt.repl()                                                   |
 | 复制延迟              | OK     | 0s                                                               | mt.repl()                                                   |
-| oplog 窗口            | CRIT   | 7s (0.00 h)                                                      | 调大 oplog：replSetResizeOplog；mt.oplog()                  |
+| oplog 窗口            | INFO   | 7s，还没写满（用了 0.2%），时间太短估不出写满后能覆盖多久        | mt.oplog()                                                  |
 | 缓存使用率            | OK     | 0.2% (15.1 MB / 7.3 GB)                                          | mt.cache()                                                  |
 | 缓存脏数据            | OK     | 0.0% (0 B)                                                       | mt.status()                                                 |
 | 读写并发票据          | OK     | read 1/10, write 1/10                                            | mt.ps()                                                     |
 | 等锁队列              | OK     | readers 0, writers 3                                             | mt.locks()                                                  |
-| 连接数                | OK     | 11 / 8192 (0.1%)                                                 | mt.conns()                                                  |
+| 连接数                | OK     | 10 / 8192 (0.1%)                                                 | mt.conns()                                                  |
 | 长时间运行的操作      | OK     | 没有超过 60 秒的                                                 |                                                             |
 | 等锁的操作            | WARN   | 1 个                                                             | mt.locks()                                                  |
 | 长事务                | OK     | 没有开了 30 秒以上的                                             |                                                             |
@@ -525,10 +526,10 @@ version: 7.0.48
 | profiler              | OK     | 没有库是 level 2                                                 |                                                             |
 | TTL 超期              | WARN   | 1 个超期 1 小时以上，最多 5h 30m                                 | mt.ttl()                                                    |
 | 冗余索引              | WARN   | 1 个，共 116.0 KB                                                | mt.dupIdx()                                                 |
-| 没被用过的索引        | INFO   | 只运行了 20s，统计不够，满 7 天再看                              | mt.unusedIdx()                                              |
+| 没被用过的索引        | INFO   | 只运行了 19s，统计不够，满 7 天再看                              | mt.unusedIdx()                                              |
 | 可回收的磁盘空间      | OK     | 0 B / 1.4 MB（0.0%）                                             |                                                             |
 +-----------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
-CRIT 2，WARN 5，OK 13，INFO 1 （逐个集合的检查：2/2 个集合）
+CRIT 1，WARN 5，OK 13，INFO 2 （逐个集合的检查：2/2 个集合）
 ```
 
 - 某一项查不了（比如没有权限）只把这一项标成 UNKNOWN，写上原因，其他项照常检查。
@@ -536,7 +537,8 @@ CRIT 2，WARN 5，OK 13，INFO 1 （逐个集合的检查：2/2 个集合）
 - SKIP 只表示不适用：单机上副本集相关的几项、存储引擎不是 WiredTiger 时的缓存两项。只能连 mongod，在 mongos 上只打印一行说明。
 - `{issues: true}` 显示 WARN、CRIT 和 UNKNOWN。
 - 逐个集合的四项（TTL 超期、冗余索引、没被用过的索引、可回收空间）共用一次遍历：每个库一次 `listCollections`，每个集合一次 `getIndexes`、一次 `$collStats`；运行满 7 天才查 `$indexStats`；每个 TTL 索引再查一次最老的文档。
-- 默认最多查 1000 个集合（`maxColls`）、30 秒（`budgetMs`），可以用 `mt.config()` 改；打开的文件和连接到了上限的 80% 也会停（这一条不能关）。按库名、集合名的顺序，到了就停下。没查到的集合不能算没问题：这几项没发现问题时是 UNKNOWN，value 写“只查了前 1000/15000 个集合（maxColls 1000）”；有发现时照常 WARN 并附上这句。最后一行写实际查了几个集合。
+- 默认最多查 1000 个集合（`maxColls`）、30 秒（`budgetMs`），可以用 `mt.config()` 改；打开的文件和连接快到上限的 80% 也会停（这一条不能关）。按库名、集合名的顺序，到了就停下。没查到的集合不能算没问题：这几项没发现问题时是 UNKNOWN，value 写“只查了前 1000/15000 个集合（maxColls 1000）”；有发现时照常 WARN 并附上这句。最后一行写实际查了几个集合。
+- 缓存使用率、缓存脏数据、读写并发票据、等锁队列、连接数里有 CRIT 时，服务器已经很吃力，默认跳过逐个集合的检查，最后一行写明原因；`{deep: true}` 照样做。
 - 集合很多时可以先 `{quick: true}`，再用 `mt.dupIdx('库')`、`mt.unusedIdx('库')`、`mt.ttl('库')`、`mt.frag('库')` 逐个库看。
 - 表里的阈值是默认值，是常见的经验值，不一定适合每个场景（比如离线分析库的长操作、跨机房副本的复制延迟）；WARN 不代表一定有问题，按建议列的命令再细看。
 - 阈值可以改：`mt.check({thresholds: {...}})` 只改这一次；`mt.config({checkThresholds: {...}})` 改本会话的默认值，重新 `load()` 会恢复。键见上表的“阈值键”，有 CRIT 的写 `[WARN, CRIT]`，只有 WARN 的写一个数；`oplog` 越低越坏，WARN 要大于等于 CRIT，其余 WARN 不能大于 CRIT；百分比不能超过 100。`mt.help('check')` 列出全部键、默认值和本会话改过的值。
@@ -665,6 +667,7 @@ mt.slow('shop', {sort: 'ms'})       // 最慢的在前
 | `ms` | 只看耗时不少于这么多毫秒的，变成 `{millis: {$gte: ms}}` |
 | `ns` | 集合名（`'orders'`）或完整的 `'库.集合'` |
 | `sort` | `'desc'`（默认，`{ts: -1}` 最新的在前）、`'asc'`（`{ts: 1}` 最早的在前）、`'ms'`（`{millis: -1, ts: -1}` 最慢的在前），或排序文档如 `{docsExamined: -1}` |
+| `count` | `true` 时再算出符合条件的总数（对 `system.profile` 做一次 `count`）；平时只多取一条，看还有没有更多 |
 
 表头显示 profiler 的设置：
 
@@ -773,7 +776,8 @@ docsExamined: 80
    nreturned: 80
       client: 192.168.107.5
      command: {find: orders, filter: {$where: sleep(1) || true, status: NEW}, limit: 80}
-2 rows in set  (共 4 行，只显示前 2 行)
+2 rows in set
+只列了前 2 条，还有更多：{limit: 0} 全部列出，{count: true} 算出总数
 ```
 
 ```
@@ -1143,6 +1147,7 @@ mt.explainLog({find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 's
 怎么处理的：
 
 - 去掉 mongos、驱动加的字段（`shardVersion`、`databaseVersion`、`lsid`、`$clusterTime`、`readConcern`、投影里的 `$sortKey`...），再用 `db.runCommand({explain: 命令, verbosity: 'queryPlanner'})` 执行（`{analyze: true}` 时是 `'executionStats'`）。
+- 去掉了哪些字段，在计划前面列一行（`explain 时去掉了 lsid、readConcern...`）：它们不影响选哪个索引，但读关注、事务里看到的数据可能不一样，比较前后差别时要考虑进去。
 - 在哪个库上执行：命令里的 `$db`，或者 `ns` 的库名；都没有就用 `{db: 'shop'}` 选项，再没有就是当前库。
 - 支持 `find`、`aggregate`、`count`、`distinct`、`update`、`delete`、`findAndModify`。profile 和日志里单条的 update / remove 会自动包成 `update` / `delete` 命令；getMore 用它的原始命令（`originatingCommand`）。explain 写操作不会真的修改数据。
 - JSON 日志里的 `{"$date": ...}`、`{"$oid": ...}`、`{"$numberLong": ...}` 会换回真正的类型，否则条件就对不上了。
@@ -1223,10 +1228,12 @@ mt.logQuery(`整行日志`)          // 日志文件里复制的整行
 db.getSiblingDB('shop').orders.find({userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}).sort({createdAt: -1}).limit(20)
 
 > mt.logQuery({update: 'orders', updates: [{q: {status: 'new', createdAt: {$lt: ISODate('2024-01-01T00:00:00Z')}}, u: {$set: {status: 'expired'}}, multi: true}], $db: 'shop'})
-// 注意：这是写操作，执行会修改数据
-db.getSiblingDB('shop').orders.updateMany({status: 'new', createdAt: {$lt: ISODate('2024-01-01T00:00:00.000Z')}}, {$set: {status: 'expired'}})
+// 注意：原语句是写操作，执行会修改数据。下面是只看执行计划、不执行的 explain；原语句注释在最后，{raw: true} 才输出可以直接执行的语句
+db.getSiblingDB('shop').runCommand({explain: {update: 'orders', updates: [{q: {status: 'new', createdAt: {$lt: ISODate('2024-01-01T00:00:00.000Z')}}, u: {$set: {status: 'expired'}}, multi: true}]}, verbosity: 'queryPlanner'})
+// db.getSiblingDB('shop').orders.updateMany({status: 'new', createdAt: {$lt: ISODate('2024-01-01T00:00:00.000Z')}}, {$set: {status: 'expired'}})
 ```
 
+- 写操作（update、delete、findAndModify）默认不给能直接执行的语句：给一条只看执行计划的 `runCommand({explain: ..., verbosity: 'queryPlanner'})`，执行它不会改数据，原语句整行注释掉放在后面，免得整段复制时把它也执行了。`{raw: true}` 才输出能直接执行的原语句（前面一行注释提醒是写操作）。
 - 来自慢日志的，第一行注释写着当时的时间、耗时、计划、扫描数和返回数，复制整段也不影响执行。
 - 类型照原样写出来：日期是 `ISODate('...')`，还有 `ObjectId('...')`、`NumberLong('...')`、`NumberDecimal('...')`、`UUID('...')`、正则等；字段名带点的会加引号。
 - 和 explain 一样去掉 mongos、驱动加的字段（`shardVersion`、`lsid`、`$clusterTime`、`$sortKey`...）。
@@ -2315,7 +2322,9 @@ authorization: enabled
 | `usedLogical` | 已经用了多少（逻辑大小） |
 | `disk` | oplog 在磁盘上占的空间（压缩后） |
 | `firstEvent` / `lastEvent` | oplog 里最早、最晚一条的时间 |
-| `window` | 两者之差。从节点停机或延迟超过这个时间，就要全量重新同步 |
+| `fill` | 已用占上限的比例 |
+| `window` | 两者之差。oplog 写满以后，这就是能覆盖的时间：从节点最后同步到的位置一旦不在同步源的 oplog 里（停机或落后超过这个时间），就要全量重新同步。没写满时窗口只是最早一条到现在，还会变长 |
+| `estWindow` | 没写满、运行满 1 小时时，按这段时间的平均写入量估算写满后能覆盖多久；写入量变了就不准，只能作参考 |
 | `now` | 当前时间 |
 
 ```
@@ -2323,14 +2332,16 @@ authorization: enabled
 -- rs.printReplicationInfo()
  maxLogical: 1.4 GB
 usedLogical: 9.5 MB
+       fill: 0.7%
        disk: 1.4 MB
  firstEvent: 2026-11-22 10:32:04
   lastEvent: 2026-11-22 10:32:19
      window: 15s (0.00 h)
         now: 2026-11-22 10:32:31.489
+oplog 还没写满（用了 0.7%）：窗口是从最早一条到现在，还会变长；不到 1 小时，估不出写满后能覆盖多久
 ```
 
-示例是刚建好的副本集，所以窗口只有几十秒；生产环境一般要有几十个小时以上。
+示例是刚建好的副本集，所以窗口只有几十秒，`mt.check()` 里这一项是 INFO 而不是 CRIT。生产环境 oplog 写满以后，窗口一般要有几十个小时以上。
 
 ### mt.status()：关键指标
 
@@ -2854,7 +2865,7 @@ attr: {type: remove, ns: shop.orders, appName: mongosh 2.14.2, command: {q: {amo
 - mongosh：MongoDB 4.4、5.0、6.0、7.0、8.0 各配 mongosh 1.8.0 和 2.x 最新版；MongoDB 4.0 配 mongosh 1.8.0 和 1.10.6（mongosh 2.x 连不了 4.0）。共 12 组。
 - 老的 mongo shell：MongoDB 3.6、4.0、4.2、4.4、5.0，各用自带的 `mongo` 连同版本的服务器。共 5 组。
 
-都是单节点副本集。另外在一个分片集群（配置服务器、3 个分片、mongos，见 [test/shard.sh](test/shard.sh)）上跑 [test/shard.js](test/shard.js)，再停掉一个分片跑 [test/shard-down.js](test/shard-down.js)：MongoDB 3.6（老 `mongo`）、4.4（mongosh 1.8.0）、5.0、7.0、8.0（mongosh 2.x），共 5 组。在开了 `--auth` 的 mongod 上跑 [test/auth.js](test/auth.js)（见 [test/auth.sh](test/auth.sh)，以 root 和一个没有查看用户权限的用户登录）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。在一个两成员的副本集上跑 [test/flow.js](test/flow.js)（见 [test/flow.sh](test/flow.sh)：正常时、从节点 `fsyncLock` 后主节点限流时、从节点追上之后，以及在从节点上）：4.2（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。让一个新成员做初始同步，用 failpoint 停在各个阶段跑 [test/isync.js](test/isync.js)（见 [test/isync.sh](test/isync.sh)：前两次尝试失败后复制到一半、在主节点上、快完成时、完成后）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。在一个带仲裁节点的副本集（主节点打开了写关注计数）上跑 [test/concern.js](test/concern.js)（见 [test/concern.sh](test/concern.sh)：隐含默认值、各级别的计数、连接上的设置、用 `setDefaultRWConcern` 设置之后）：4.2（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。还跑 [test/format.js](test/format.js)（不连数据库，只测排版、`load()` 路径和 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量）：Linux、macOS、Windows 上的 mongosh 1.8.0 和 2.14.2，以及上面 5 个版本的老 `mongo`。
+都是单节点副本集。另外在一个分片集群（配置服务器、3 个分片、mongos，见 [test/shard.sh](test/shard.sh)）上跑 [test/shard.js](test/shard.js)，再停掉一个分片跑 [test/shard-down.js](test/shard-down.js)：MongoDB 3.6（老 `mongo`）、4.4（mongosh 1.8.0）、5.0、7.0、8.0（mongosh 2.x），共 5 组。在开了 `--auth` 的 mongod 上跑 [test/auth.js](test/auth.js)（见 [test/auth.sh](test/auth.sh)，以 root 和一个没有查看用户权限的用户登录）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。在一个两成员的副本集上跑 [test/flow.js](test/flow.js)（见 [test/flow.sh](test/flow.sh)：正常时、从节点 `fsyncLock` 后主节点限流时、从节点追上之后，以及在从节点上）：4.2（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。让一个新成员做初始同步，用 failpoint 停在各个阶段跑 [test/isync.js](test/isync.js)（见 [test/isync.sh](test/isync.sh)：前两次尝试失败后复制到一半、在主节点上、快完成时、完成后）：3.6（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。在一个带仲裁节点的副本集（主节点打开了写关注计数）上跑 [test/concern.js](test/concern.js)（见 [test/concern.sh](test/concern.sh)：隐含默认值、各级别的计数、连接上的设置、用 `setDefaultRWConcern` 设置之后；之后再加一个延迟 30 秒的成员跑 [test/lag.js](test/lag.js)，看 `mt.check()` 的复制延迟只算超出设定的部分）：4.2（老 `mongo`）、4.4（mongosh 1.8.0）、8.0（mongosh 2.x），共 3 组。还跑 [test/format.js](test/format.js)（不连数据库，只测排版、`load()` 路径和 `MONGOTAB_LANG` / `MONGOTAB_TZ` 环境变量）：Linux、macOS、Windows 上的 mongosh 1.8.0 和 2.14.2，以及上面 5 个版本的老 `mongo`。
 
 本地跑（需要 Docker）：
 

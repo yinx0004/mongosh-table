@@ -453,7 +453,7 @@ All of them:
 - **Production safeguards**:
   - Heavier reads (per-collection `$collStats` / `$indexStats`, `mt.desc()` sampling, `$currentOp`) carry `maxTimeMS`, 10 seconds by default, so a locked or slow collection does not leave them hanging.
   - The per-collection commands (`mt.colls()`, `mt.frag()`, `mt.cache()`, `mt.ttl()`, `mt.unusedIdx()`, `mt.dupIdx()`, `mt.latency()`, `mt.check()`) look at no more than 1000 collections or 30 seconds by default (`maxColls`, `budgetMs`; change them with `mt.config()` or per call, `0` = no limit), and say "only the first N/M collections" under the table when they stop early.
-  - They also stop when open files plus connections reach 80% of the limit (`maxOpenFiles`), which cannot be turned off: `$collStats` makes WiredTiger open collection and index files that are normally closed. Measured with 3000 collections, `mt.cache()` took mongod from 48 to 9051 open files; with many more collections that can exceed the limit (Too many open files).
+  - They also stop when open files plus connections get close to 80% of the limit (`maxOpenFiles`), which cannot be turned off. How often they look depends on how much room is left below 80%: a collection opens at most 65 files (itself and up to 64 indexes), and they stop once less than 65 is left, so they never go past 80%, and with plenty of room they rarely look. When the limit or the open file count is not available (not Linux, or a mongos), a note under the table says the guard is off. The reason: `$collStats` makes WiredTiger open collection and index files that are normally closed. Measured with 3000 collections, `mt.cache()` took mongod from 48 to 9051 open files; with many more collections that can exceed the limit (Too many open files).
   - Commands that list running operations (`mt.ps()`, `mt.conns()`, `mt.locks()`, `mt.txns()`, `mt.builds()`...) use the `$currentOp` aggregation, which returns batches: the `currentOp` command puts everything in one document and fails past 16 MB when there are many connections or sessions.
   - `mt.desc()` does not run a `$sample` that would scan a whole view or time series collection; see [mt.desc()](#mtdesc-field-structure-of-a-collection).
 - **Tell logical from disk sizes**: columns with `logical` in the name are the uncompressed data size (BSON), `disk` is what it actually takes on disk (compressed by WiredTiger), and `cached` is what it takes in the in-memory cache (uncompressed). The three can differ several times over for the same data.
@@ -468,6 +468,7 @@ Collects common problems into one table: each check gets OK / WARN / CRIT / UNKN
 mt.check()                  // every check
 mt.check({issues: true})    // only WARN / CRIT / UNKNOWN
 mt.check({quick: true})     // skip per-collection checks (indexes, TTL, disk space)
+mt.check({deep: true})      // run the per-collection checks even when the server is under pressure (skipped by default)
 mt.check({maxColls: 5000, budgetMs: 120000})   // per-collection checks stop after 5000 collections or 2 minutes; 0 = no limit
 mt.check({thresholds: {lag: [30, 300], oplog: [48, 6]}})   // other thresholds for this run
 mt.config({checkThresholds: {longOps: [600, 3600]}})      // change the session's default thresholds
@@ -479,8 +480,8 @@ mt.config({checkThresholds: {longOps: [600, 3600]}})      // change the session'
 | Writes locked (fsyncLock) | `currentOp` | | locked | |
 | FCV | `featureCompatibilityVersion` vs the binary | below the binary version (not raised after an upgrade) | | |
 | Replica set members | `rs.status()` | | a member not PRIMARY / SECONDARY / ARBITER, or health != 1 | |
-| Replication lag | largest lagSecs | >= 10 s | >= 60 s | `lag` |
-| Oplog window | oldest to newest entry | < 24 h | < 3 h | `oplog` (hours, lower is worse) |
+| Replication lag | largest lagSecs; delayed members count only the lag beyond their configured delay | >= 10 s | >= 60 s | `lag` |
+| Oplog window | oldest to newest entry; when the oplog is not full, the estimate of how much a full oplog covers; INFO when it has run less than an hour to estimate | < 24 h | < 3 h | `oplog` (hours, lower is worse) |
 | Cache used / cache dirty | WiredTiger cache | >= 90% / >= 10% | >= 95% / >= 20% | `cacheUsed` / `cacheDirty` |
 | Read/write tickets | in use / total (before 7.0) | >= 80% | >= 95% | `tickets` |
 | Lock queue | `globalLock.currentQueue` readers + writers | >= 5 | >= 50 | `queue` |
@@ -511,7 +512,7 @@ version: 7.0.48
 | FCV                       | OK     | FCV 7.0, binary 7.0                                              |                                                             |
 | Replica set members       | OK     | 1 member, all healthy                                            | mt.repl()                                                   |
 | Replication lag           | OK     | 0s                                                               | mt.repl()                                                   |
-| Oplog window              | CRIT   | 7s (0.00 h)                                                      | grow the oplog: replSetResizeOplog; mt.oplog()              |
+| Oplog window              | INFO   | 8s, not full yet (0.2% used), too early to estimate how much ... | mt.oplog()                                                  |
 | Cache used                | OK     | 0.2% (15.1 MB / 7.3 GB)                                          | mt.cache()                                                  |
 | Cache dirty               | OK     | 0.0% (0 B)                                                       | mt.status()                                                 |
 | Read/write tickets        | OK     | read 1/10, write 1/10                                            | mt.ps()                                                     |
@@ -519,7 +520,7 @@ version: 7.0.48
 | Connections               | OK     | 10 / 8192 (0.1%)                                                 | mt.conns()                                                  |
 | Long-running operations   | OK     | none over 60 seconds                                             |                                                             |
 | Lock waits                | WARN   | 1                                                                | mt.locks()                                                  |
-| Long transactions         | OK     | none open 30+ seconds                                            |                                                             |
+| Long transactions         | OK     | none open 30 seconds or more                                     |                                                             |
 | Index builds              | OK     | 0                                                                |                                                             |
 | TTL thread                | WARN   | stopped                                                          | db.adminCommand({setParameter: 1, ttlMonitorEnabled: true}) |
 | Profiler                  | OK     | no database at level 2                                           |                                                             |
@@ -528,7 +529,7 @@ version: 7.0.48
 | Unused indexes            | INFO   | up only 19s; check again after 7 days                            | mt.unusedIdx()                                              |
 | Reusable disk space       | OK     | 0 B / 1.4 MB (0.0%)                                              |                                                             |
 +---------------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
-CRIT 2, WARN 5, OK 13, INFO 1 (per-collection checks: 2/2 collections)
+CRIT 1, WARN 5, OK 13, INFO 2 (per-collection checks: 2/2 collections)
 ```
 
 - A check that cannot run (e.g. no privilege) becomes UNKNOWN with the reason; the others still run.
@@ -536,7 +537,8 @@ CRIT 2, WARN 5, OK 13, INFO 1 (per-collection checks: 2/2 collections)
 - SKIP only means not applicable: replica set checks on a standalone, the two cache checks when the storage engine is not WiredTiger. It must run on a mongod; on a mongos it prints a one-line explanation.
 - `{issues: true}` shows WARN, CRIT and UNKNOWN.
 - The four per-collection checks (TTL overdue, redundant indexes, unused indexes, reusable space) share one pass: one `listCollections` per database, one `getIndexes` and one `$collStats` per collection, `$indexStats` only after 7 days of uptime, plus one query for the oldest document per TTL index.
-- By default the pass stops after 1000 collections (`maxColls`) or 30 seconds (`budgetMs`), which `mt.config()` can change; it also stops when open files plus connections reach 80% of the limit (that stop cannot be turned off). It goes through databases and collections in name order. Collections it did not reach are not treated as fine: if these checks found nothing they are UNKNOWN with "only the first 1000/15000 collections checked (maxColls 1000)"; if they found problems they are WARN with that note added. The last line says how many collections were checked.
+- By default the pass stops after 1000 collections (`maxColls`) or 30 seconds (`budgetMs`), which `mt.config()` can change; it also stops when open files plus connections get close to 80% of the limit (that stop cannot be turned off). It goes through databases and collections in name order. Collections it did not reach are not treated as fine: if these checks found nothing they are UNKNOWN with "only the first 1000/15000 collections checked (maxColls 1000)"; if they found problems they are WARN with that note added. The last line says how many collections were checked.
+- When cache used, cache dirty, read / write tickets, lock queue or connections is CRIT, the server is already struggling, so the per-collection checks are skipped by default and the last line says why; `{deep: true}` runs them anyway.
 - With many collections, start with `{quick: true}` and then look at one database at a time with `mt.dupIdx('db')`, `mt.unusedIdx('db')`, `mt.ttl('db')`, `mt.frag('db')`.
 - The thresholds in the table are defaults, common rules of thumb that do not fit every workload (long operations on an analytics database, lag on a replica in another data center); a WARN is not necessarily a problem, so look closer with the suggested command.
 - Thresholds can be changed: `mt.check({thresholds: {...}})` for one run; `mt.config({checkThresholds: {...}})` for the session, until the next `load()`. Keys are in the "Threshold key" column; keys with a CRIT level take `[WARN, CRIT]`, WARN-only keys take one number. For `oplog` lower is worse, so WARN must be >= CRIT; for the others WARN cannot exceed CRIT; percentages cannot exceed 100. `mt.help('check')` lists every key, its default and any value changed in this session.
@@ -665,6 +667,7 @@ mt.slow('shop', {sort: 'ms'})       // slowest first
 | `ms` | Only operations that took at least this many milliseconds; becomes `{millis: {$gte: ms}}` |
 | `ns` | A collection name (`'orders'`) or a full `'db.collection'` |
 | `sort` | `'desc'` (default, `{ts: -1}`, newest first), `'asc'` (`{ts: 1}`, oldest first), `'ms'` (`{millis: -1, ts: -1}`, slowest first), or a sort document such as `{docsExamined: -1}` |
+| `count` | `true` also counts every matching entry (one `count` on `system.profile`); otherwise it reads one extra entry to tell whether there are more |
 
 The header shows the profiler settings:
 
@@ -773,7 +776,8 @@ docsExamined: 80
    nreturned: 80
       client: 192.168.107.5
      command: {find: orders, filter: {$where: sleep(1) || true, status: NEW}, limit: 80}
-2 rows in set  (showing the first 2 of 4 rows)
+2 rows in set
+only the first 2 are listed and there are more: {limit: 0} lists them all, {count: true} counts them
 ```
 
 ```
@@ -1143,6 +1147,7 @@ mt.explainLog({find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 's
 How it works:
 
 - Fields added by mongos and drivers are dropped (`shardVersion`, `databaseVersion`, `lsid`, `$clusterTime`, `readConcern`, `$sortKey` in the projection...), then it runs `db.runCommand({explain: command, verbosity: 'queryPlanner'})` (`'executionStats'` with `{analyze: true}`).
+- A line before the plan lists the fields that were removed (`removed for explain: lsid, readConcern...`): they do not change which index is chosen, but read concern and transactions can change which data is seen, so keep them in mind when comparing then and now.
 - The database is the command's `$db` or the database part of `ns`; failing that the `{db: 'shop'}` option, and failing that the current database.
 - `find`, `aggregate`, `count`, `distinct`, `update`, `delete` and `findAndModify` are supported. Single update / remove statements from the profiler or the log are wrapped into `update` / `delete` commands; a getMore uses its original command (`originatingCommand`). Explaining a write does not modify any data.
 - `{"$date": ...}`, `{"$oid": ...}`, `{"$numberLong": ...}` and friends in JSON logs are turned back into real types; otherwise the filter would not match.
@@ -1223,10 +1228,12 @@ mt.logQuery(`whole log line`)  // a whole line copied from the log file
 db.getSiblingDB('shop').orders.find({userId: 24530, status: {$in: ['paid', 'shipped', 'completed']}}).sort({createdAt: -1}).limit(20)
 
 > mt.logQuery({update: 'orders', updates: [{q: {status: 'new', createdAt: {$lt: ISODate('2024-01-01T00:00:00Z')}}, u: {$set: {status: 'expired'}}, multi: true}], $db: 'shop'})
-// Note: this is a write; running it changes data
-db.getSiblingDB('shop').orders.updateMany({status: 'new', createdAt: {$lt: ISODate('2024-01-01T00:00:00.000Z')}}, {$set: {status: 'expired'}})
+// Note: the original statement is a write and running it changes data. Below is an explain that only shows the plan and runs nothing; the original is commented out at the end, and {raw: true} prints it runnable
+db.getSiblingDB('shop').runCommand({explain: {update: 'orders', updates: [{q: {status: 'new', createdAt: {$lt: ISODate('2024-01-01T00:00:00.000Z')}}, u: {$set: {status: 'expired'}}, multi: true}]}, verbosity: 'queryPlanner'})
+// db.getSiblingDB('shop').orders.updateMany({status: 'new', createdAt: {$lt: ISODate('2024-01-01T00:00:00.000Z')}}, {$set: {status: 'expired'}})
 ```
 
+- Writes (update, delete, findAndModify) are not printed runnable by default: you get a `runCommand({explain: ..., verbosity: 'queryPlanner'})` that only shows the plan and changes no data, with the original statement commented out after it, so copying the whole block cannot run the write. `{raw: true}` prints the runnable statement (with a comment saying it is a write).
 - For input from a slow log, a comment on the first line gives when it ran, how long it took, the plan, documents scanned and returned; copying the whole block still runs.
 - Types are written out as they are: dates as `ISODate('...')`, plus `ObjectId('...')`, `NumberLong('...')`, `NumberDecimal('...')`, `UUID('...')`, regexes and so on; dotted field names are quoted.
 - As with explain, fields added by mongos and drivers are dropped (`shardVersion`, `lsid`, `$clusterTime`, `$sortKey`...).
@@ -2315,7 +2322,9 @@ Like `SHOW BINARY LOGS`; it answers the same question as `rs.printReplicationInf
 | `usedLogical` | How much is used (logical size) |
 | `disk` | Disk space the oplog takes (compressed) |
 | `firstEvent` / `lastEvent` | Times of the oldest and newest entries |
-| `window` | The difference. A secondary that is down or behind for longer than this needs a full resync |
+| `fill` | How much of the limit is used |
+| `window` | The difference. Once the oplog is full, this is how much time it covers: when a secondary's last synced position is no longer in its sync source's oplog (down or behind for longer than this), it needs a full resync. Before it is full, the window only runs from the oldest entry to now and keeps growing |
+| `estWindow` | When the oplog is not full and has run at least an hour, how much a full oplog would cover at the average write rate so far; it breaks when the write rate changes, so take it as a guide only |
 | `now` | Current time |
 
 ```
@@ -2323,14 +2332,16 @@ Like `SHOW BINARY LOGS`; it answers the same question as `rs.printReplicationInf
 -- rs.printReplicationInfo()
  maxLogical: 1.4 GB
 usedLogical: 9.5 MB
+       fill: 0.7%
        disk: 1.4 MB
  firstEvent: 2026-11-22 10:33:24
   lastEvent: 2026-11-22 10:33:41
      window: 17s (0.00 h)
         now: 2026-11-22 10:33:55.564
+the oplog is not full yet (0.7% used): the window runs from the oldest entry to now and keeps growing; under an hour is too short to estimate how much a full oplog would cover
 ```
 
-The example is a freshly created replica set, so the window is only seconds long; in production it is usually dozens of hours or more.
+The example is a freshly created replica set, so the window is only seconds long, and the item in `mt.check()` is INFO rather than CRIT. Once a production oplog is full, the window is usually dozens of hours or more.
 
 ### mt.status(): key metrics
 
@@ -2854,7 +2865,7 @@ Every PR and every push to main runs [test/compat.js](test/compat.js) against a 
 - mongosh: MongoDB 4.4, 5.0, 6.0, 7.0 and 8.0, each with mongosh 1.8.0 and the newest 2.x; MongoDB 4.0 with mongosh 1.8.0 and 1.10.6 (mongosh 2.x cannot connect to 4.0). 12 jobs.
 - Legacy mongo shell: MongoDB 3.6, 4.0, 4.2, 4.4 and 5.0, each with its own `mongo` against a server of the same version. 5 jobs.
 
-All on single-node replica sets. [test/shard.js](test/shard.js) also runs on a sharded cluster (config server, 3 shards, mongos; see [test/shard.sh](test/shard.sh)), followed by [test/shard-down.js](test/shard-down.js) with one shard stopped, with MongoDB 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0), 5.0, 7.0 and 8.0 (mongosh 2.x): 5 jobs. [test/auth.js](test/auth.js) runs against a mongod started with `--auth` (see [test/auth.sh](test/auth.sh); logged in as root and as a user that may not list users) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/flow.js](test/flow.js) runs on a two-member replica set (see [test/flow.sh](test/flow.sh): normal, throttled while the secondary is `fsyncLock`'ed, after it caught up, and on the secondary) with 4.2 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/isync.js](test/isync.js) runs while a new member goes through initial sync, held at each step with failpoints (see [test/isync.sh](test/isync.sh): part way through copying after two failed attempts, on the primary, just before it finishes, and after) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/concern.js](test/concern.js) runs on a replica set with an arbiter whose primary counts write concerns (see [test/concern.sh](test/concern.sh): implicit defaults, counts per level, the connection's settings, and after `setDefaultRWConcern`) with 4.2 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
+All on single-node replica sets. [test/shard.js](test/shard.js) also runs on a sharded cluster (config server, 3 shards, mongos; see [test/shard.sh](test/shard.sh)), followed by [test/shard-down.js](test/shard-down.js) with one shard stopped, with MongoDB 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0), 5.0, 7.0 and 8.0 (mongosh 2.x): 5 jobs. [test/auth.js](test/auth.js) runs against a mongod started with `--auth` (see [test/auth.sh](test/auth.sh); logged in as root and as a user that may not list users) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/flow.js](test/flow.js) runs on a two-member replica set (see [test/flow.sh](test/flow.sh): normal, throttled while the secondary is `fsyncLock`'ed, after it caught up, and on the secondary) with 4.2 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/isync.js](test/isync.js) runs while a new member goes through initial sync, held at each step with failpoints (see [test/isync.sh](test/isync.sh): part way through copying after two failed attempts, on the primary, just before it finishes, and after) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/concern.js](test/concern.js) runs on a replica set with an arbiter whose primary counts write concerns (see [test/concern.sh](test/concern.sh): implicit defaults, counts per level, the connection's settings, and after `setDefaultRWConcern`; then a member delayed by 30 seconds is added for [test/lag.js](test/lag.js), checking that `mt.check()` counts only the lag beyond the delay) with 4.2 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
 
 To run them locally (needs Docker):
 
