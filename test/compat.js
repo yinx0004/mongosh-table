@@ -103,7 +103,7 @@ run('mt.help each command', function () {
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
 run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'mem'、'vars'"]);
-run('mt.ps', function () { mt.ps(); }, ['-- db.adminCommand({currentOp: 1, active: true})']);
+run('mt.ps', function () { mt.ps(); }, ["-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true}}, {$match: {active: true}}])"]);
 run('mt.ps slow query', function () {
   for (var i = 0; i < 20 && !db.currentOp({ ns: 'mtslow.slow' }).inprog.length; i++) sleep(500);
   mt.ps({ ns: 'mtslow.slow' });
@@ -139,7 +139,7 @@ var building = function () {
   return db.adminCommand({ currentOp: 1, $all: true }).inprog.some(function (op) { return /index build/i.test(op.msg || ''); });
 };
 for (var bi = 0; bi < 60 && !building(); bi++) sleep(250);
-run('mt.builds', function () { mt.builds({ table: true }); }, ['-- db.adminCommand({currentOp: 1, $all: true})', '| mtbuild.c ', '| a_1_b_1 ', '{a: 1, b: 1}', '| phase ']);
+run('mt.builds', function () { mt.builds({ table: true }); }, ["-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true, idleConnections: true}}])", '| mtbuild.c ', '| a_1_b_1 ', '{a: 1, b: 1}', '| phase ']);
 buildFp.forEach(function (f) { db.adminCommand({ configureFailPoint: f, mode: 'off' }); });
 // 建完的标准：索引已出现、建索引线程已结束、客户端的 createIndexes 也已返回（8.0 上它会多等一会儿提交）
 var createPending = function () {
@@ -229,7 +229,7 @@ if (TXN) {
   var sess = db.getMongo().startSession();
   sess.startTransaction();
   sess.getDatabase('mtx').c.insertOne({ a: 1 });
-  run('mt.txns', function () { mt.txns({ table: true }); }, ['-- db.adminCommand({currentOp: 1, $all: true})', '| lsid ', '| idle ', '| openSecs ']);
+  run('mt.txns', function () { mt.txns({ table: true }); }, ["-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true, idleConnections: true}}])", '| lsid ', '| idle ', '| openSecs ']);
   run('mt.txns secs filter', function () { mt.txns({ secs: 100000 }); }, ['Empty set']);
   run('mt.txns sort asc', function () { mt.txns({ sort: 'asc', cols: 'state,openSecs' }); }, ['| idle  ']);
   sess.abortTransaction();
@@ -240,6 +240,15 @@ run('mt.frag', function () { mt.frag('mtest'); }, ["-- db.getSiblingDB('mtest').
 run('mt.frag db handle', function () { mt.frag(tdb, { cols: 'name,disk', showCmd: false }); }, ['| orders ']);
 run('mt.cache', function () { mt.cache(); }, ['-- db.serverStatus().wiredTiger.cache', 'used: ', '| ns ', '| dataCached ', '| indexCached ', '| mtest.orders ', '以上集合在缓存里合计 ']);
 run('mt.cache db', function () { mt.cache('mtest', { cols: 'ns,cached' }); }, ['| mtest.orders ']);
+// 逐个集合查的命令：maxColls / budgetMs 到了就停；打开的文件和连接到了上限的 80% 也停（_maxOpenFiles 只给测试用，把上限调低）
+run('mt.cache maxColls', function () { mt.cache({ maxColls: 1, showCmd: false }); }, ['只查了前 1/', ' 个集合（maxColls 1）：可以调大 maxColls / budgetMs']);
+run('mt.colls open files', function () { mt.colls('mtest', { _maxOpenFiles: 10, showCmd: false }); }, ['只查了前 0/', '（打开的文件和连接 ', ' 已到上限 10 的 80%）', 'Too many open files']);
+run('mt.latency maxColls', function () { mt.latency({ interval: 0, maxColls: 1, showCmd: false }); }, ['只查了前 1/']);
+run('mt.config maxColls', function () {
+  mt.config({ maxColls: 1 });
+  try { mt.dupIdx({ showCmd: false }); mt.ttl({ showCmd: false }); } finally { mt.config({ maxColls: 1000 }); }
+}, ['只查了前 1/']);
+run('mt.colls maxColls 0', function () { mt.colls('mtest', { maxColls: 0, showCmd: false }); }, ['| orders ']);
 run('mt.log', function () { mt.log({ cols: 'time,sev,comp,ctx,msg' }); }, ["-- db.adminCommand({getLog: 'global'})", '| time ', '| sev ', '| comp ', '(共 ', '只显示最后 20 行)']);
 run('mt.log n', function () { mt.log(3, { cols: 'sev,msg', table: true }); }, ['3 rows in set', '只显示最后 3 行)']);
 run('mt.log grep', function () { mt.log('connection accepted', { n: 2, cols: 'comp,msg', table: true }); }, ['| NETWORK ', 'onnection accepted']);
@@ -676,7 +685,7 @@ run('mt.check issues only', function () {
 }, ['no ok rows']);
 // 逐个集合的检查只遍历一次，超过 maxColls / budgetMs 就停下，没查到的算 UNKNOWN
 run('mt.check maxColls', function () { mt.check({ maxColls: 1, table: true }); }, [
-  'per collection (maxColls 1, budgetMs 60000)', '| 冗余索引 ', 'UNKNOWN | 只查了前 1/', ' 个集合（maxColls 1）', "调大 maxColls / budgetMs", '（逐个集合的检查：1/'
+  'per collection (maxColls 1, budgetMs 30000)', '| 冗余索引 ', 'UNKNOWN | 只查了前 1/', ' 个集合（maxColls 1）', "调大 maxColls / budgetMs", '（逐个集合的检查：1/'
 ]);
 run('mt.check budgetMs', function () {
   var out = capOut(function () { mt.check({ budgetMs: 1, table: true }); });
@@ -772,6 +781,23 @@ run('mt.desc order', function () {
   print(f.join(','));
 }, ['_id,a,s,n,when,sub,sub.k,sub.j,arr,arr.q,tags']);
 run('mt.desc depth', function () { mt.desc('mtdesc.o', { depth: 1, cols: 'field', showCmd: false }); }, ['| sub   |']);
+// 视图：只有逐条处理的阶段时取前 N 条；管道里（包括它依赖的视图里）有 $group 等时不执行，{force: true} 才抽样
+dsc.createView('v1', 'o', [{ $match: { a: { $gte: 1 } } }, { $project: { s: 1 } }]);
+dsc.createView('v2', 'o', [{ $group: { _id: '$s', n: { $sum: 1 } } }]);
+dsc.createView('v3', 'v2', [{ $match: { n: 1 } }]);
+run('mt.desc view', function () { mt.desc(dsc.v1, { table: true }); }, ['aggregate([{$limit: 1000}])', 'type: view (o)', 'sampled: 3', '取的是前 3 条，不是随机抽样']);
+run('mt.desc view blocking', function () { mt.desc(dsc.v3); }, ['视图的管道里有 $group：要先读完 o 的全部数据', "mt.desc('o')"]);
+run('mt.desc view force', function () { mt.desc(dsc.v2, { force: true, table: true }); }, ['aggregate([{$sample: {size: 1000}}])', 'sampled: 3']);
+if (VER[0] >= 5) {
+  dsc.createCollection('ts', { timeseries: { timeField: 't' } });
+  dsc.ts.insertMany([{ t: new Date(), v: 1 }, { t: new Date(), v: 2 }]);
+  run('mt.desc timeseries', function () { mt.desc(dsc.ts, { table: true }); }, ['aggregate([{$limit: 1000}])', 'type: timeseries', '取的是前 2 条']);
+}
+// 要抽的超过集合的 5% 时 $sample 会扫全表：集合超过 10 万条时不执行
+var big = []; for (var bi = 0; bi < 100001; bi++) big.push({ i: bi });
+dsc.big.insertMany(big, { ordered: false }); big = null;
+run('mt.desc big sample', function () { mt.desc(dsc.big, { sample: 6000 }); }, ['要抽 6000 条，超过了集合 100001 条的 5%']);
+run('mt.desc big sample ok', function () { mt.desc(dsc.big, { sample: 100, showCmd: false, table: true }); }, ['sampled: 100']);
 run('mt.planCache', function () { mt.planCache('mtdesc.o', { table: true }); }, ['| shape ', '| plan ', '{s: x, a: 1}', 'IXSCAN']);
 run('mt.planCache hash none', function () { mt.planCache(dsc.o, { hash: 'NOPE' }); }, ['Empty set']);
 run('mt.desc missing', function () { mt.desc('nope_no_such'); }, ['mongotab: 集合 test.nope_no_such 不存在']);

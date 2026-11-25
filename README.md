@@ -312,6 +312,9 @@ SO20240101002,Bob,2.5,(无字段)
 | `missingText` | 跟随语言 | 没有这个字段时显示什么，默认 `(无字段)` / `(missing)` |
 | `lang` | 自动 | `'zh'` / `'en'`：提示和帮助的语言 |
 | `showCmd` | `true` | DBA 命令先打印等价的原生命令 |
+| `maxTimeMS` | `10000` | 较重的读（逐集合统计、抽样、`$currentOp`）每次最多执行多久（毫秒），`0` 不限，见下一节“生产上的保护” |
+| `maxColls` | `1000` | 逐个集合查的命令（`mt.cache()`、`mt.unusedIdx()` 等）最多查几个集合，`0` 不限 |
+| `budgetMs` | `30000` | 逐个集合查的命令最多花多少毫秒，`0` 不限 |
 | `checkThresholds` | `null` | `mt.check()` 的阈值，如 `{lag: [30, 300]}`，按键合并，见 [mt.check()](#mtcheck一键体检) |
 
 DBA 命令另有自己的选项（`secs`、`ns`、`sort`、`interval`...），见下一节各命令。
@@ -325,7 +328,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 
 ```
 > mt.config()
-{"limit":50,"maxCol":40,"tz":"UTC","nullText":"NULL","missingText":null,"color":null,"width":200,"depth":null,"showCmd":true,"checkThresholds":null,"lang":"zh"}
+{"limit":50,"maxCol":40,"tz":"UTC","nullText":"NULL","missingText":null,"color":null,"width":200,"depth":null,"showCmd":true,"maxTimeMS":10000,"maxColls":1000,"budgetMs":30000,"checkThresholds":null,"lang":"zh"}
 ```
 
 - 设置只在当前 mongosh 会话里有效，退出就没了；重新 `load()` 也会回到默认值。
@@ -421,7 +424,7 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
 选项：
   secs  只看运行超过这么多秒的
   ns    库或 库.集合
-  all   true：用 $all，包括空闲连接和内部线程
+  all   true：同 currentOp 的 $all，包括空闲连接和内部线程
   sort  'desc' / 'asc' / 'opid' / 按列名的排序文档
 
 输出：
@@ -435,18 +438,24 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
   command       命令，去掉了驱动加的字段
 
 说明：
-  - 执行的是 db.adminCommand({currentOp: 1, active: true})
+  - 执行的是 $currentOp 聚合（只取 active 的），分批返回；不用 currentOp 命令，因为它的结果装在一个文档里，连接、会话很多时超过 16MB 就失败
   - 默认不显示空闲连接、内部线程、驱动的心跳长轮询和 mt.ps() 自己
 
 都可以加 t() 的选项（cols、exclude、limit、vertical、table、tz...）；mt.config({showCmd: false}) 不打印原生命令
-另见：mt.locks()、mt.txns()、mt.conns()
+另见：mt.locks()、mt.txns()、mt.conns()、mt.cursors()
 ```
 
 所有命令的共同点：
 
 - **先打印原生命令**：第一行 `-- ...`（终端里是灰色）是它实际执行的 MongoDB 命令，方便复制、核对；`mt.config({showCmd: false})` 关掉。
 - **选项和 `t()` 通用**：`cols`、`exclude`、`limit`、`vertical`、`table`、`tz` 都能用，例如 `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`、`mt.idx('orders', {vertical: true})`。
-- **只读**：不会改任何设置，`mt.slow()` 也不会打开 profiler。
+- **只读**：不会改任何设置，`mt.slow()` 也不会打开 profiler。`mt.explain()` / `mt.explainLog()` 默认只取执行计划，加 `{analyze: true}` 才真正执行一遍查询。
+- **生产上的保护**：
+  - 较重的读（逐集合的 `$collStats` / `$indexStats`、`mt.desc()` 的抽样、`$currentOp`）都带 `maxTimeMS`，默认 10 秒，碰到被锁住或太慢的集合不会一直卡着。
+  - 逐个集合查的命令（`mt.colls()`、`mt.frag()`、`mt.cache()`、`mt.ttl()`、`mt.unusedIdx()`、`mt.dupIdx()`、`mt.latency()`、`mt.check()`）默认最多查 1000 个集合、30 秒（`maxColls`、`budgetMs`；`mt.config()` 或这一次的选项可以改，`0` = 不限），没查全时表下注明“只查了前 N/M 个集合”。
+  - 打开的文件和连接到了上限（`maxOpenFiles`）的 80% 时也会停，这一条不能关：`$collStats` 会让 WiredTiger 打开平时关着的集合和索引文件，实测 3000 个集合时，`mt.cache()` 让 mongod 打开的文件从 48 个涨到 9051 个，集合再多可能超过上限（Too many open files）。
+  - 查运行中的操作（`mt.ps()`、`mt.conns()`、`mt.locks()`、`mt.txns()`、`mt.builds()` 等）用 `$currentOp` 聚合分批取：`currentOp` 命令的结果装在一个文档里，连接、会话很多时超过 16MB 就失败。
+  - `mt.desc()` 在视图和时序集合上不做会全表扫描的 `$sample`，见 [mt.desc()](#mtdesc集合的字段结构)。
 - **大小分逻辑和磁盘**：列名里带 `logical` 的是未压缩的数据量（BSON 大小），带 `disk` 的是磁盘上实际占的（WiredTiger 压缩后），带 `cached` 的是在内存缓存里占的（解压后）。同一份数据三者可以差好几倍。
 - **权限**：需要监控类权限，如 `clusterMonitor` 角色。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()`、在 mongos 上执行 `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` 时，只打印一行说明，不抛异常。
 - **版本**：老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过。经 mongos 测过的有 `mt.shards()`、`mt.balancer()`、`mt.pool()`（包括有分片连不上时），以及 `mt.status()`、`mt.vars()`、`mt.mem()`、`mt.cursors()`（能用）和 `mt.check()`、`mt.engine()`、`mt.qstats()`、`mt.profile()`、`mt.rsconf()`（打印一行说明）；其余命令经 mongos 还没测过。
@@ -489,7 +498,7 @@ mt.config({checkThresholds: {longOps: [600, 3600]}})      // 改本会话的默�
 
 ```
 > mt.check()
--- serverStatus, currentOp, replSetGetStatus, getLog, getParameter; per collection (maxColls 2000, budgetMs 60000): getIndexes, $collStats, $indexStats
+-- serverStatus, currentOp, replSetGetStatus, getLog, getParameter; per collection (maxColls 1000, budgetMs 30000): getIndexes, $collStats, $indexStats
    host: db1
 version: 7.0.48
    role: PRIMARY (rs0)
@@ -527,7 +536,7 @@ CRIT 2，WARN 5，OK 13，INFO 1 （逐个集合的检查：2/2 个集合）
 - SKIP 只表示不适用：单机上副本集相关的几项、存储引擎不是 WiredTiger 时的缓存两项。只能连 mongod，在 mongos 上只打印一行说明。
 - `{issues: true}` 显示 WARN、CRIT 和 UNKNOWN。
 - 逐个集合的四项（TTL 超期、冗余索引、没被用过的索引、可回收空间）共用一次遍历：每个库一次 `listCollections`，每个集合一次 `getIndexes`、一次 `$collStats`；运行满 7 天才查 `$indexStats`；每个 TTL 索引再查一次最老的文档。
-- 默认最多查 2000 个集合（`maxColls`）、60 秒（`budgetMs`），按库名、集合名的顺序，到了就停下。没查到的集合不能算没问题：这几项没发现问题时是 UNKNOWN，value 写“只查了前 2000/15000 个集合（maxColls 2000）”；有发现时照常 WARN 并附上这句。最后一行写实际查了几个集合。
+- 默认最多查 1000 个集合（`maxColls`）、30 秒（`budgetMs`），可以用 `mt.config()` 改；打开的文件和连接到了上限的 80% 也会停（这一条不能关）。按库名、集合名的顺序，到了就停下。没查到的集合不能算没问题：这几项没发现问题时是 UNKNOWN，value 写“只查了前 1000/15000 个集合（maxColls 1000）”；有发现时照常 WARN 并附上这句。最后一行写实际查了几个集合。
 - 集合很多时可以先 `{quick: true}`，再用 `mt.dupIdx('库')`、`mt.unusedIdx('库')`、`mt.ttl('库')`、`mt.frag('库')` 逐个库看。
 - 表里的阈值是默认值，是常见的经验值，不一定适合每个场景（比如离线分析库的长操作、跨机房副本的复制延迟）；WARN 不代表一定有问题，按建议列的命令再细看。
 - 阈值可以改：`mt.check({thresholds: {...}})` 只改这一次；`mt.config({checkThresholds: {...}})` 改本会话的默认值，重新 `load()` 会恢复。键见上表的“阈值键”，有 CRIT 的写 `[WARN, CRIT]`，只有 WARN 的写一个数；`oplog` 越低越坏，WARN 要大于等于 CRIT，其余 WARN 不能大于 CRIT；百分比不能超过 100。`mt.help('check')` 列出全部键、默认值和本会话改过的值。
@@ -536,13 +545,13 @@ CRIT 2，WARN 5，OK 13，INFO 1 （逐个集合的检查：2/2 个集合）
 
 ### mt.ps()：正在执行的操作
 
-相当于 `SHOW PROCESSLIST`，执行的是 `db.adminCommand({currentOp: 1, active: true})`。
+相当于 `SHOW PROCESSLIST`，执行的是 `$currentOp` 聚合（只取 active 的），分批返回，连接再多也不受 16MB 的限制。
 
 | 选项 | 说明 |
 |---|---|
 | `secs` | 只看运行超过这么多秒的，例如 `{secs: 5}` |
 | `ns` | 只看某个库或集合：`'shop'` 匹配 `shop` 下所有集合，`'shop.orders'` 只看这一个 |
-| `all` | `true` 时改用 `$all: true`，包括空闲连接和内部线程 |
+| `all` | `true` 时同 `currentOp` 的 `$all: true`，包括空闲连接和内部线程 |
 | `sort` | `'desc'`（默认，运行最久的在前）、`'asc'`（最短的在前）、`'opid'`，或按列名写的排序文档如 `{ns: 1, secs: -1}`；相同时再按运行时间从长到短 |
 
 | 列 | 说明 |
@@ -561,7 +570,7 @@ CRIT 2，WARN 5，OK 13，INFO 1 （逐个集合的检查：2/2 个集合）
 
 ```
 > mt.ps()
--- db.adminCommand({currentOp: 1, active: true})
+-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true}}, {$match: {active: true}}])
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
 | opid | secs | op      | ns             | client              | app            | lock | plan                                | command                                  |
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
@@ -574,7 +583,7 @@ CRIT 2，WARN 5，OK 13，INFO 1 （逐个集合的检查：2/2 个集合）
 
 ```
 > mt.ps({all: true, cols: 'opid,secs,op,ns,client,app', limit: 5})
--- db.adminCommand({currentOp: 1, $all: true})
+-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true, idleConnections: true}}])
 +------+------+---------+-------------+---------------------+----------------+
 | opid | secs | op      | ns          | client              | app            |
 +------+------+---------+-------------+---------------------+----------------+
@@ -1394,7 +1403,7 @@ mt.locks({all: true})   // 所有被占用的锁，包括没人排队的
 
 ```
 > mt.locks()
--- db.adminCommand({lockInfo: 1}); db.adminCommand({currentOp: 1, $all: true})
+-- db.adminCommand({lockInfo: 1}); db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true, idleConnections: true}}])
 +----------+------+-------+------+------+---------------------+------------------+--------+----------+------------------------------------------+
 | resource | mode | state | opid | secs | client              | desc             | op     | ns       | command                                  |
 +----------+------+-------+------+------+---------------------+------------------+--------+----------+------------------------------------------+
@@ -1420,7 +1429,7 @@ mt.txns({secs: 10})       // 只看开了 10 秒以上的
 mt.txns({sort: 'asc'})    // 最短的在前；也可以给排序文档如 {client: 1}
 ```
 
-执行的是 `db.adminCommand({currentOp: 1, $all: true})`，只取带 `transaction` 字段的；两条语句之间空闲的事务也在里面（`type: idleSession`）。
+执行的是 `$currentOp` 聚合（含空闲连接和会话），只取带 `transaction` 字段的；两条语句之间空闲的事务也在里面（`type: idleSession`）。
 
 | 列 | 说明 |
 |---|---|
@@ -1435,7 +1444,7 @@ mt.txns({sort: 'asc'})    // 最短的在前；也可以给排序文档如 {clie
 
 ```
 > mt.txns()
--- db.adminCommand({currentOp: 1, $all: true}) → transaction
+-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true, idleConnections: true}}]) → transaction
 +--------------------------------------+-----------+-------+----------+------------+----------+-------------------------+-----------+------+---------------------+----------------+----+
 | lsid                                 | txnNumber | state | openSecs | activeSecs | idleSecs | start                   | expiresIn | opid | client              | app            | ns |
 +--------------------------------------+-----------+-------+----------+------------+----------+-------------------------+-----------+------+---------------------+----------------+----+
@@ -1731,6 +1740,8 @@ mt.shards()          // 均衡器、各分片、所有分片的集合
 mt.shards('shop')    // 只看一个库的分片集合，也可以传 db 对象
 ```
 
+传库名时只读这个库的集合的块（走 `config.chunks` 上的索引），分片表的块数也只算这个库的。不传时要读全部块，块很多的集群上建议传库名。
+
 | 字段 | 说明 |
 |---|---|
 | 表头 | `balancer`（均衡器的模式，正在做一轮时会注明）、`activeWindow`（设了均衡时间窗才有）、`chunkSizeMB`（设过才有）、分片数、分片集合数 |
@@ -1788,6 +1799,8 @@ mt.balancer()                      // 最近 24 小时的迁移，新的在前�
 mt.balancer('shop.orders')         // 只看一个集合；传库名看这个库的所有集合
 mt.balancer({hours: 168, n: 0})    // 最近 7 天的全部迁移
 ```
+
+最多读最近 2 万条记录，超过时表下注明。
 
 | 字段 | 说明 |
 |---|---|
@@ -1925,7 +1938,9 @@ indexes: _id_, status_1_createdAt_-1, customer.name_1
 13 rows in set
 ```
 
-- 用 `$sample` 随机抽样，很少出现的字段可能抽不到，可以调大 `sample`。抽样条数超过集合的 5% 时，`$sample` 会扫描整个集合再排序，大集合上别设太大。
+- 普通集合用 `$sample` 随机抽样（读随机位置，不扫全表），很少出现的字段可能抽不到，可以调大 `sample`。
+- 要抽的超过集合的 5%、集合又超过 10 万条时，`$sample` 会扫描整个集合再随机排序，所以不执行，加 `{force: true}` 才抽。
+- 视图和时序集合上 `$sample` 会全表扫描（实测 7.0：视图抽 1000 条扫了底层 5 万条，时序集合扫了全部 83 万个桶），所以默认改成取前 `sample` 条，表下注明不是随机抽样。视图的管道里（包括它依赖的视图）有 `$group`、`$sort` 等要读完全部数据的阶段时，取前几条也要先跑完整条管道，所以不执行，提示加 `{force: true}` 或者看底层集合。
 - 字段按它在文档里的平均位置排，子字段紧跟在父字段后面。
 - `number` 是 int 和 double（shell 里分不出来），`long`、`decimal` 单独列出；同一个字段有多种类型（如上面 `amount` 有 13% 是 null）往往是数据问题的线索。
 
@@ -2088,7 +2103,7 @@ mt.dupIdx('shop')    // 只看一个库，也可以传 db 对象
 mt.builds()
 ```
 
-执行的是 `db.adminCommand({currentOp: 1, $all: true})`，取出正在建索引的操作。
+执行的是 `$currentOp` 聚合（含空闲连接和内部线程），取出正在建索引的操作。
 
 | 列 | 说明 |
 |---|---|
@@ -2100,7 +2115,7 @@ mt.builds()
 
 ```
 > mt.builds()
--- db.adminCommand({currentOp: 1, $all: true}) → msg /Index Build/ or command.createIndexes
+-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true, idleConnections: true}}]) → msg /Index Build/ or command.createIndexes
 +-------------+------------------------------+-----------------------------------+------------------------------------------+---------+---------+-------+------+------+---------------------+
 | ns          | index                        | key                               | phase                                    | done    | total   | pct   | secs | opid | client              |
 +-------------+------------------------------+-----------------------------------+------------------------------------------+---------+---------+-------+------+------+---------------------+
@@ -2119,11 +2134,11 @@ mt.builds()
 按客户端 IP 统计连接数，看是哪台机器、哪个应用连得最多。
 
 - 上面几行来自 `db.serverStatus().connections`：`current` 当前连接数，`available` 还能建多少，`totalCreated` 启动以来一共建过多少。
-- 表格来自 `currentOp` 的 `$all: true`：`conns` 连接数，`active` 其中正在执行操作的，`apps` 这些连接的 appName。
+- 表格来自 `$currentOp` 聚合（含空闲连接，分批返回，连接再多也不受 16MB 限制）：`conns` 连接数，`active` 其中正在执行操作的，`apps` 这些连接的 appName。
 
 ```
 > mt.conns()
--- db.serverStatus().connections; db.adminCommand({currentOp: 1, $all: true})
+-- db.serverStatus().connections; db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true, idleConnections: true}}])
      current: 19
    available: 8173
 totalCreated: 69

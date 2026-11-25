@@ -36,9 +36,13 @@ run('mt.shards distribution', function () {
 run('mt.shards one db', function () {
   var out = capOut(function () { mt.shards('crm', { showCmd: false }); });
   print(/没有分片的集合/.test(out) && !/shop\.orders/.test(out) ? 'crm has none' : out);
+  // 只看一个库时，块在服务端按这个库的集合过滤，分片表的块数也只算这个库的：crm 没有分片的集合，都是 0
+  var n0 = 0, re0 = /\| sh\d +\| [^|]+\|[^|]*\|[^|]*\|\s+(\d+) \|/g, m0, rowsSeen = 0;
+  while ((m0 = re0.exec(out))) { n0 += Number(m0[1]); rowsSeen++; }
+  print(rowsSeen === 3 && n0 === 0 ? 'crm chunks 0' : 'crm chunks ' + n0 + ' rows ' + rowsSeen + '\n' + out);
   out = capOut(function () { mt.shards(db.getSiblingDB('shop'), { showCmd: false }); });
   print(/shop\.orders/.test(out) && /shop\.events/.test(out) ? 'shop by handle' : out);
-}, ['crm has none', 'shop by handle']);
+}, ['crm has none', 'crm chunks 0', 'shop by handle']);
 
 // 迁移记录：shard.sh 把 shop.orders 的两块从 sh1 迁到了 sh2（哈希分片建集合时有的版本也会迁，不检查条数）
 run('mt.balancer', function () {
