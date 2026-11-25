@@ -390,17 +390,18 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 +--------------------+----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 ── Replication ──
-+-------------------------------+--------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| command                       | mysql                                | description                                                                                                                                                                                                                                    |
-+-------------------------------+--------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| mt.repl()                     | SHOW SLAVE STATUS                    | Replica set members, replication lag (seconds), sync source                                                                                                                                                                                    |
-| mt.rsconf()                   | SHOW SLAVE HOSTS                     | Replica set configuration (rs.conf()): each member's priority, votes, hidden, delay, tags and current state, election settings, default read/write concern; notes an even number of voters, arbiters, and delayed members that vote            |
-| mt.flow({interval})           | Group Replication flow control       | Flow control: on or off, throttling or not, majority lag, wait time (per second), times throttled; how far each member is behind; operations held up and how many times they waited                                                            |
-| mt.initialSync({all})         | CLONE plugin progress (clone_status) | Initial sync progress: sync source, phase, data copied, time left (4.2+), oplog start / end and buffer, ops applied, failures and retries; per database and the collections being copied; all = every collection                               |
-| mt.oplog()                    | SHOW BINARY LOGS                     | Oplog size and how much time it covers                                                                                                                                                                                                         |
-| mt.shards('db')               | sh.status()                          | Sharded cluster (on a mongos): balancer, each shard's draining state, zones, chunks, data size and the databases it is primary for, each sharded collection's key and chunk distribution; pass 'db' for one database's collections             |
-| mt.balancer('ns', {hours, n}) | sh.status() migration results        | Balancer and recent chunk migrations: collection, from / to, range, documents, duration and result of each, migrations in progress, balancer rounds; hours = how far back (24 by default), n = max rows, ns = db or collection; needs a mongos |
-+-------------------------------+--------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
++-------------------------------+--------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| command                       | mysql                                                        | description                                                                                                                                                                                                                                    |
++-------------------------------+--------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| mt.repl()                     | SHOW SLAVE STATUS                                            | Replica set members, replication lag (seconds), sync source                                                                                                                                                                                    |
+| mt.rsconf()                   | SHOW SLAVE HOSTS                                             | Replica set configuration (rs.conf()): each member's priority, votes, hidden, delay, tags and current state, election settings, default read/write concern; notes an even number of voters, arbiters, and delayed members that vote            |
+| mt.concern()                  | SHOW VARIABLES LIKE 'rpl_semi_sync%' / transaction_isolation | Read and write concern at each level: server defaults (and where they come from), write concern modes, this connection, how often each level is used (write concerns need a startup option), running operations that set one                   |
+| mt.flow({interval})           | Group Replication flow control                               | Flow control: on or off, throttling or not, majority lag, wait time (per second), times throttled; how far each member is behind; operations held up and how many times they waited                                                            |
+| mt.initialSync({all})         | CLONE plugin progress (clone_status)                         | Initial sync progress: sync source, phase, data copied, time left (4.2+), oplog start / end and buffer, ops applied, failures and retries; per database and the collections being copied; all = every collection                               |
+| mt.oplog()                    | SHOW BINARY LOGS                                             | Oplog size and how much time it covers                                                                                                                                                                                                         |
+| mt.shards('db')               | sh.status()                                                  | Sharded cluster (on a mongos): balancer, each shard's draining state, zones, chunks, data size and the databases it is primary for, each sharded collection's key and chunk distribution; pass 'db' for one database's collections             |
+| mt.balancer('ns', {hours, n}) | sh.status() migration results                                | Balancer and recent chunk migrations: collection, from / to, range, documents, duration and result of each, migrations in progress, balancer rounds; hours = how far back (24 by default), n = max rows, ns = db or collection; needs a mongos |
++-------------------------------+--------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
 All accept t() options such as {cols: ...} or {vertical: true}; mt.config({showCmd: false}) hides the native command
 mt.help('ps') shows the detailed usage, options and output columns of one command
@@ -1528,6 +1529,63 @@ Note: delayed members can vote (db3:27017): w: 'majority' writes may wait for th
 - The delay field is `secondaryDelaySecs` since 5.0 and `slaveDelay` before; both show as `delay`.
 - Replica sets only; on a standalone or a mongos it prints a one-line explanation. For each member's replication lag, use `mt.repl()`.
 
+### mt.concern(): read and write concern at each level
+
+Read and write concern can be set at several levels: the server default, the replica set configuration, the connection string, and each operation. `mt.concern()` lists them from top to bottom, plus how often each level was actually used since startup, to see what applications really use. Like checking semi-sync replication settings and the transaction isolation level in MySQL.
+
+```js
+mt.concern()
+```
+
+| Part | Meaning |
+|---|---|
+| header | `defaultWriteConcern` / `defaultReadConcern`: the server's default read and write concern, with where they come from in brackets: `global` (set with `setDefaultRWConcern`), `implicit` (never set, the implicit default, 5.0+), `getLastErrorDefaults` (the replica set's default write concern before 4.4), or built-in default. Also when they were set, custom write concern modes and `writeConcernMajorityJournalDefault` |
+| this connection | this shell's write concern, read concern and read preference; mongosh takes `w`, `readConcernLevel` and `readPreference` from the connection string |
+| write concerns used | per write operation since startup: how many used `majority`, `w: number` and tags, and how many set none; from 5.0 also whether those took the global default (`default`) or the implicit one (`implicit`) |
+| read concerns used | per read concern level since startup; from 5.0 split into outside and inside transactions |
+| running operations | operations that set their own read or write concern; hidden when there are none |
+
+Below is a MongoDB 7.0 replica set with an arbiter (`db1` started with write concern counts on). The order service has `w=majority` in its connection string; an old report service sets nothing and gets the implicit `w: 1`; a tracking batch job uses `w: 0`; a reconciliation job reads with `snapshot` in transactions:
+
+```
+> mt.concern()
+-- db.adminCommand({getDefaultRWConcern: 1}); rs.conf(); db.getMongo() write / read concern, read preference; serverStatus().opWriteConcernCounters / readConcernCounters; currentOp
+   defaultWriteConcern: {w: 1} (implicit)
+    defaultReadConcern: {level: local} (implicit)
+majorityJournalDefault: true
+
+── this connection (this shell) ──
+  writeConcern: not set; the server default applies
+   readConcern: not set; the server default applies
+readPreference: primary
+
+── write concerns used (since startup) ──
++--------+----------+-----+-------+------------------+
+| op     | majority | w:0 | unset | unsetUsed        |
++--------+----------+-----+-------+------------------+
+| insert |      120 |  80 |   307 | implicit w:1 307 |
+| update |       40 |   0 |     0 |                  |
+| delete |        0 |   0 |     1 | implicit w:1 1   |
++--------+----------+-----+-------+------------------+
+3 rows in set
+
+── read concerns used (since startup) ──
++-------------+-------+-----------+----------+----------+--------------+-------+--------------------+
+| scope       | local | available | majority | snapshot | linearizable | unset | unsetUsed          |
++-------------+-------+-----------+----------+----------+--------------+-------+--------------------+
+| outside txn |     9 |         0 |       81 |        0 |            0 |   165 | implicit local 165 |
+| in txn      |     0 |           |        0 |        5 |              |     0 |                    |
++-------------+-------+-----------+----------+----------+--------------+-------+--------------------+
+2 rows in set
+Note: with 1 arbiter(s) the implicit default write concern is w: 1: acknowledged writes can be rolled back if the primary fails; set one explicitly with setDefaultRWConcern (with majority, writes cannot be acknowledged while a data-bearing member is down)
+Note: 80 writes used w: 0: they wait for no acknowledgement, so the application never learns if they failed
+```
+
+- Write concern counts need 4.4+ and mongod started with `--setParameter reportOpWriteConcernCountersInServerStatus=true`; it cannot be changed at runtime, and without it that part prints one line.
+- From 5.0, with no default write concern set the implicit default applies: usually `w: majority`, but `w: 1` with arbiters (PSA), so acknowledged writes can be rolled back if the primary fails; a note says so.
+- The legacy mongo shell ignores read and write concern options in the connection string; set them with `db.getMongo().setWriteConcern()` and the like.
+- A note is printed at the end when the implicit default write concern is `w: 1` (arbiters), there were `w: 0` writes, or `writeConcernMajorityJournalDefault` is false.
+
 ### mt.flow(): flow control
 
 When secondaries cannot keep up, the primary throttles writes itself (flow control, 4.2+) so the majority commit point does not fall further and further behind. When writes suddenly slow down while the primary's own CPU and disk are not busy, check whether this is throttling them. Like flow control in MySQL Group Replication.
@@ -1661,7 +1719,7 @@ failedAttempts: 0 / 10
 
 - STARTUP2 that never ends: look at `phase` and the collections being copied first; a rising `failedAttempts` means it keeps failing and starting over, with the reasons under attempts so far.
 - A disk that keeps growing: besides the data being copied, writes on the sync source during the copy are kept in `local.temp_oplog_buffer` and applied only after the copy; with many writes and a slow copy it keeps growing, and a note is printed above 1 GB.
-- On 3.6 `initialSyncStatus` stays after the sync finishes and shows as finished; from 4.2 it is gone once done, leaving only the `sinceStartup` counts. Before 4.2 other members do not show a syncing member's sync source.
+- On 3.6 `initialSyncStatus` stays after the sync finishes and shows as finished; from 4.2 it is gone once done, leaving only the `sinceStartup` counts.
 - A note is printed at the end when attempts have failed (with the latest reason), the sync source cannot be reached now, the oplog buffer is over 1 GB, or other members are in initial sync.
 
 ### mt.shards(): sharded cluster
@@ -2781,7 +2839,7 @@ Every PR and every push to main runs [test/compat.js](test/compat.js) against a 
 - mongosh: MongoDB 4.4, 5.0, 6.0, 7.0 and 8.0, each with mongosh 1.8.0 and the newest 2.x; MongoDB 4.0 with mongosh 1.8.0 and 1.10.6 (mongosh 2.x cannot connect to 4.0). 12 jobs.
 - Legacy mongo shell: MongoDB 3.6, 4.0, 4.2, 4.4 and 5.0, each with its own `mongo` against a server of the same version. 5 jobs.
 
-All on single-node replica sets. [test/shard.js](test/shard.js) also runs on a sharded cluster (config server, 3 shards, mongos; see [test/shard.sh](test/shard.sh)), followed by [test/shard-down.js](test/shard-down.js) with one shard stopped, with MongoDB 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0), 5.0, 7.0 and 8.0 (mongosh 2.x): 5 jobs. [test/auth.js](test/auth.js) runs against a mongod started with `--auth` (see [test/auth.sh](test/auth.sh); logged in as root and as a user that may not list users) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/flow.js](test/flow.js) runs on a two-member replica set (see [test/flow.sh](test/flow.sh): normal, throttled while the secondary is `fsyncLock`'ed, after it caught up, and on the secondary) with 4.2 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/isync.js](test/isync.js) runs while a new member goes through initial sync, held at each step with failpoints (see [test/isync.sh](test/isync.sh): part way through copying after two failed attempts, on the primary, just before it finishes, and after) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
+All on single-node replica sets. [test/shard.js](test/shard.js) also runs on a sharded cluster (config server, 3 shards, mongos; see [test/shard.sh](test/shard.sh)), followed by [test/shard-down.js](test/shard-down.js) with one shard stopped, with MongoDB 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0), 5.0, 7.0 and 8.0 (mongosh 2.x): 5 jobs. [test/auth.js](test/auth.js) runs against a mongod started with `--auth` (see [test/auth.sh](test/auth.sh); logged in as root and as a user that may not list users) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/flow.js](test/flow.js) runs on a two-member replica set (see [test/flow.sh](test/flow.sh): normal, throttled while the secondary is `fsyncLock`'ed, after it caught up, and on the secondary) with 4.2 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/isync.js](test/isync.js) runs while a new member goes through initial sync, held at each step with failpoints (see [test/isync.sh](test/isync.sh): part way through copying after two failed attempts, on the primary, just before it finishes, and after) with 3.6 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. [test/concern.js](test/concern.js) runs on a replica set with an arbiter whose primary counts write concerns (see [test/concern.sh](test/concern.sh): implicit defaults, counts per level, the connection's settings, and after `setDefaultRWConcern`) with 4.2 (legacy `mongo`), 4.4 (mongosh 1.8.0) and 8.0 (mongosh 2.x): 3 jobs. It also runs [test/format.js](test/format.js) (no database; covers formatting, `load()` paths and the `MONGOTAB_LANG` / `MONGOTAB_TZ` variables) with mongosh 1.8.0 and 2.14.2 on Linux, macOS and Windows, and with the legacy `mongo` from the 5 versions above.
 
 To run them locally (needs Docker):
 
@@ -2822,6 +2880,12 @@ MONGO_SHELL=mongo test/flow.sh mongo:4.2
 # initial sync
 test/isync.sh mongo:7.0
 MONGO_SHELL=mongo test/isync.sh mongo:3.6
+```
+
+```bash
+# read and write concern (replica set with an arbiter)
+test/concern.sh mongo:7.0
+MONGO_SHELL=mongo test/concern.sh mongo:4.2
 ```
 
 ```bash

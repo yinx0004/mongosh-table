@@ -171,12 +171,64 @@ jobs:
           if [ "${{ matrix.shell }}" = mongo ]; then export MONGO_SHELL=mongo; fi
           test/flow.sh mongo:${{ matrix.mongodb }} ${{ matrix.client }}
 
+  # mt.initialSync() while a new member goes through initial sync, held at each
+  # step with failpoints (test/isync.sh): copying after two failed attempts, on
+  # the primary, just before it finishes, and after it became a secondary.
+  isync:
+    name: initial sync ${{ matrix.mongodb }} / ${{ matrix.shell }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mongodb: '3.6'
+            shell: mongo
+            client: mongo:3.6
+          - mongodb: '4.4'
+            shell: mongosh 1.x
+            client: mongo:6.0.4   # mongosh 1.8.0
+          - mongodb: '8.0'
+            shell: mongosh 2.x
+            client: mongo:8.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run test/isync.js
+        run: |
+          if [ "${{ matrix.shell }}" = mongo ]; then export MONGO_SHELL=mongo; fi
+          test/isync.sh mongo:${{ matrix.mongodb }} ${{ matrix.client }}
+
+  # mt.concern() on a PSA replica set whose primary counts write concerns
+  # (test/concern.sh): implicit defaults, counts per level, this connection's
+  # settings, and defaults set with setDefaultRWConcern.
+  concern:
+    name: concern ${{ matrix.mongodb }} / ${{ matrix.shell }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mongodb: '4.2'
+            shell: mongo
+            client: mongo:4.2
+          - mongodb: '4.4'
+            shell: mongosh 1.x
+            client: mongo:6.0.4   # mongosh 1.8.0
+          - mongodb: '8.0'
+            shell: mongosh 2.x
+            client: mongo:8.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run test/concern.js
+        run: |
+          if [ "${{ matrix.shell }}" = mongo ]; then export MONGO_SHELL=mongo; fi
+          test/concern.sh mongo:${{ matrix.mongodb }} ${{ matrix.client }}
+
   # One stable check name for branch protection, so the jobs above can change
   # without editing the required checks.
   compat:
     name: compat
     if: always()
-    needs: [test, format, legacy, sharded, auth, flow]
+    needs: [test, format, legacy, sharded, auth, flow, isync, concern]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs passed
@@ -187,3 +239,5 @@ jobs:
           test "${{ needs.sharded.result }}" = success
           test "${{ needs.auth.result }}" = success
           test "${{ needs.flow.result }}" = success
+          test "${{ needs.isync.result }}" = success
+          test "${{ needs.concern.result }}" = success

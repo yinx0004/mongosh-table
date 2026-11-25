@@ -69,8 +69,8 @@ msh() {
 vars="var MT_PRIMARY = '$name-p:27017'; var MT_NEW = '$name-s:27017'"
 
 msh s --eval "var MT_PHASE = 'clone'; $vars" test/isync.js
-# the primary learns the new member's state from heartbeats
-wait_true p 'rs.status().members.some(function (m) { return m.state === 5; })'
+# the primary learns the new member's state and sync source from heartbeats (syncingTo before 4.4)
+wait_true p 'rs.status().members.some(function (m) { return m.state === 5 && !!(m.syncSourceHost || m.syncingTo); })'
 msh p --eval "var MT_PHASE = 'primary'; $vars" test/isync.js
 
 srv s --eval '

@@ -36,8 +36,7 @@ if (MT_PHASE === 'primary') {
   run('isync: on the primary', function () {
     var out = capOut(function () { mt.initialSync({ showCmd: false }); });
     print(/state: PRIMARY\n/.test(out) && /这个节点没有在初始同步/.test(out) ? 'not syncing' : out);
-    // 4.2 之前主节点的 rs.status() 里看不到别的成员的同步源
-    print(re('注意：正在初始同步的成员：' + MT_NEW + (v42 ? ' ← ' + MT_PRIMARY : '') + '；进度要连到它上面看').test(out) ? 'points to the new member' : out);
+    print(re('注意：正在初始同步的成员：' + MT_NEW + ' ← ' + MT_PRIMARY + '；进度要连到它上面看').test(out) ? 'points to the new member' : out);
   }, ['not syncing', 'points to the new member']);
 }
 
