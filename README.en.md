@@ -312,6 +312,9 @@ Every option can be passed to a single call (`t(x, {maxCol: 80})`) or set as the
 | `missingText` | follows `lang` | What a missing field shows as: `(missing)` / `(无字段)` by default |
 | `lang` | auto | `'en'` / `'zh'`: language of messages and help |
 | `showCmd` | `true` | DBA commands print the native command first |
+| `maxTimeMS` | `10000` | time limit in ms for each heavier read (per-collection stats, sampling, `$currentOp`); `0` = none; see "Production safeguards" in the next section |
+| `maxColls` | `1000` | how many collections the per-collection commands (`mt.cache()`, `mt.unusedIdx()`...) look at; `0` = all |
+| `budgetMs` | `30000` | how long the per-collection commands may take, in ms; `0` = no limit |
 | `checkThresholds` | `null` | `mt.check()` thresholds, e.g. `{lag: [30, 300]}`, merged by key; see [mt.check()](#mtcheck-health-check) |
 
 DBA commands have their own options too (`secs`, `ns`, `sort`, `interval`...); see each command in the next section.
@@ -325,7 +328,7 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 
 ```
 > mt.config()
-{"limit":50,"maxCol":40,"tz":"UTC","nullText":"NULL","missingText":null,"color":null,"width":200,"depth":null,"showCmd":true,"checkThresholds":null,"lang":"en"}
+{"limit":50,"maxCol":40,"tz":"UTC","nullText":"NULL","missingText":null,"color":null,"width":200,"depth":null,"showCmd":true,"maxTimeMS":10000,"maxColls":1000,"budgetMs":30000,"checkThresholds":null,"lang":"en"}
 ```
 
 - Settings last for the current shell session only; running `load()` again also resets them.
@@ -421,7 +424,7 @@ Usage:
 Options:
   secs  only operations running at least this many seconds
   ns    database or database.collection
-  all   true: use $all, including idle connections and internal threads
+  all   true: like currentOp's $all, including idle connections and internal threads
   sort  'desc' / 'asc' / 'opid' / a sort document on column names
 
 Output:
@@ -435,18 +438,24 @@ Output:
   command       the command, without driver fields
 
 Notes:
-  - Runs db.adminCommand({currentOp: 1, active: true})
+  - Runs the $currentOp aggregation (active operations only), which returns batches; not the currentOp command, whose result is one document that fails past 16 MB when there are many connections or sessions
   - Hidden by default: idle connections, internal threads, drivers' awaitable hello and mt.ps() itself
 
 All take t() options (cols, exclude, limit, vertical, table, tz...); mt.config({showCmd: false}) hides the native command
-See also: mt.locks(), mt.txns(), mt.conns()
+See also: mt.locks(), mt.txns(), mt.conns(), mt.cursors()
 ```
 
 All of them:
 
 - **Print the native command first**: the `-- ...` line (dimmed in a terminal) is the MongoDB command actually run, so you can copy or check it; turn it off with `mt.config({showCmd: false})`.
 - **Take the same options as `t()`**: `cols`, `exclude`, `limit`, `vertical`, `table` and `tz` all work, e.g. `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`, `mt.idx('orders', {vertical: true})`.
-- **Are read-only**: they never change settings; `mt.slow()` does not turn the profiler on either.
+- **Are read-only**: they never change settings; `mt.slow()` does not turn the profiler on either. `mt.explain()` / `mt.explainLog()` only fetch the plan unless you pass `{analyze: true}`, which runs the query once.
+- **Production safeguards**:
+  - Heavier reads (per-collection `$collStats` / `$indexStats`, `mt.desc()` sampling, `$currentOp`) carry `maxTimeMS`, 10 seconds by default, so a locked or slow collection does not leave them hanging.
+  - The per-collection commands (`mt.colls()`, `mt.frag()`, `mt.cache()`, `mt.ttl()`, `mt.unusedIdx()`, `mt.dupIdx()`, `mt.latency()`, `mt.check()`) look at no more than 1000 collections or 30 seconds by default (`maxColls`, `budgetMs`; change them with `mt.config()` or per call, `0` = no limit), and say "only the first N/M collections" under the table when they stop early.
+  - They also stop when open files plus connections reach 80% of the limit (`maxOpenFiles`), which cannot be turned off: `$collStats` makes WiredTiger open collection and index files that are normally closed. Measured with 3000 collections, `mt.cache()` took mongod from 48 to 9051 open files; with many more collections that can exceed the limit (Too many open files).
+  - Commands that list running operations (`mt.ps()`, `mt.conns()`, `mt.locks()`, `mt.txns()`, `mt.builds()`...) use the `$currentOp` aggregation, which returns batches: the `currentOp` command puts everything in one document and fails past 16 MB when there are many connections or sessions.
+  - `mt.desc()` does not run a `$sample` that would scan a whole view or time series collection; see [mt.desc()](#mtdesc-field-structure-of-a-collection).
 - **Tell logical from disk sizes**: columns with `logical` in the name are the uncompressed data size (BSON), `disk` is what it actually takes on disk (compressed by WiredTiger), and `cached` is what it takes in the in-memory cache (uncompressed). The three can differ several times over for the same data.
 - **Need monitoring privileges**, such as the `clusterMonitor` role. Without them, or when `mt.repl()` / `mt.oplog()` runs on a standalone server, or `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` on a mongos, they print a one-line explanation instead of throwing.
 - **Work in both the legacy mongo shell and mongosh**, tested in CI on a replica set for every version. Through a mongos, CI tests `mt.shards()`, `mt.balancer()` and `mt.pool()` (including a shard that cannot be reached), plus `mt.status()`, `mt.vars()`, `mt.mem()` and `mt.cursors()` (they work) and `mt.check()`, `mt.engine()`, `mt.qstats()`, `mt.profile()`, `mt.rsconf()` (they print a one-line explanation); the other commands are not tested through a mongos yet.
@@ -489,7 +498,7 @@ An instance with problems: fsyncLock left on (writes queue behind it), the TTL t
 
 ```
 > mt.check()
--- serverStatus, currentOp, replSetGetStatus, getLog, getParameter; per collection (maxColls 2000, budgetMs 60000): getIndexes, $collStats, $indexStats
+-- serverStatus, currentOp, replSetGetStatus, getLog, getParameter; per collection (maxColls 1000, budgetMs 30000): getIndexes, $collStats, $indexStats
    host: db1
 version: 7.0.48
    role: PRIMARY (rs0)
@@ -527,7 +536,7 @@ CRIT 2, WARN 5, OK 13, INFO 1 (per-collection checks: 2/2 collections)
 - SKIP only means not applicable: replica set checks on a standalone, the two cache checks when the storage engine is not WiredTiger. It must run on a mongod; on a mongos it prints a one-line explanation.
 - `{issues: true}` shows WARN, CRIT and UNKNOWN.
 - The four per-collection checks (TTL overdue, redundant indexes, unused indexes, reusable space) share one pass: one `listCollections` per database, one `getIndexes` and one `$collStats` per collection, `$indexStats` only after 7 days of uptime, plus one query for the oldest document per TTL index.
-- By default the pass stops after 2000 collections (`maxColls`) or 60 seconds (`budgetMs`), going through databases and collections in name order. Collections it did not reach are not treated as fine: if these checks found nothing they are UNKNOWN with "only the first 2000/15000 collections checked (maxColls 2000)"; if they found problems they are WARN with that note added. The last line says how many collections were checked.
+- By default the pass stops after 1000 collections (`maxColls`) or 30 seconds (`budgetMs`), which `mt.config()` can change; it also stops when open files plus connections reach 80% of the limit (that stop cannot be turned off). It goes through databases and collections in name order. Collections it did not reach are not treated as fine: if these checks found nothing they are UNKNOWN with "only the first 1000/15000 collections checked (maxColls 1000)"; if they found problems they are WARN with that note added. The last line says how many collections were checked.
 - With many collections, start with `{quick: true}` and then look at one database at a time with `mt.dupIdx('db')`, `mt.unusedIdx('db')`, `mt.ttl('db')`, `mt.frag('db')`.
 - The thresholds in the table are defaults, common rules of thumb that do not fit every workload (long operations on an analytics database, lag on a replica in another data center); a WARN is not necessarily a problem, so look closer with the suggested command.
 - Thresholds can be changed: `mt.check({thresholds: {...}})` for one run; `mt.config({checkThresholds: {...}})` for the session, until the next `load()`. Keys are in the "Threshold key" column; keys with a CRIT level take `[WARN, CRIT]`, WARN-only keys take one number. For `oplog` lower is worse, so WARN must be >= CRIT; for the others WARN cannot exceed CRIT; percentages cannot exceed 100. `mt.help('check')` lists every key, its default and any value changed in this session.
@@ -536,13 +545,13 @@ CRIT 2, WARN 5, OK 13, INFO 1 (per-collection checks: 2/2 collections)
 
 ### mt.ps(): running operations
 
-Like `SHOW PROCESSLIST`. It runs `db.adminCommand({currentOp: 1, active: true})`.
+Like `SHOW PROCESSLIST`. It runs the `$currentOp` aggregation (active operations only), which returns batches, so the 16 MB limit does not apply however many connections there are.
 
 | Option | Meaning |
 |---|---|
 | `secs` | Only operations running for at least this many seconds, e.g. `{secs: 5}` |
 | `ns` | Only one database or collection: `'shop'` matches every collection in `shop`, `'shop.orders'` only that one |
-| `all` | `true` uses `$all: true` instead, including idle connections and internal threads |
+| `all` | `true` works like `currentOp`'s `$all: true`, including idle connections and internal threads |
 | `sort` | `'desc'` (default, longest running first), `'asc'` (shortest first), `'opid'`, or a sort document on the column names such as `{ns: 1, secs: -1}`; ties fall back to longest running first |
 
 | Column | Meaning |
@@ -561,7 +570,7 @@ Hidden by default: idle connections, internal threads with no client, drivers' a
 
 ```
 > mt.ps()
--- db.adminCommand({currentOp: 1, active: true})
+-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true}}, {$match: {active: true}}])
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
 | opid | secs | op      | ns             | client              | app            | lock | plan                                | command                                  |
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
@@ -574,7 +583,7 @@ Hidden by default: idle connections, internal threads with no client, drivers' a
 
 ```
 > mt.ps({all: true, cols: 'opid,secs,op,ns,client,app', limit: 5})
--- db.adminCommand({currentOp: 1, $all: true})
+-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true, idleConnections: true}}])
 +------+------+---------+-------------+---------------------+----------------+
 | opid | secs | op      | ns          | client              | app            |
 +------+------+---------+-------------+---------------------+----------------+
@@ -1394,7 +1403,7 @@ This is what it looks like after `db.fsyncLock()`: `fsyncLockWorker` holds the g
 
 ```
 > mt.locks()
--- db.adminCommand({lockInfo: 1}); db.adminCommand({currentOp: 1, $all: true})
+-- db.adminCommand({lockInfo: 1}); db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true, idleConnections: true}}])
 +----------+------+-------+------+------+---------------------+------------------+--------+----------+------------------------------------------+
 | resource | mode | state | opid | secs | client              | desc             | op     | ns       | command                                  |
 +----------+------+-------+------+------+---------------------+------------------+--------+----------+------------------------------------------+
@@ -1420,7 +1429,7 @@ mt.txns({secs: 10})       // only those open for 10 seconds or more
 mt.txns({sort: 'asc'})    // shortest first; or a sort document such as {client: 1}
 ```
 
-It runs `db.adminCommand({currentOp: 1, $all: true})` and keeps entries with a `transaction` field; transactions idle between statements are included (`type: idleSession`).
+It runs the `$currentOp` aggregation (with idle connections and sessions) and keeps entries with a `transaction` field; transactions idle between statements are included (`type: idleSession`).
 
 | Column | Meaning |
 |---|---|
@@ -1435,7 +1444,7 @@ It runs `db.adminCommand({currentOp: 1, $all: true})` and keeps entries with a `
 
 ```
 > mt.txns()
--- db.adminCommand({currentOp: 1, $all: true}) → transaction
+-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true, idleConnections: true}}]) → transaction
 +--------------------------------------+-----------+-------+----------+------------+----------+-------------------------+-----------+------+---------------------+----------------+----+
 | lsid                                 | txnNumber | state | openSecs | activeSecs | idleSecs | start                   | expiresIn | opid | client              | app            | ns |
 +--------------------------------------+-----------+-------+----------+------------+----------+-------------------------+-----------+------+---------------------+----------------+----+
@@ -1731,6 +1740,8 @@ mt.shards()          // balancer, shards, every sharded collection
 mt.shards('shop')    // one database's sharded collections; a db object works too
 ```
 
+With a database it reads only the chunks of that database's collections (using the `config.chunks` indexes), and the shard table counts only those. Without one it reads every chunk, so pass a database on clusters with many chunks.
+
 | Field | Meaning |
 |---|---|
 | header | `balancer` (mode, noting a round in progress), `activeWindow` (only if set), `chunkSizeMB` (only if set), number of shards and sharded collections |
@@ -1788,6 +1799,8 @@ mt.balancer()                      // migrations in the last 24 hours, newest fi
 mt.balancer('shop.orders')         // one collection; a database name gives all its collections
 mt.balancer({hours: 168, n: 0})    // every migration in the last 7 days
 ```
+
+It reads at most the latest 20,000 records and says so when there are more.
 
 | Field | Meaning |
 |---|---|
@@ -1925,7 +1938,9 @@ indexes: _id_, status_1_createdAt_-1, customer.name_1
 13 rows in set
 ```
 
-- It samples with `$sample`, so rare fields may be missed; raise `sample`. When the sample exceeds 5% of the collection, `$sample` scans and sorts the whole collection, so keep it modest on big collections.
+- Plain collections are sampled with `$sample`, which reads random positions instead of scanning; rare fields may be missed, so raise `sample`.
+- When the sample is over 5% of a collection with more than 100,000 documents, `$sample` scans and sorts the whole collection, so it does not run unless you pass `{force: true}`.
+- On views and time series collections `$sample` scans everything (measured on 7.0: sampling 1000 from a view read all 50,000 underlying documents, and a time series collection read all 833,000 buckets), so the first `sample` documents are read instead, with a note that they are not random. When a view's pipeline (or a view it is built on) has `$group`, `$sort` or another stage that needs all its input, even the first few documents need the whole pipeline, so it does not run and suggests `{force: true}` or the underlying collection.
 - Fields are ordered by their average position in the documents, children right after their parent.
 - `number` covers int and double (the shell cannot tell them apart); `long` and `decimal` are listed separately. A field with several types (like `amount` above, null in 13% of documents) is often a hint of a data problem.
 
@@ -2088,7 +2103,7 @@ Like watching the progress of MySQL online DDL (`ALTER TABLE ... ADD INDEX`): bu
 mt.builds()
 ```
 
-It runs `db.adminCommand({currentOp: 1, $all: true})` and picks the operations that are building indexes.
+It runs the `$currentOp` aggregation (with idle connections and internal threads) and picks the operations that are building indexes.
 
 | Column | Meaning |
 |---|---|
@@ -2100,7 +2115,7 @@ It runs `db.adminCommand({currentOp: 1, $all: true})` and picks the operations t
 
 ```
 > mt.builds()
--- db.adminCommand({currentOp: 1, $all: true}) → msg /Index Build/ or command.createIndexes
+-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true, idleConnections: true}}]) → msg /Index Build/ or command.createIndexes
 +-------------+------------------------------+-----------------------------------+------------------------------------------+---------+---------+-------+------+------+---------------------+
 | ns          | index                        | key                               | phase                                    | done    | total   | pct   | secs | opid | client              |
 +-------------+------------------------------+-----------------------------------+------------------------------------------+---------+---------+-------+------+------+---------------------+
@@ -2119,11 +2134,11 @@ It runs `db.adminCommand({currentOp: 1, $all: true})` and picks the operations t
 Counts connections per client IP, so you can see which machine or application holds the most.
 
 - The lines on top come from `db.serverStatus().connections`: `current` open connections, `available` how many more can be opened, `totalCreated` how many were opened since startup.
-- The table comes from `currentOp` with `$all: true`: `conns` connections, `active` how many of them are running an operation, `apps` their appNames.
+- The table comes from the `$currentOp` aggregation with idle connections (returned in batches, so the 16 MB limit does not apply however many connections there are): `conns` connections, `active` how many of them are running an operation, `apps` their appNames.
 
 ```
 > mt.conns()
--- db.serverStatus().connections; db.adminCommand({currentOp: 1, $all: true})
+-- db.serverStatus().connections; db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true, idleConnections: true}}])
      current: 17
    available: 8175
 totalCreated: 66
