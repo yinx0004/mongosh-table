@@ -2328,6 +2328,10 @@
     if (rounds.length) head.rounds = rounds.length + ' (chunksMoved ' + moved + (errs ? ', errors ' + errs : '') + ')';
     // 迁移：按时间顺序配对，start 给出开始时间，commit 给出文档数和字节数，from（源分片）给出结果
     var evs = find('changelog', { what: { $in: ['moveChunk.start', 'moveChunk.commit', 'moveChunk.from', 'moveChunk.error'] }, time: { $gte: since } }, { time: -1 }).reverse();
+    // 同一毫秒的几条按迁移的步骤排（3.6 上 commit 和 from 常常时间相同）：倒序取再倒回来以后，时间相同的先后会反过来，
+    // from 跑到 commit 前面就配不上文档数和字节数
+    var STEP = { 'moveChunk.start': 0, 'moveChunk.commit': 1, 'moveChunk.from': 2, 'moveChunk.error': 2 };
+    evs.sort(function (p1, p2) { return (p1.time - p2.time) || (STEP[p1.what] - STEP[p2.what]); });
     var key = function (e) { var d = e.details || {}; return e.ns + '|' + valText(d.min, true, o) + '|' + d.from + '|' + d.to; };
     var starts = {}, commits = {}, rows = [], ok = 0, bad = 0;
     for (var j = 0; j < evs.length; j++) {
