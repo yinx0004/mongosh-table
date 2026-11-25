@@ -68,6 +68,16 @@ run('mt.balancer aborted', function () {
   print(ab === (vmaj >= 7) ? 'aborted row right' : out);
   print(/注意：1 次迁移没有成功/.test(out) === ab ? 'aborted note right' : out);
 }, ['aborted row right', 'aborted note right']);
+// 同一毫秒的 commit 和 from（3.6 上常见）：不管服务端按什么顺序返回，都要配上文档数和字节数。
+// 直接写几条 changelog：和实际一样按 start、commit、from 的顺序插入，时间都一样
+run('mt.balancer same time', function () {
+  var cl = db.getSiblingDB('config').changelog, t = new Date(), dt = { min: { k: 1 }, max: { k: 2 }, from: 'sh1', to: 'sh2' };
+  cl.insertOne({ _id: 'mttie-start', time: t, what: 'moveChunk.start', ns: 'mttie.c', details: dt });
+  cl.insertOne({ _id: 'mttie-commit', time: t, what: 'moveChunk.commit', ns: 'mttie.c', details: Object.assign({ counts: { cloned: 7, clonedBytes: 700 } }, dt) });
+  cl.insertOne({ _id: 'mttie-from', time: t, what: 'moveChunk.from', ns: 'mttie.c', details: Object.assign({ note: 'success' }, dt) });
+  var out = capOut(function () { mt.balancer('mttie.c', { showCmd: false }); });   // changelog 是固定集合，删不掉；只有这里按 ns 看它
+  print(/\| mttie\.c \| sh1 +\| sh2 \| 1 → 2 +\| +7 \| 700 B \| +0 \| success \|/.test(out) ? 'paired' : out);
+}, ['paired']);
 run('mongos: mt.balancer help', function () { mt.help('balancer'); }, ['mt.balancer() — ', 'MySQL: sh.status() migration results']);
 
 // 经 mongos 时其他命令：能用的照常输出，只能连 mongod 的打印一行说明
