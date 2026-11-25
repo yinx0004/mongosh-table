@@ -158,7 +158,9 @@ pdb.c.find({ a: 1 }).toArray();
 pdb.c.find({ $where: 'sleep(50) || true' }).toArray();   // 更慢、更晚的一条
 run('mt.slow', function () { mt.slow('mtprof', { table: true }); }, ['-- db.getSiblingDB(\'mtprof\').system.profile.find({}).sort({ts: -1})', 'level: 1', 'slowms: 0', '| mtprof.c ', '| ts ']);
 run('mt.slow ns filter', function () { mt.slow(pdb, { ns: 'c', cols: 'ns,op,docsExamined,command', showCmd: false }); }, ['| mtprof.c | query ', '{find: c, filter: {a: 1}']);
-run('mt.slow sort desc', function () { mt.slow('mtprof', { limit: 1, cols: 'command' }); }, ['$where', '(共 2 行，只显示前 1 行)']);
+run('mt.slow sort desc', function () { mt.slow('mtprof', { limit: 1, cols: 'command' }); }, ['$where', '只列了前 1 条，还有更多：{limit: 0} 全部列出，{count: true} 算出总数']);
+// 总数只在 {count: true} 时算（平时多取一条看还有没有更多）
+run('mt.slow count', function () { mt.slow('mtprof', { limit: 1, cols: 'command', count: true, showCmd: false }); }, ['(共 2 行，只显示前 1 行)']);
 run('mt.slow sort asc', function () { mt.slow('mtprof', { sort: 'asc', limit: 1, cols: 'command' }); }, ['.sort({ts: 1})', '{find: c, filter: {a: 1}']);
 run('mt.slow sort ms', function () { mt.slow('mtprof', { sort: 'ms', limit: 1, cols: 'ms,command' }); }, ['.sort({millis: -1, ts: -1})', '$where']);
 run('mt.slow sort doc', function () { mt.slow('mtprof', { sort: { millis: 1 }, limit: 1, cols: 'command' }); }, ['.sort({millis: 1})', '{find: c, filter: {a: 1}']);
@@ -172,6 +174,10 @@ run('mt.logQuery slow row', function () { mt.slow('mtprof', { sort: 'asc', limit
   '// 慢日志：', 'COLLSCAN', "db.getSiblingDB('mtprof').c.find({a: 1})"
 ]);
 run('mt.explainLog no row', function () { mt.explainLog(99); }, ['mongotab: 没有第 99 行']);
+// explain 时去掉的字段列出来（$db 不算，它决定在哪个库上执行）
+run('mt.explainLog dropped', function () {
+  mt.explainLog({ find: 'orders', filter: { qty: 2 }, lsid: { id: 1 }, readConcern: { level: 'majority' }, $db: 'mtest', $readPreference: { mode: 'primary' } }, { showCmd: false });
+}, ['explain 时去掉了 lsid、readConcern、$readPreference：会话、事务、读写关注和分片路由用的字段']);
 // mt.log 的 Slow query 行（4.4 起是 JSON，带命令；之前是纯文本）。slowms 现在是 0，所有操作都会记日志
 var V44 = (function () { var v = db.version().split('.').map(Number); return v[0] > 4 || (v[0] === 4 && v[1] >= 4); })();
 tdb.orders.find({ 'customer.name': 'Zed' }).toArray();
@@ -242,7 +248,7 @@ run('mt.cache', function () { mt.cache(); }, ['-- db.serverStatus().wiredTiger.c
 run('mt.cache db', function () { mt.cache('mtest', { cols: 'ns,cached' }); }, ['| mtest.orders ']);
 // 逐个集合查的命令：maxColls / budgetMs 到了就停；打开的文件和连接到了上限的 80% 也停（_maxOpenFiles 只给测试用，把上限调低）
 run('mt.cache maxColls', function () { mt.cache({ maxColls: 1, showCmd: false }); }, ['只查了前 1/', ' 个集合（maxColls 1）：可以调大 maxColls / budgetMs']);
-run('mt.colls open files', function () { mt.colls('mtest', { _maxOpenFiles: 10, showCmd: false }); }, ['只查了前 0/', '（打开的文件和连接 ', ' 已到上限 10 的 80%）', 'Too many open files']);
+run('mt.colls open files', function () { mt.colls('mtest', { _maxOpenFiles: 10, showCmd: false }); }, ['只查了前 0/', '（打开的文件和连接 ', ' 已接近上限 10 的 80%）', 'Too many open files']);
 run('mt.latency maxColls', function () { mt.latency({ interval: 0, maxColls: 1, showCmd: false }); }, ['只查了前 1/']);
 run('mt.config maxColls', function () {
   mt.config({ maxColls: 1 });
@@ -428,9 +434,19 @@ run('mt.logQuery runs', function () {
   }
   print('rows: ' + r.length + ' ' + (r[0] && r[0].orderNo));
 }, ['rows: 1 SO2']);
+// 写操作默认给只看计划的 explain（执行它不改数据），原语句注释掉；{raw: true} 才给可以直接执行的
 run('mt.logQuery update', function () {
-  mt.logQuery('2026 I WRITE    [conn5] update mtest.orders command: { q: { orderNo: "SO2" }, u: { $set: { x: 1 } }, multi: true, upsert: false } planSummary: IXSCAN 3ms');
-}, ['// 注意：这是写操作，执行会修改数据', "db.getSiblingDB('mtest').orders.updateMany({orderNo: 'SO2'}, {$set: {x: 1}})"]);
+  var line = '2026 I WRITE    [conn5] update mtest.orders command: { q: { orderNo: "SO2" }, u: { $set: { x: 1 } }, multi: true, upsert: false } planSummary: IXSCAN 3ms';
+  var out = capOut(function () { mt.logQuery(line); });
+  print(out);
+  var ex = out.split('\n').filter(function (l) { return /^db\.getSiblingDB\('mtest'\)\.runCommand\(\{explain: /.test(l); })[0];
+  var before = tdb.orders.find({ orderNo: 'SO2', x: 1 }).count();
+  var r = ex ? eval(ex) : null;   // eslint-disable-line no-eval
+  print(r && r.ok === 1 && r.queryPlanner && tdb.orders.find({ orderNo: 'SO2', x: 1 }).count() === before ? 'explain ran, nothing changed' : 'explain line: ' + ex + ' ' + JSON.stringify(r));
+  mt.logQuery(line, { raw: true });
+}, ['// 注意：原语句是写操作，执行会修改数据。下面是只看执行计划、不执行的 explain', "verbosity: 'queryPlanner'})",
+  "// db.getSiblingDB('mtest').orders.updateMany({orderNo: 'SO2'}, {$set: {x: 1}})", 'explain ran, nothing changed',
+  '// 注意：这是写操作，执行会修改数据', "\ndb.getSiblingDB('mtest').orders.updateMany({orderNo: 'SO2'}, {$set: {x: 1}})"]);
 run('mt.logQuery others', function () {
   mt.logQuery({ aggregate: 'orders', pipeline: [{ $match: { qty: 2 } }, { $group: { _id: '$qty', n: { $sum: 1 } } }], cursor: {}, allowDiskUse: true, $db: 'mtest' });
   mt.logQuery({ count: 'orders', query: { qty: 2 }, $db: 'mtest' });
@@ -449,7 +465,8 @@ run('mt.idx', function () { mt.idx('orders'.length ? 'mtest.orders' : ''); }, ['
 run('mt.idx coll object', function () { mt.idx(c, 'name,key,options'); }, ['| customer.name_1_createdAt_-1 | {customer.name: 1, createdAt: -1} |']);
 run('mt.idx missing', function () { mt.idx('nope_no_such'); }, ['mongotab: 集合 test.nope_no_such 不存在']);
 run('mt.conns', function () { mt.conns(); }, ['current: ', '| client ', '| conns |']);
-run('mt.oplog', function () { mt.oplog(); }, ['-- rs.printReplicationInfo()', 'maxLogical: ', 'usedLogical: ', 'disk: ', 'firstEvent: ', 'window: ']);
+run('mt.oplog', function () { mt.oplog(); }, ['-- rs.printReplicationInfo()', 'maxLogical: ', 'usedLogical: ', 'fill: ', 'disk: ', 'firstEvent: ', 'window: ',
+  'oplog 还没写满（用了 ', '不到 1 小时，估不出写满后能覆盖多久']);
 // Some servers (6.0.28 on GitHub's x86 runners) return hostInfo without `extra`, so maxOpenFiles is only expected when it is there.
 var hostExtra = db.adminCommand({ hostInfo: 1 }).extra || {};
 run('mt.host', function () { mt.host(); }, ['-- db.hostInfo()', 'host.hostname: ', 'host.platform: 容器（', 'mongod 是 1 号进程', 'host.cpuCores: ', 'host.memory: ', 'os.type: Linux',
@@ -691,6 +708,13 @@ run('mt.check budgetMs', function () {
   var out = capOut(function () { mt.check({ budgetMs: 1, table: true }); });
   print(/只查了前 \d+\/\d+ 个集合（budgetMs 1）/.test(out) ? 'budget hit' : out);
 }, ['budget hit']);
+// 缓存、票据、等锁队列、连接数有 CRIT 时，默认跳过逐个集合的检查；{deep: true} 照样做。用阈值把连接数调成 CRIT
+run('mt.check under pressure', function () {
+  var out = capOut(function () { mt.check({ thresholds: { conns: [0, 0] }, table: true }); });
+  print(/（服务器压力大：连接数 是 CRIT，跳过了逐个集合的检查；mt\.check\(\{deep: true\}\) 照样做）/.test(out) && !/冗余索引/.test(out) ? 'skipped' : out);
+  out = capOut(function () { mt.check({ thresholds: { conns: [0, 0] }, deep: true, table: true }); });
+  print(/（逐个集合的检查：\d+\/\d+ 个集合）/.test(out) && /冗余索引/.test(out) ? 'deep runs it' : out);
+}, ['skipped', 'deep runs it']);
 run('mt.check no limit', function () {
   var out = capOut(function () { mt.check({ maxColls: 0, budgetMs: 0, table: true }); });
   var m = /（逐个集合的检查：(\d+)\/(\d+) 个集合）/.exec(out);
@@ -700,13 +724,13 @@ run('mt.check no limit', function () {
 run('mt.check thresholds', function () {
   var dflt = capOut(function () { mt.check({ quick: true, table: true }); });
   var out = capOut(function () { mt.check({ quick: true, table: true, thresholds: { queue: [0, 0], oplog: [0, 0], longOps: [7200, 7200], txns: 90 } }); });
-  // 测试实例刚建，oplog 窗口默认是 CRIT，阈值改成 0 就 OK；等锁队列默认 OK，阈值改成 0 就 CRIT
-  print(/oplog 窗口\s*\|\s*CRIT/.test(dflt) && /oplog 窗口\s*\|\s*OK/.test(out) ? 'oplog follows' : dflt + out);
+  // 测试实例刚建，oplog 还没写满、时间太短估不出，是 INFO（不看阈值）；等锁队列默认 OK，阈值改成 0 就 CRIT
+  print(/oplog 窗口\s*\|\s*INFO\s*\|[^|\n]*还没写满（用了 [\d.]+%），时间太短估不出/.test(dflt) && /oplog 窗口\s*\|\s*INFO/.test(out) ? 'oplog not full' : dflt + out);
   print(/等锁队列\s*\|\s*OK/.test(dflt) && /等锁队列\s*\|\s*CRIT/.test(out) ? 'queue follows' : dflt + out);
   print(/没有超过 60 秒的/.test(dflt) && /没有超过 2 小时的/.test(out) && /开了 90 秒以上/.test(out) ? 'texts follow' : dflt + out);
   print(/改过的阈值/.test(dflt) ? 'default lists changes' : 'default lists none');
   print(out.split('\n').filter(function (l) { return /^改过的阈值/.test(l); }).join('\n'));
-}, ['oplog follows', 'queue follows', 'texts follow', 'default lists none',
+}, ['oplog not full', 'queue follows', 'texts follow', 'default lists none',
   '改过的阈值：oplog 0 / 0 小时，queue 0 / 0 个，longOps 7200 / 7200 秒，txns 90 秒']);
 run('mt.check bad thresholds', function () {
   var out = capOut(function () {
