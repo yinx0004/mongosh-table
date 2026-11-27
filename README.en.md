@@ -359,7 +359,7 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 | mt.locks({all})              | sys.innodb_lock_waits                    | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                                             |
 | mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX            | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                                  |
 | mt.top({interval, ns})       | sys.schema_table_statistics              | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                                          |
-| mt.latency('db', {interval}) | sys.statement_analysis                   | Average latency (ms) of reads / writes / commands, server-wide and per collection; interval = seconds to sample, 0 = since startup; all user databases by default                                                                                     |
+| mt.latency('db', {interval}) | sys.statement_analysis                   | Average latency (ms) of reads / writes / commands, server-wide and per collection; interval = seconds to sample, 0 = since startup; quick = server-wide only; all user databases by default                                                           |
 | mt.builds()                  | ALTER TABLE progress                     | Index builds in progress: collection, index, phase, progress and how long they have run                                                                                                                                                               |
 +------------------------------+------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
@@ -1353,6 +1353,7 @@ mt.latency()                // two samples 1 second apart: average latency in th
 mt.latency('shop')          // one database; every user database by default (admin, local, config skipped)
 mt.latency({interval: 5})   // 5 seconds apart
 mt.latency({interval: 0})   // one sample: averages since startup
+mt.latency({quick: true})   // server-wide only, no per-collection probes: for many collections or during an incident
 ```
 
 The lines on top are server-wide (`serverStatus().opLatencies`): average latency `avgMs` of `reads` / `writes` / `commands` / `transactions`, and operations per second `ops/s` (total `ops` for since-startup). Below, per collection (`latencyStats` from `$collStats`):
@@ -1386,7 +1387,7 @@ transactions.ops/s: 0
 - Latency is mongod's processing time, without the network round trip.
 - Collections with no operations in the interval are hidden.
 - MongoDB also counts the `serverStatus` and `$collStats` calls `mt.latency()` makes; when sampling it first measures what those probes cost and subtracts them, so a quiet instance shows 0 rather than its own probes.
-- It runs `$collStats` a few times per collection, which is slow with many collections; pass a database to narrow it.
+- It runs `$collStats` a few times per collection, which is slow with many collections; pass a database to narrow it, or use `{quick: true}` for server-wide figures only (two `serverStatus` calls).
 - Collections are probed one at a time, so each collection's two probes are "the rest of the first pass + interval + the start of the second pass" apart, longer than `interval` with many collections: when that is over `interval` by more than 0.5 seconds (or 20%), a note under the table gives the actual range. The counts in the table cover that time; the averages are not affected.
 
 ### mt.locks(): lock waits
@@ -1622,7 +1623,7 @@ Note: step-downs of this member as primary on seeing a higher term: 1. Another m
 
 - Reads `replSetGetStatus`, `replSetGetConfig`, `serverStatus().electionMetrics` and `getLog`. The last election, the vote and the counts by cause need late 4.0 versions or later; 3.6 shows the header and the primary changes only.
 - The counts by cause only cover elections this member called, and reset on restart. `electionTimeout` also includes the election right after the set was created or fully restarted (the 1 for `db1` above is that one), so compare with the primary changes and the logs from then.
-- The primary changes are off by default. When on, only the last `hours` hours (24 by default) of the oplog are scanned: `find` with a `ts` lower bound, oldest first, so the server jumps straight to the start (automatically from 4.4; 3.6 to 4.2 with `oplogReplay`). Measured: with 200,000 oplog entries and a bound at the newest 20,000, only those 20,000 were scanned. `hours: 0` scans the whole oplog (no usable index); for a very large oplog run it on a secondary, which has the same oplog. Both use `maxTimeMS` (10 seconds by default), and on timeout nothing is listed; when the range asked for is longer than the oplog window, a note says when the oplog starts.
+- The primary changes are off by default. When on, only the last `hours` hours (24 by default) of the oplog are scanned: `find` with a `ts` lower bound, oldest first, so the server jumps straight to the start (automatically from 4.4; 3.6 to 4.2 with `oplogReplay`). Measured: with 200,000 oplog entries and a bound at the newest 20,000, only those 20,000 were scanned. How many entries are examined grows with the write volume in that range, so use fewer `hours` on a busy primary. `hours: 0` scans the whole oplog (no usable index). Running it on a secondary (same oplog) keeps the load off the primary, but it still reads that secondary's disk and uses its cache, which can make it fall behind a little. Both use `maxTimeMS` (10 seconds by default), and on timeout nothing is listed; when the range asked for is longer than the oplog window, a note says when the oplog starts.
 - Only successful elections are here: failed elections, dry runs, step-downs with no new primary and config changes are not in the oplog (this member's failed elections show in `called` / `successful`), nor is an entry that was rolled back, which is why this is called primary changes and not election history. `term` is the current term; each real election round adds 1 (failed ones too, dry runs not), so it is not a count of primary changes.
 - The oplog has only the term and time, not the member: the current primary and the predecessor the primary remembers are filled in directly, others by matching the term in the log in memory (only the last 1024 lines; before 4.4 voters do not log vote requests), and left blank when nothing matches, like term 1 above.
 - `source` says what each row is based on, keeping inference apart from direct evidence: `status` = the current primary; `priorPrimary` = the predecessor the primary remembers (`electionCandidateMetrics`); `log` = "Election succeeded" in the winner's own log; `vote` = the candidate this member voted yes for, which is an inference, since with more members another candidate may have won that term with a majority. The member index in a vote request refers to the config at that time, so it is not used when the config version has changed since (members added or removed), to avoid naming the wrong member.
@@ -1683,7 +1684,7 @@ Note: 80 writes used w: 0: they wait for no acknowledgement, so the application 
 ```
 
 - Write concern counts need 4.4+ and mongod started with `--setParameter reportOpWriteConcernCountersInServerStatus=true`; it cannot be changed at runtime, and without it that part prints one line.
-- From 5.0, with no default write concern set the implicit default applies: usually `w: majority`, but `w: 1` with arbiters (PSA), so acknowledged writes can be rolled back if the primary fails; a note says so.
+- From 5.0, with no default write concern set the implicit default applies: `w: 1` when there are arbiters and the data-bearing voting members are no more than the voting majority (half the voting members rounded down, plus 1), as in PSA or PSSA; otherwise `w: majority`, as in PSSSA or a set without arbiters. What is shown is what the server returns (`getDefaultRWConcern`), not worked out here. With `w: 1`, acknowledged writes can be rolled back if the primary fails; a note says so.
 - The legacy mongo shell ignores read and write concern options in the connection string; set them with `db.getMongo().setWriteConcern()` and the like.
 - A note is printed at the end when the implicit default write concern is `w: 1` (arbiters), there were `w: 0` writes, or `writeConcernMajorityJournalDefault` is false.
 
@@ -1699,11 +1700,11 @@ mt.flow({interval: 0})   // one read, totals since startup only
 | Field | Meaning |
 |---|---|
 | `state` | this node's state; flow control only acts on the primary |
-| `enabled` / `isLagged` | whether it is on, and whether it is throttling now |
+| `enabled` / `isLagged` | whether it is on, and whether it is throttling now (at the second sample) |
 | `targetLag` / `threshold` | the target lag (`flowControlTargetLagSeconds`, 10 seconds by default), and the lag at which throttling starts (times `flowControlThresholdLagPercentage`, half by default) |
 | `majorityLag` | how far the majority commit point is behind the primary |
 | `rateLimit` | write tickets handed out per second while throttling; hidden otherwise |
-| `waitMs/s` / `waitTotal` | milliseconds per second writes spent waiting for tickets (summed over writes, so it can exceed 1000); total time waited since startup |
+| `waitMs/s` / `waitTotal` | between the two samples, milliseconds per second writes spent waiting for tickets (summed over writes, so it can exceed 1000; not the wait of each write); total time waited since startup |
 | `laggedCount` / `laggedTime` | times throttling started since startup; how long the periods that ended lasted in total |
 | `waitingOps` | operations waiting for a ticket now |
 | members table | how many seconds each member is behind the primary (`lagSecs`), and whether it votes: voting members decide the majority commit point |
@@ -1744,12 +1745,13 @@ laggedCount: 1
 | 93427 |    0 | insert | shop.orders | 127.0.0.1:48008 | true    |     1 |      0 |
 +-------+------+--------+-------------+-----------------+---------+-------+--------+
 2 rows in set
-Note: throttling now: the majority commit point is 40.1s behind, more than 5s; the primary hands out only 117 write tickets per second, so writes slow down. Voting members behind: db2:27017 (40s)
+Note: throttling now: the majority commit point is 40.1s behind, more than 5s; the primary hands out only 117 write tickets per second. Voting members behind: db2:27017 (40s). During the sample, writes waited 1937 ms per second for tickets (summed over writes)
 ```
 
 - The server keeps no count of waits overall; the number of waits is per operation (`flowControlStats` in `currentOp`). Slow query log lines and the profiler also have `flowControl` figures per operation.
 - Common causes: a voting secondary on a slow machine (disk, CPU), a slow network, a long operation or `fsyncLock` on a secondary.
-- A note is printed at the end when this is not the primary, flow control is off, it is throttling now (listing voting members more than `threshold` behind), or it has throttled since startup.
+- `isLagged` is the state at the second sample and `waitMs/s` covers the time between the samples, so read them separately: while throttling, writes are not necessarily waiting (there may be no writes), and when not throttling some may just have waited (throttling ended mid-sample).
+- A note is printed at the end when this is not the primary, flow control is off, it is throttling now (listing voting members more than `threshold` behind, and whether writes waited for tickets while sampling), writes waited for tickets while sampling but throttling had ended by the second sample, or it has throttled since startup.
 - Replica sets only; on a standalone or a mongos it prints one line.
 
 ### mt.initialSync(): initial sync progress
@@ -2661,7 +2663,8 @@ checkpoint.running: false
 Note: application threads evict 12.8 pages per second: the cache is under pressure and requests are making room
 ```
 
-- A note is printed at the end when the cache is 95% full, dirty data reaches 20% or updates reach 10% (4.4+): these are WiredTiger's default triggers (`eviction_trigger`, `eviction_dirty_trigger`, `eviction_updates_trigger`), past which the threads serving requests must help evict and reads and writes slow down; when application threads evicted pages while sampling; and when the last checkpoint took over 60 s (the default checkpoint interval).
+- A note is printed at the end when the cache is 95% full, dirty data reaches 20% or updates reach 10% (4.4+): these are WiredTiger's default triggers (`eviction_trigger`, `eviction_dirty_trigger`, `eviction_updates_trigger`), past which the threads serving requests may have to help evict, so reads and writes may slow down; when application threads evicted pages while sampling; and when the last checkpoint took over 60 s (the default checkpoint interval).
+- Reaching a trigger only means the threshold was reached: `appEvicted` shows how many pages application threads actually evicted, and `mt.latency()` whether requests got slower.
 - `/s` values are the difference between the two samples divided by the interval; with `{interval: 0}` there is no `/s` and the values are totals since startup.
 - Since 8.0 the checkpoint statistics moved to `wiredTiger.checkpoint` and the tickets to `serverStatus().queues.execution`; both are handled per version.
 - Must run on a mongod; a mongos has no storage engine, so it prints a one-line explanation. `mt.status()` also shows the three cache figures, and `mt.cache()` shows how much of the cache each collection uses.

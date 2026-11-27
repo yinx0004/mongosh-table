@@ -5,6 +5,7 @@
 #   lagged     the secondary is fsyncLock'ed (it stops applying the oplog) while a
 #              writer keeps inserting on the primary, with flowControlTargetLagSeconds
 #              lowered to 2 so throttling starts after 1 second of lag
+#   idle       still throttling, but the writer has stopped, so no write waits
 #   after      the secondary unlocked and caught up
 #   secondary  mt.flow() run on the secondary
 #
@@ -61,14 +62,17 @@ msh p --eval "var MT_PHASE = 'normal'" test/flow.js
 srv p --eval 'db.adminCommand({setParameter: 1, flowControlTargetLagSeconds: 2}).ok' >/dev/null
 srv s --eval 'db.fsyncLock().ok' >/dev/null
 # w: 1, since from 5.0 the default write concern would wait for the locked secondary
+writer_start=$SECONDS
 docker exec -d "$name-p" "$srvshell" --quiet --eval '
   var c = db.getSiblingDB("mtflow").t, t0 = Date.now(), n = 0;
   while (Date.now() - t0 < 25000) c.insertOne({x: n++}, {writeConcern: {w: 1}});'
 sleep 10
 msh p --eval "var MT_PHASE = 'lagged'; var MT_SECONDARY = '$name-s:27017'" test/flow.js
 
+while [ $((SECONDS - writer_start)) -lt 28 ]; do sleep 1; done   # the writer stops 25 seconds after it started
+msh p --eval "var MT_PHASE = 'idle'" test/flow.js
+
 srv s --eval 'db.fsyncUnlock().ok' >/dev/null
-sleep 16   # the writer stops 25 seconds after it started
 wait_true p 'db.serverStatus().flowControl.isLagged === false'
 msh p --eval "var MT_PHASE = 'after'" test/flow.js
 msh s --eval "var MT_PHASE = 'secondary'" test/flow.js
