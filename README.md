@@ -457,6 +457,7 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
   - 打开的文件和连接快到上限（`maxOpenFiles`）的 80% 时也会停，这一条不能关。多久看一次按离 80% 还剩多少定：一个集合最多打开 65 个文件（集合本身和最多 64 个索引），余量不到 65 个就停，所以 MongoTab 自己不会把它推过 80%（别的连接、别的操作同时打开文件时仍可能越过），余量大时很少看。拿不到上限或打开文件数时（不是 Linux、连的是 mongos），表下会写明这层保护不可用。原因是：`$collStats` 会让 WiredTiger 打开平时关着的集合和索引文件，实测 3000 个集合时，`mt.cache()` 让 mongod 打开的文件从 48 个涨到 9051 个，集合再多可能超过上限（Too many open files）。
   - 查运行中的操作（`mt.ps()`、`mt.conns()`、`mt.locks()`、`mt.txns()`、`mt.builds()` 等）用 `$currentOp` 聚合分批取：`currentOp` 命令的结果装在一个文档里，连接、会话很多时超过 16MB 就失败。
   - `mt.desc()` 在视图和时序集合上不做会全表扫描的 `$sample`，见 [mt.desc()](#mtdesc集合的字段结构)。
+- **采样两次的命令**（`mt.status()`、`mt.engine()`、`mt.qstats()`、`mt.top()`、`mt.latency()`、`mt.flow()`）：两次之间连到了别的节点（切主后 shell 重连到新的主节点），或者 mongod 重启过（`uptime` 比第一次的加上中间过的时间少），计数器不能相减，这时改用第二次取到的启动以来累计值，开头写明原因，不会算出负数或者离谱的速率。逐集合的计数变小了（集合删掉重建过）时，这些集合不列出，表下写明。老的 mongo shell 在 mongod 重启后不会自动重连，这时直接报网络错误。
 - **大小分逻辑和磁盘**：列名里带 `logical` 的是未压缩的数据量（BSON 大小），带 `disk` 的是磁盘上实际占的（WiredTiger 压缩后），带 `cached` 的是在内存缓存里占的（解压后）。同一份数据三者可以差好几倍。
 - **权限**：需要监控类权限，如 `clusterMonitor` 角色。权限不够、在单机上执行 `mt.repl()` / `mt.oplog()`、在 mongos 上执行 `mt.slow()` / `mt.top()` / `mt.locks()` / `mt.cache()` 时，只打印一行说明，不抛异常。
 - **版本**：老的 mongo shell 和 mongosh 都能用，CI 里在副本集上逐个版本测过。经 mongos 测过的有 `mt.shards()`、`mt.balancer()`、`mt.pool()`（包括有分片连不上时），以及 `mt.status()`、`mt.vars()`、`mt.mem()`、`mt.cursors()`（能用）和 `mt.check()`、`mt.engine()`、`mt.qstats()`、`mt.profile()`、`mt.rsconf()`、`mt.elections()`（打印一行说明）；其余命令经 mongos 还没测过。
@@ -1386,6 +1387,7 @@ transactions.ops/s: 0
 - 这段时间里没有操作的集合不显示。
 - `mt.latency()` 自己调用 `serverStatus`、`$collStats` 也会被 MongoDB 计数：采样时会先测出这些探测的次数和耗时，再从结果里减掉，所以安静的实例上看到的是 0，而不是自己的探测。
 - 要对每个集合各执行几次 `$collStats`，集合很多时会慢，可以指定一个库。
+- 集合是一个一个探的，每个集合两次探测之间的间隔是“第一轮剩下的集合 + interval + 第二轮前面的集合”，集合多时比 `interval` 长：超过 `interval` 0.5 秒（或 20%）以上时表下写明实际间隔的范围。表里的次数是这段时间内的，平均延迟不受影响。
 
 ### mt.locks()：谁在等锁
 
