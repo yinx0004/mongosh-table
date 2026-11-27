@@ -19,7 +19,8 @@ run('check: delayed member', function () {
   var out, row;
   for (var k = 0; k < 6; k++) {
     if (k) sleep(5000);
-    out = capOut(function () { mt.check({ quick: true, table: true, thresholds: { lag: [20, 60] } }); });
+    // maxCol: 0 不截断：值里有容器名（带进程号，长度不定），长了会把后面的说明截成“...”
+    out = capOut(function () { mt.check({ quick: true, table: true, maxCol: 0, thresholds: { lag: [20, 60] } }); });
     row = out.split('\n').filter(function (l) { return /^\| 复制延迟/.test(l); })[0] || '';
     if (/\| OK /.test(row)) break;
   }
