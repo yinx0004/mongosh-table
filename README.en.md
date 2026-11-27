@@ -10,7 +10,7 @@
 
 [中文](README.md) | **English**
 
-**Make mongosh readable.**
+**Read-only diagnostics for MongoDB, right in your shell.**
 
 MongoTab renders query results in mongosh as MySQL-style tables or `\G`-style vertical records, without changing how you write MongoDB commands. A single JS file with no dependencies.
 The legacy `mongo` shell that ships with MongoDB 5.0 and earlier works too (since v0.2.0); see [Legacy mongo shell](#legacy-mongo-shell).
@@ -454,7 +454,7 @@ All of them:
 - **Production safeguards**:
   - Heavier reads (per-collection `$collStats` / `$indexStats`, `mt.desc()` sampling, `$currentOp`) carry `maxTimeMS`, 10 seconds by default, so a locked or slow collection does not leave them hanging.
   - The per-collection commands (`mt.colls()`, `mt.frag()`, `mt.cache()`, `mt.ttl()`, `mt.unusedIdx()`, `mt.dupIdx()`, `mt.latency()`, `mt.check()`) look at no more than 1000 collections or 30 seconds by default (`maxColls`, `budgetMs`; change them with `mt.config()` or per call, `0` = no limit), and say "only the first N/M collections" under the table when they stop early.
-  - They also stop when open files plus connections get close to 80% of the limit (`maxOpenFiles`), which cannot be turned off. How often they look depends on how much room is left below 80%: a collection opens at most 65 files (itself and up to 64 indexes), and they stop once less than 65 is left, so they never go past 80%, and with plenty of room they rarely look. When the limit or the open file count is not available (not Linux, or a mongos), a note under the table says the guard is off. The reason: `$collStats` makes WiredTiger open collection and index files that are normally closed. Measured with 3000 collections, `mt.cache()` took mongod from 48 to 9051 open files; with many more collections that can exceed the limit (Too many open files).
+  - They also stop when open files plus connections get close to 80% of the limit (`maxOpenFiles`), which cannot be turned off. How often they look depends on how much room is left below 80%: a collection opens at most 65 files (itself and up to 64 indexes), and they stop once less than 65 is left, so MongoTab itself does not push it past 80% (other connections and operations opening files at the same time still can), and with plenty of room they rarely look. When the limit or the open file count is not available (not Linux, or a mongos), a note under the table says the guard is off. The reason: `$collStats` makes WiredTiger open collection and index files that are normally closed. Measured with 3000 collections, `mt.cache()` took mongod from 48 to 9051 open files; with many more collections that can exceed the limit (Too many open files).
   - Commands that list running operations (`mt.ps()`, `mt.conns()`, `mt.locks()`, `mt.txns()`, `mt.builds()`...) use the `$currentOp` aggregation, which returns batches: the `currentOp` command puts everything in one document and fails past 16 MB when there are many connections or sessions.
   - `mt.desc()` does not run a `$sample` that would scan a whole view or time series collection; see [mt.desc()](#mtdesc-field-structure-of-a-collection).
 - **Tell logical from disk sizes**: columns with `logical` in the name are the uncompressed data size (BSON), `disk` is what it actually takes on disk (compressed by WiredTiger), and `cached` is what it takes in the in-memory cache (uncompressed). The three can differ several times over for the same data.
@@ -1562,7 +1562,7 @@ mt.elections({history: true, hours: 168})     // the last 7 days; hours: 0 is th
 | last election | only on the primary: `reason` (with an explanation), `priorPrimary`, `votesNeeded`, `catchUpOps` (oplog entries caught up after the election), `writableAfter` / `majorityWritableAfter` (how soon writes, and `w: 'majority'` writes, were possible) |
 | this member's last vote | for whom, whether it voted yes, and why not |
 | elections called since startup | by cause: `electionTimeout` no primary seen for a while, `priorityTakeover` a higher-priority member taking over, `catchUpTakeover` taken over while the new primary was catching up, `stepUpCmd` a handover on step-down or by hand, `freezeTimeout`; below that, how catch-up went after elections, and how often it was pushed out as primary by a higher term |
-| primary changes | only with `{history: true}`, the last 24 hours by default (`hours` changes it): the oplog entry written on each successful election (`{op: 'n', o: {msg: 'new primary'}}`), `term`, `primary` (which member), `held` (how long that term lasted) |
+| primary changes | only with `{history: true}`, the last 24 hours by default (`hours` changes it): the oplog entry written on each successful election (`{op: 'n', o: {msg: 'new primary'}}`), `term`, `primary` (which member), `source` (the evidence for it), `untilNext` (time until the next primary change) |
 
 Below, a 3-member replica set where `db1` has priority 2. `db1` stalled for a while (`docker pause`) and `db3` was elected; once `db1` came back and caught up, it took the primary back on priority:
 
@@ -1605,13 +1605,13 @@ majorityWritableAfter: 29 ms
 stepDownsByHigherTerm: 1
 
 ── primary changes in the last 24 hours (successful elections recorded in the oplog, newest first) ──
-+-------------------------+------+-----------+----------------+
-| time                    | term | primary   | held           |
-+-------------------------+------+-----------+----------------+
-| 2026-11-25 15:39:27.767 |    3 | db1:27017 | 1m 5s (so far) |
-| 2026-11-25 15:39:13.525 |    2 | db3:27017 | 14s            |
-| 2026-11-25 15:36:44.373 |    1 |           | 2m 29s         |
-+-------------------------+------+-----------+----------------+
++-------------------------+------+-----------+--------------+----------------+
+| time                    | term | primary   | source       | untilNext      |
++-------------------------+------+-----------+--------------+----------------+
+| 2026-11-25 15:39:27.767 |    3 | db1:27017 | status       | 1m 5s (so far) |
+| 2026-11-25 15:39:13.525 |    2 | db3:27017 | priorPrimary | 14s            |
+| 2026-11-25 15:36:44.373 |    1 |           |              | 2m 29s         |
++-------------------------+------+-----------+--------------+----------------+
 3 rows in set
 Note: elections this member called and won because it saw no primary for a while: 1. A newly created set or a restart of the whole set counts here too; otherwise the primary went down, stalled or lost the network, so check the logs from then
 Note: priority takeovers (a higher-priority member taking over once caught up): 1. One failure then means two primary changes; give members equal priority unless a fixed primary is needed
@@ -1623,6 +1623,8 @@ Note: step-downs of this member as primary on seeing a higher term: 1. Another m
 - The primary changes are off by default. When on, only the last `hours` hours (24 by default) of the oplog are scanned: `find` with a `ts` lower bound, oldest first, so the server jumps straight to the start (automatically from 4.4; 3.6 to 4.2 with `oplogReplay`). Measured: with 200,000 oplog entries and a bound at the newest 20,000, only those 20,000 were scanned. `hours: 0` scans the whole oplog (no usable index); for a very large oplog run it on a secondary, which has the same oplog. Both use `maxTimeMS` (10 seconds by default), and on timeout nothing is listed; when the range asked for is longer than the oplog window, a note says when the oplog starts.
 - Only successful elections are here: failed elections, dry runs, step-downs with no new primary and config changes are not in the oplog (this member's failed elections show in `called` / `successful`), nor is an entry that was rolled back, which is why this is called primary changes and not election history. `term` is the current term; each real election round adds 1 (failed ones too, dry runs not), so it is not a count of primary changes.
 - The oplog has only the term and time, not the member: the current primary and the predecessor the primary remembers are filled in directly, others by matching the term in the log in memory (only the last 1024 lines; before 4.4 voters do not log vote requests), and left blank when nothing matches, like term 1 above.
+- `source` says what each row is based on, keeping inference apart from direct evidence: `status` = the current primary; `priorPrimary` = the predecessor the primary remembers (`electionCandidateMetrics`); `log` = "Election succeeded" in the winner's own log; `vote` = the candidate this member voted yes for, which is an inference, since with more members another candidate may have won that term with a majority. The member index in a vote request refers to the config at that time, so it is not used when the config version has changed since (members added or removed), to avoid naming the wrong member.
+- `untilNext` is the time until the next primary change, not how long that primary served: there may have been a stretch with no primary in between (a step-down with no one elected). The newest row says so far only when it is confirmed to still be the primary (same term); otherwise it says no later change is recorded and it is not the primary now.
 - A note is printed at the end when the last election happened because the primary could not be reached, `w: 'majority'` writes took 10 seconds or more after an election, elections were called because no primary was seen, by priority takeover or catch-up takeover, catch-up did not finish (writes on the old primary that were not replicated may be rolled back; whether they were shows as rollback in that member's log), the member was pushed out as primary by a higher term, the primary changed 3 or more times in 24 hours (not counting the set's first election), or this is not the primary (the details of the last election are only there).
 - Replica sets only; on a standalone server or a mongos it prints a one-line explanation. An arbiter has no oplog, so no primary changes there. For the election timeout and priorities in the configuration see `mt.rsconf()`.
 

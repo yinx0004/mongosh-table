@@ -540,7 +540,7 @@ run('mt.elections', function () {
     (/这个版本没有选举的原因和统计/.test(out) ? 'metrics' : out));
   print(out.indexOf('换主记录用 mt.elections({history: true}) 看') >= 0 ? 'history hint' : out);
   var h = capOut(function () { mt.elections({ history: true, showCmd: false }); });
-  print(h.split('\n').some(function (l) { return / 1 \| /.test(l) && l.indexOf(' ' + me + ' ') > 0 && /（至今）/.test(l); }) ? 'history' : h);
+  print(h.split('\n').some(function (l) { return / 1 \| /.test(l) && l.indexOf(' ' + me + ' | status ') > 0 && /（至今）/.test(l); }) ? 'history' : h);
   print(h.indexOf('换主记录用') < 0 && !/24 小时内换了/.test(h) && h.indexOf('注意：oplog 从') < 0 ? 'no notes' : h);
   // 默认只扫最近 24 小时：命令带 ts 下限；hours: 0 是整个 oplog；范围里没有换主时说明
   var c24 = capOut(function () { mt.elections({ history: true }); }), all = capOut(function () { mt.elections({ history: true, hours: 0 }); });
