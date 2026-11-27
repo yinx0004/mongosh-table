@@ -531,18 +531,24 @@ run('mt.rsconf', function () { mt.rsconf(); }, [
   'electionTimeoutMillis: 10000', '| id | host ', '| state   | priority | votes |', '| PRIMARY |        1 |     1 |', '1 row in set'
 ]);
 // mt.elections：测试用的单节点副本集，一个成员一票。最近一次选举和按原因分的次数 4.0 后期版本起才有，3.6 打印一行说明；
-// 换主历史只有建好时的那一次，是现在的主节点（有换主的样子在 test/elect.js）
+// 换主记录只有建好时的那一次，是现在的主节点（有换主的样子在 test/elect.js）
 run('mt.elections', function () {
   var hasEm = !!db.serverStatus().electionMetrics, me = rs.status().members.filter(function (x) { return x.self; })[0].name;
   var out = capOut(function () { mt.elections(); });
   print(/set: rs0/.test(out) && /state: PRIMARY/.test(out) && /voters: 1 个有投票权，选主要 1 票/.test(out) ? 'head' : out);
   print(hasEm ? (/── 最近一次选举（这个主节点当选）──/.test(out) && /\| cause +\| called \| successful \|/.test(out) ? 'metrics' : out) :
     (/这个版本没有选举的原因和统计/.test(out) ? 'metrics' : out));
-  print(out.indexOf('换主历史用 mt.elections({history: true}) 看') >= 0 ? 'history hint' : out);
+  print(out.indexOf('换主记录用 mt.elections({history: true}) 看') >= 0 ? 'history hint' : out);
   var h = capOut(function () { mt.elections({ history: true, showCmd: false }); });
   print(h.split('\n').some(function (l) { return / 1 \| /.test(l) && l.indexOf(' ' + me + ' ') > 0 && /（至今）/.test(l); }) ? 'history' : h);
-  print(h.indexOf('换主历史用') < 0 && !/24 小时内换了/.test(h) ? 'no notes' : h);
-}, ['head', 'metrics', 'history hint', 'history', 'no notes']);
+  print(h.indexOf('换主记录用') < 0 && !/24 小时内换了/.test(h) && h.indexOf('注意：oplog 从') < 0 ? 'no notes' : h);
+  // 默认只扫最近 24 小时：命令带 ts 下限；hours: 0 是整个 oplog；范围里没有换主时说明
+  var c24 = capOut(function () { mt.elections({ history: true }); }), all = capOut(function () { mt.elections({ history: true, hours: 0 }); });
+  print(/find\(\{ts: \{\$gte: Timestamp\(\d+, 0\)\}, op: 'n'/.test(c24) && /── 最近 24 小时的换主（oplog 里成功当选的记录，新的在前）──/.test(c24) ? 'hours 24' : c24);
+  print(/find\(\{op: 'n'/.test(all) && /── 换主（整个 oplog 里成功当选的记录，新的在前）──/.test(all) && / 1 \| /.test(all) ? 'hours 0' : all);
+  var none = capOut(function () { mt.elections({ history: true, hours: 0.0001, showCmd: false }); });   // 最近 0.36 秒
+  print(/这段时间 oplog 里没有换主的记录/.test(none) ? 'none in range' : none);
+}, ['head', 'metrics', 'history hint', 'history', 'no notes', 'hours 24', 'hours 0', 'none in range']);
 run('mt.shards not mongos', function () { mt.shards(); }, ['mt.shards() 要连 mongos（分片集群的路由）']);   // 分片集群的测试在 test/shard.js
 run('mt.balancer not mongos', function () { mt.balancer(); }, ['mt.balancer() 要连 mongos（分片集群的路由）']);
 // 用户和自定义角色（这里没开认证；开了认证的情况在 test/auth.js）。测完删掉
