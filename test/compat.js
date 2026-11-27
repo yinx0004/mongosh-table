@@ -217,6 +217,13 @@ run('mt.top totals', function () { mt.top({ interval: 0, ns: 'mtest' }); }, ['--
 // mt.latency：采样时 run.sh 起的写入循环会往 mtlock.c 写；累计模式下 mtest.orders 有读
 run('mt.latency', function () { mt.latency({ table: true }); }, ['-- db.serverStatus().opLatencies; every user db', '间隔 1 秒采样两次', 'writes.avgMs: ', 'writes.ops/s: ', '| mtlock.c ', '| writeOps ']);
 run('mt.latency totals', function () { mt.latency('mtest', { interval: 0, table: true }); }, ['启动以来累计', 'reads.ops: ', '| mtest.orders ', '| readOps ']);
+// quick：只看整台，不探集合，也不列集合表
+run('mt.latency quick', function () {
+  var out = capOut(function () { mt.latency({ quick: true }); });
+  print(/^-- db\.serverStatus\(\)\.opLatencies，间隔 1 秒采样两次/.test(out) && !/collStats/.test(out) ? 'server only cmd' : out);
+  print(/writes\.ops\/s: /.test(out) && !/\| ns /.test(out) && !/readOps/.test(out) ? 'no collection table' : out);
+}, ['server only cmd', 'no collection table']);
+run('mt.latency quick totals', function () { mt.latency({ quick: true, interval: 0, showCmd: false }); }, ['reads.ops: ', 'commands.ops: ']);
 run('mt.top', function () { mt.top(); }, ['-- db.adminCommand({top: 1})，间隔 1 秒采样两次']);
 // mt.locks：fsyncLock 期间，run.sh 起的写入循环会排队等全局锁
 run('mt.locks none', function () { mt.locks(); }, ['-- db.adminCommand({lockInfo: 1})', '没有在等锁的操作']);

@@ -32,7 +32,7 @@ if (MT_PHASE === 'lagged') {
     print(/isLagged: true\n/.test(out) && /rateLimit: \d+\/s\n/.test(out) && /waitMs\/s: [1-9]\d*\n/.test(out) && /threshold: 1s\n/.test(out) ? 'throttling' : out);
     var lag = /majorityLag: ([\d.]+)s/.exec(out);
     print(lag && Number(lag[1]) >= 1 ? 'majority lag' : out);
-    print(new RegExp('注意：正在限流：多数派提交点落后 [\\d.]+s，超过了 1s；主节点每秒只发 \\d+ 张写入票据，写入会变慢。落后的有投票权的成员：' + MT_SECONDARY.replace(/\./g, '\\.') + ' \\(\\d+s\\)').test(out) ? 'lagged note' : out);
+    print(new RegExp('注意：正在限流：多数派提交点落后 [\\d.]+s，超过了 1s；主节点每秒只发 \\d+ 张写入票据。落后的有投票权的成员：' + MT_SECONDARY.replace(/\./g, '\\.') + ' \\(\\d+s\\)。采样期间写入每秒一共等了 [1-9]\\d* ms 票据（几个写入的加起来）').test(out) ? 'lagged note' : out);
   }, ['throttling', 'majority lag', 'lagged note']);
   // 写入是一条接一条的，两条之间的瞬间 currentOp 里没有它：隔 200 毫秒取一次，最多 30 次（约 6 秒），看到等过票据的 insert 为止。
   // 没看到时再用 currentOp 命令查一次，分清是真没有这样的操作，还是 mt.flow() 漏看了
@@ -46,6 +46,17 @@ if (MT_PHASE === 'lagged') {
     var raw = db.adminCommand({ currentOp: 1, active: true, ns: 'mtflow.t' }).inprog || [];
     print(out + '\ncurrentOp command on mtflow.t: ' + raw.length + ' ops, ' + raw.filter(function (op) { return op.flowControlStats && op.flowControlStats.acquireCount; }).length + ' with flowControlStats');
   }, ['held-up insert']);
+}
+
+// 写入已经停了，从节点还锁着：还在限流，但这 1 秒里没有写入等票据；interval: 0 时不说等没等
+if (MT_PHASE === 'idle') {
+  run('flow: lagged, no writes', function () {
+    var out = capOut(function () { mt.flow({ showCmd: false, width: 300 }); });
+    print(/isLagged: true\n/.test(out) && /waitMs\/s: 0\n/.test(out) ? 'throttling, no waits' : out);
+    print(/注意：正在限流：[^\n]*。采样期间没有看到写入等票据/.test(out) ? 'no-wait note' : out);
+    out = capOut(function () { mt.flow({ interval: 0, showCmd: false, width: 300 }); });
+    print(/注意：正在限流：[^\n]*张写入票据。落后的有投票权的成员：[^\n]*\(\d+s\)(\n|$)/.test(out) ? 'no sample, no wait sentence' : out);
+  }, ['throttling, no waits', 'no-wait note', 'no sample, no wait sentence']);
 }
 
 if (MT_PHASE === 'after') {

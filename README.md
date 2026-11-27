@@ -359,7 +359,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 | mt.locks({all})              | sys.innodb_lock_waits                    | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                                         |
 | mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX            | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                                |
 | mt.top({interval, ns})       | sys.schema_table_statistics              | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                                           |
-| mt.latency('db', {interval}) | sys.statement_analysis                   | 读 / 写 / 命令的平均延迟（毫秒），整台和各集合；interval 采样秒数，0 = 启动以来；默认所有用户库                                                                      |
+| mt.latency('db', {interval}) | sys.statement_analysis                   | 读 / 写 / 命令的平均延迟（毫秒），整台和各集合；interval 采样秒数，0 = 启动以来；quick 只看整台；默认所有用户库                                                      |
 | mt.builds()                  | ALTER TABLE progress                     | 正在建的索引：哪个集合、哪个索引、在哪个阶段、进度、已经跑了多久                                                                                                     |
 +------------------------------+------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
@@ -1353,6 +1353,7 @@ mt.latency()                // 间隔 1 秒采样两次，看这 1 秒内的平�
 mt.latency('shop')          // 只看一个库；默认所有用户库（跳过 admin、local、config）
 mt.latency({interval: 5})   // 间隔 5 秒
 mt.latency({interval: 0})   // 只取一次，看启动以来的平均值
+mt.latency({quick: true})   // 只看整台，不逐个集合探：集合很多或者出事时用
 ```
 
 上面几行是整台的情况（`serverStatus().opLatencies`）：`reads` / `writes` / `commands` / `transactions` 的平均延迟 `avgMs`，以及每秒次数 `ops/s`（启动以来时是总次数 `ops`）。下面是各集合（`$collStats` 的 `latencyStats`）：
@@ -1386,7 +1387,7 @@ transactions.ops/s: 0
 - 延迟是 mongod 处理请求的时间，不含网络往返。
 - 这段时间里没有操作的集合不显示。
 - `mt.latency()` 自己调用 `serverStatus`、`$collStats` 也会被 MongoDB 计数：采样时会先测出这些探测的次数和耗时，再从结果里减掉，所以安静的实例上看到的是 0，而不是自己的探测。
-- 要对每个集合各执行几次 `$collStats`，集合很多时会慢，可以指定一个库。
+- 要对每个集合各执行几次 `$collStats`，集合很多时会慢，可以指定一个库，或者用 `{quick: true}` 只看整台（只调用两次 `serverStatus`）。
 - 集合是一个一个探的，每个集合两次探测之间的间隔是“第一轮剩下的集合 + interval + 第二轮前面的集合”，集合多时比 `interval` 长：超过 `interval` 0.5 秒（或 20%）以上时表下写明实际间隔的范围。表里的次数是这段时间内的，平均延迟不受影响。
 
 ### mt.locks()：谁在等锁
@@ -1622,7 +1623,7 @@ stepDownsByHigherTerm: 1
 
 - 数据来自 `replSetGetStatus`、`replSetGetConfig`、`serverStatus().electionMetrics` 和 `getLog`。最近一次选举、投票、按原因分的次数 4.0 后期版本起才有；3.6 只有表头和换主历史。
 - 按原因分的次数只算这个成员自己发起的，重启后清零。`electionTimeout` 里也包括副本集刚建好、整个副本集重启时的那次（上面 `db1` 的 1 次就是建好时那次），所以要对照换主记录和当时的日志看。
-- 换主记录默认不查。查的时候只扫最近 `hours` 小时（默认 24）的 oplog：`find` 带 `ts` 下限、从旧往新扫，服务端直接跳到起点（4.4 起自动这样做，3.6～4.2 带 `oplogReplay`），实测 20 万条的 oplog 只看最近 2 万条时也只扫这 2 万条。`hours: 0` 扫整个 oplog（没有能用的索引），oplog 很大时到从节点上看（oplog 一样）。都带 `maxTimeMS`（默认 10 秒），超时什么都不列出；要看的范围比 oplog 窗口长时提示 oplog 从什么时候开始。
+- 换主记录默认不查。查的时候只扫最近 `hours` 小时（默认 24）的 oplog：`find` 带 `ts` 下限、从旧往新扫，服务端直接跳到起点（4.4 起自动这样做，3.6～4.2 带 `oplogReplay`），实测 20 万条的 oplog 只看最近 2 万条时也只扫这 2 万条。扫多少条随这段时间的写入量增长，写入多的主节点上缩小 `hours`。`hours: 0` 扫整个 oplog（没有能用的索引）。到从节点上看（oplog 一样）不占主节点，但同样要读那个从节点的磁盘、占它的缓存，它可能因此落后一些。都带 `maxTimeMS`（默认 10 秒），超时什么都不列出；要看的范围比 oplog 窗口长时提示 oplog 从什么时候开始。
 - 这里只有成功当选的那一条：没选上的选举、预选、退位后没人当选、配置变更都不在 oplog 里（这个成员没选上的次数看 `called` / `successful`），被回滚掉的那一条也没有，所以叫“换主”而不是“选举历史”。`term` 是当前任期，每轮正式选举加 1（失败的也算，预选不算），不能拿它当换主次数。
 - oplog 里只有 term 和时间、没有是哪个成员：现在的主节点、主节点记得的前任能直接填上，其余按 term 对上内存里的日志（只有最近 1024 行；4.4 之前投票的成员不记投票请求），对不上时空着，上面 term 1 就是这样。
 - `source` 写明每一任是凭什么填的，推断和直接证据分开：`status` 现在的主节点；`priorPrimary` 主节点记得的前任（`electionCandidateMetrics`）；`log` 当选的成员自己日志里的 “Election succeeded”；`vote` 这个成员投了赞成票的候选人，这是推断，成员多时同一个 term 可能是别的候选人拿到多数当选。投票请求里的成员下标按当时的配置算，跟现在的配置版本不一样（增删过成员）时不用，免得对到别的成员。
@@ -1683,7 +1684,7 @@ readPreference: primary
 ```
 
 - 写关注的计数 4.4 起才有，而且要在启动时加 `--setParameter reportOpWriteConcernCountersInServerStatus=true`，不能运行时改；没打开时这一部分打印一行说明。
-- 5.0 起没设过默认写关注时用隐含默认值：一般是 `w: majority`，但有仲裁节点（PSA）时是 `w: 1`，已经确认的写入在主节点挂掉时可能回滚，最后会提示。
+- 5.0 起没设过默认写关注时用隐含默认值：有仲裁节点、而且有投票权的数据节点不超过投票多数（投票成员数除以 2 向下取整再加 1）时是 `w: 1`，比如 PSA、PSSA；否则是 `w: majority`，比如 PSSSA、没有仲裁节点的副本集。这里显示的是服务端（`getDefaultRWConcern`）返回的结果，不自己推算。是 `w: 1` 时，已经确认的写入在主节点挂掉时可能回滚，最后会提示。
 - 老的 mongo shell 不认连接串里的读写关注选项，要用 `db.getMongo().setWriteConcern()` 等设置。
 - 这些情况会在最后提示：隐含默认写关注是 `w: 1`（有仲裁节点）；有 `w: 0` 的写入；`writeConcernMajorityJournalDefault` 是 false。
 
@@ -1699,11 +1700,11 @@ mt.flow({interval: 0})   // 只取一次，只有启动以来的累计值
 | 字段 | 说明 |
 |---|---|
 | `state` | 这个节点现在的状态；flow control 只在主节点上起作用 |
-| `enabled` / `isLagged` | 是否开着、现在是否在限流 |
+| `enabled` / `isLagged` | 是否开着、现在（第二次采样那一刻）是否在限流 |
 | `targetLag` / `threshold` | 目标落后时间（`flowControlTargetLagSeconds`，默认 10 秒），以及开始限流的落后时间（乘以 `flowControlThresholdLagPercentage`，默认一半） |
 | `majorityLag` | 多数派提交点落后主节点多少 |
 | `rateLimit` | 限流时每秒发多少张写入票据；不限流时不显示 |
-| `waitMs/s` / `waitTotal` | 写入每秒在等票据上花了多少毫秒（几个写入的加起来，可以超过 1000）；启动以来一共等了多久 |
+| `waitMs/s` / `waitTotal` | 两次采样之间，写入每秒在等票据上花了多少毫秒（几个写入的加起来，可以超过 1000，不是每次写入等了多久）；启动以来一共等了多久 |
 | `laggedCount` / `laggedTime` | 启动以来进入过几次限流；结束了的几次一共限流了多久 |
 | `waitingOps` | 现在正在等票据的操作数 |
 | 成员表 | 各成员落后主节点几秒（`lagSecs`），以及有没有投票权：多数派提交点由有投票权的成员决定 |
@@ -1744,12 +1745,13 @@ laggedCount: 1
 | 92566 |    0 | insert | shop.orders | 127.0.0.1:48008 |         |     1 |    969 |
 +-------+------+--------+-------------+-----------------+---------+-------+--------+
 2 rows in set
-注意：正在限流：多数派提交点落后 35.1s，超过了 5s；主节点每秒只发 132 张写入票据，写入会变慢。落后的有投票权的成员：db2:27017 (35s)
+注意：正在限流：多数派提交点落后 35.1s，超过了 5s；主节点每秒只发 132 张写入票据。落后的有投票权的成员：db2:27017 (35s)。采样期间写入每秒一共等了 1919 ms 票据（几个写入的加起来）
 ```
 
 - 服务端没有“一共等了几次”的计数，等待次数是每个操作自己的（`currentOp` 的 `flowControlStats`）。慢日志和 profiler 里每条操作也有 `flowControl` 的统计。
 - 限流的常见原因：有投票权的从节点所在机器慢（磁盘、CPU）、网络慢、从节点上有长时间的操作或 `fsyncLock`。
-- 这些情况会在最后提示：不是主节点；flow control 关着；正在限流（列出落后超过 `threshold` 的有投票权的成员）；启动以来限流过。
+- `isLagged` 是第二次采样那一刻的状态，`waitMs/s` 是两次采样之间的，两个分开看：在限流时写入不一定在等（比如这段时间没有写入），不在限流时也可能刚等过（采样中途限流结束了）。
+- 这些情况会在最后提示：不是主节点；flow control 关着；正在限流（列出落后超过 `threshold` 的有投票权的成员，以及采样期间写入有没有等票据）；采样期间写入等过票据、但第二次采样时已经不在限流；启动以来限流过。
 - 只适用于副本集；单机、mongos 上只打印一行说明。
 
 ### mt.initialSync()：初始同步的进度
@@ -2661,7 +2663,8 @@ checkpoint.running: false
 注意：应用线程每秒驱逐 17.8 个页面：缓存压力大，请求在帮着腾地方
 ```
 
-- 这些情况会在最后提示：缓存用到 95%、脏数据到 20%、更新到 10%（4.4 起），这几个是 WiredTiger 默认的触发线（`eviction_trigger`、`eviction_dirty_trigger`、`eviction_updates_trigger`），到了以后处理请求的线程也要帮忙驱逐，读写会变慢；采样期间应用线程驱逐了页面；最近一次检查点超过 60 秒（默认的检查点间隔）。
+- 这些情况会在最后提示：缓存用到 95%、脏数据到 20%、更新到 10%（4.4 起），这几个是 WiredTiger 默认的触发线（`eviction_trigger`、`eviction_dirty_trigger`、`eviction_updates_trigger`），到了以后处理请求的线程可能要帮忙驱逐，读写可能变慢；采样期间应用线程驱逐了页面；最近一次检查点超过 60 秒（默认的检查点间隔）。
+- 到了触发线只说明到了阈值：应用线程实际驱逐了多少页看 `appEvicted`，请求有没有因此变慢看 `mt.latency()`。
 - 带 `/s` 的是两次采样的差除以间隔；`{interval: 0}` 时没有 `/s`，是启动以来的累计值。
 - 8.0 起检查点的统计挪到了 `wiredTiger.checkpoint`，票据挪到了 `serverStatus().queues.execution`，这两处都已经按版本处理。
 - 只能连 mongod；mongos 上没有存储引擎，只打印一行说明。`mt.status()` 里也有缓存的三项，`mt.cache()` 看各集合占了多少缓存。
