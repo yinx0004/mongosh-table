@@ -1552,23 +1552,23 @@ Who became primary when, why there was an election, how soon writes were possibl
 
 ```js
 mt.elections()                                // the current primary, the last election, this member's vote, elections since startup
-mt.elections({history: true})                 // plus the primary changes within the oplog window (scans the whole oplog)
-mt.elections({history: true, maxTimeMS: 0})   // no time limit on the oplog scan
+mt.elections({history: true})                 // plus the primary changes in the last 24 hours (successful elections recorded in the oplog)
+mt.elections({history: true, hours: 168})     // the last 7 days; hours: 0 is the whole oplog
 ```
 
 | Part | Meaning |
 |---|---|
-| header | `term` (elections called since the set was created, failed ones too), `primary`, `electedAt` / `primaryFor` (when the primary was elected, for how long), `voters` (voting members, votes needed), `electionTimeout`, `uptime` (the counts below start here) |
+| header | `term` (the current term: each real election round adds 1, failed ones too, dry runs not; it is not the number of primary changes), `primary`, `electedAt` / `primaryFor` (when the primary was elected, for how long), `voters` (voting members, votes needed), `electionTimeout`, `uptime` (the counts below start here) |
 | last election | only on the primary: `reason` (with an explanation), `priorPrimary`, `votesNeeded`, `catchUpOps` (oplog entries caught up after the election), `writableAfter` / `majorityWritableAfter` (how soon writes, and `w: 'majority'` writes, were possible) |
 | this member's last vote | for whom, whether it voted yes, and why not |
 | elections called since startup | by cause: `electionTimeout` no primary seen for a while, `priorityTakeover` a higher-priority member taking over, `catchUpTakeover` taken over while the new primary was catching up, `stepUpCmd` a handover on step-down or by hand, `freezeTimeout`; below that, how catch-up went after elections, and how often it was pushed out as primary by a higher term |
-| primary changes | only with `{history: true}`: the oplog entry written on each primary change (`{op: 'n', o: {msg: 'new primary'}}`), `term`, `primary` (which member), `held` (how long that term lasted) |
+| primary changes | only with `{history: true}`, the last 24 hours by default (`hours` changes it): the oplog entry written on each successful election (`{op: 'n', o: {msg: 'new primary'}}`), `term`, `primary` (which member), `held` (how long that term lasted) |
 
 Below, a 3-member replica set where `db1` has priority 2. `db1` stalled for a while (`docker pause`) and `db3` was elected; once `db1` came back and caught up, it took the primary back on priority:
 
 ```
 > mt.elections({history: true})
--- rs.status(); rs.conf(); db.serverStatus().electionMetrics; getLog global; local.oplog.rs.find({op: 'n', 'o.msg': 'new primary'}).sort({$natural: -1})
+-- rs.status(); rs.conf(); db.serverStatus().electionMetrics; getLog global; local.oplog.rs.find({ts: {$gte: Timestamp(1795534836, 0)}, op: 'n', 'o.msg': 'new primary'})
             set: rs
           state: PRIMARY
            term: 3
@@ -1604,7 +1604,7 @@ majorityWritableAfter: 29 ms
              catchUps: 2 (2 already up to date, 0 caught up, 0 skipped, 0 timed out, 0 failed)
 stepDownsByHigherTerm: 1
 
-── primary changes (one oplog entry per change, newest first) ──
+── primary changes in the last 24 hours (successful elections recorded in the oplog, newest first) ──
 +-------------------------+------+-----------+----------------+
 | time                    | term | primary   | held           |
 +-------------------------+------+-----------+----------------+
@@ -1615,13 +1615,15 @@ stepDownsByHigherTerm: 1
 3 rows in set
 Note: elections this member called and won because it saw no primary for a while: 1. A newly created set or a restart of the whole set counts here too; otherwise the primary went down, stalled or lost the network, so check the logs from then
 Note: priority takeovers (a higher-priority member taking over once caught up): 1. One failure then means two primary changes; give members equal priority unless a fixed primary is needed
-Note: step-downs of this member as primary on seeing a higher term: 1. Another member called an election while it was primary (a network partition, or it stalled)
+Note: step-downs of this member as primary on seeing a higher term: 1. Another member called an election while it was primary, possibly a network partition or a stall
 ```
 
 - Reads `replSetGetStatus`, `replSetGetConfig`, `serverStatus().electionMetrics` and `getLog`. The last election, the vote and the counts by cause need late 4.0 versions or later; 3.6 shows the header and the primary changes only.
 - The counts by cause only cover elections this member called, and reset on restart. `electionTimeout` also includes the election right after the set was created or fully restarted (the 1 for `db1` above is that one), so compare with the primary changes and the logs from then.
-- The primary changes need a scan of the whole oplog (no usable index), so they are off by default. The scan runs newest first with `maxTimeMS` (10 seconds by default); on timeout only the latest entries scanned are listed. The oplog has only the term and time, not the member: the current primary and the predecessor the primary remembers are filled in directly, others by matching the term in the log in memory (only the last 1024 lines; before 4.4 voters do not log vote requests), and left blank when nothing matches, like term 1 above.
-- A note is printed at the end when the last election happened because the primary could not be reached, `w: 'majority'` writes took 10 seconds or more after an election, elections were called because no primary was seen, by priority takeover or catch-up takeover, catch-up did not finish (writes on the old primary that were not replicated get rolled back), the member was pushed out as primary by a higher term, the primary changed 3 or more times in 24 hours (not counting the set's first election), or this is not the primary (the details of the last election are only there).
+- The primary changes are off by default. When on, only the last `hours` hours (24 by default) of the oplog are scanned: `find` with a `ts` lower bound, oldest first, so the server jumps straight to the start (automatically from 4.4; 3.6 to 4.2 with `oplogReplay`). Measured: with 200,000 oplog entries and a bound at the newest 20,000, only those 20,000 were scanned. `hours: 0` scans the whole oplog (no usable index); for a very large oplog run it on a secondary, which has the same oplog. Both use `maxTimeMS` (10 seconds by default), and on timeout nothing is listed; when the range asked for is longer than the oplog window, a note says when the oplog starts.
+- Only successful elections are here: failed elections, dry runs, step-downs with no new primary and config changes are not in the oplog (this member's failed elections show in `called` / `successful`), nor is an entry that was rolled back, which is why this is called primary changes and not election history. `term` is the current term; each real election round adds 1 (failed ones too, dry runs not), so it is not a count of primary changes.
+- The oplog has only the term and time, not the member: the current primary and the predecessor the primary remembers are filled in directly, others by matching the term in the log in memory (only the last 1024 lines; before 4.4 voters do not log vote requests), and left blank when nothing matches, like term 1 above.
+- A note is printed at the end when the last election happened because the primary could not be reached, `w: 'majority'` writes took 10 seconds or more after an election, elections were called because no primary was seen, by priority takeover or catch-up takeover, catch-up did not finish (writes on the old primary that were not replicated may be rolled back; whether they were shows as rollback in that member's log), the member was pushed out as primary by a higher term, the primary changed 3 or more times in 24 hours (not counting the set's first election), or this is not the primary (the details of the last election are only there).
 - Replica sets only; on a standalone server or a mongos it prints a one-line explanation. An arbiter has no oplog, so no primary changes there. For the election timeout and priorities in the configuration see `mt.rsconf()`.
 
 ### mt.concern(): read and write concern at each level

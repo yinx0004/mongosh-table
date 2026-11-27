@@ -1552,23 +1552,23 @@ heartbeatIntervalMillis: 2000
 
 ```js
 mt.elections()                                // 现在的主节点、最近一次选举、这个成员的投票、启动以来的选举次数
-mt.elections({history: true})                 // 再加上 oplog 窗口内的换主历史（要扫整个 oplog）
-mt.elections({history: true, maxTimeMS: 0})   // 扫 oplog 不限时间
+mt.elections({history: true})                 // 再加上最近 24 小时的换主（oplog 里成功当选的记录）
+mt.elections({history: true, hours: 168})     // 看最近 7 天；hours: 0 是整个 oplog
 ```
 
 | 部分 | 说明 |
 |---|---|
-| 表头 | `term`（副本集建立以来发起过几次选举，失败的也算）、`primary`、`electedAt` / `primaryFor`（主节点什么时候当选、当了多久）、`voters`（有投票权的成员数、选主要几票）、`electionTimeout`、`uptime`（下面的次数从这时算起） |
+| 表头 | `term`（当前任期：每轮正式选举加 1，失败的也算，预选不算；不等于换主次数）、`primary`、`electedAt` / `primaryFor`（主节点什么时候当选、当了多久）、`voters`（有投票权的成员数、选主要几票）、`electionTimeout`、`uptime`（下面的次数从这时算起） |
 | 最近一次选举 | 只在主节点上有：`reason`（原因和解释）、`priorPrimary`（前任）、`votesNeeded`、`catchUpOps`（当选后追了多少条 oplog）、`writableAfter` / `majorityWritableAfter`（当选后多久能写、多久能 `w: 'majority'` 写） |
 | 这个成员最近一次投票 | 给谁投、投没投赞成、没投的原因 |
 | 启动以来自己发起的选举 | 按原因分：`electionTimeout` 一段时间看不到主节点，`priorityTakeover` 优先级高的成员抢主，`catchUpTakeover` 新主节点追数据时被抢，`stepUpCmd` 退位时交接或手动，`freezeTimeout`；下面是当选后追数据的结果，和当主节点时被更高的 term 赶下来的次数 |
-| 换主历史 | `{history: true}` 才有：oplog 里每次换主写的那条记录（`{op: 'n', o: {msg: 'new primary'}}`），`term`、`primary`（哪个成员）、`held`（这一任当了多久） |
+| 换主 | `{history: true}` 才有，默认最近 24 小时（`hours` 改）：oplog 里成功当选时写的那条记录（`{op: 'n', o: {msg: 'new primary'}}`），`term`、`primary`（哪个成员）、`held`（这一任当了多久） |
 
 下面是一个 3 成员的副本集，`db1` 优先级是 2。`db1` 卡住了一段时间（`docker pause`），`db3` 当选；`db1` 恢复后追上数据，又凭优先级把主抢了回来：
 
 ```
 > mt.elections({history: true})
--- rs.status(); rs.conf(); db.serverStatus().electionMetrics; getLog global; local.oplog.rs.find({op: 'n', 'o.msg': 'new primary'}).sort({$natural: -1})
+-- rs.status(); rs.conf(); db.serverStatus().electionMetrics; getLog global; local.oplog.rs.find({ts: {$gte: Timestamp(1795534836, 0)}, op: 'n', 'o.msg': 'new primary'})
             set: rs
           state: PRIMARY
            term: 3
@@ -1604,7 +1604,7 @@ majorityWritableAfter: 29 ms
              catchUps: 2 次（已经是最新 2，追上 0，跳过 0，超时 0，失败 0）
 stepDownsByHigherTerm: 1
 
-── 换主历史（oplog 里每次换主的记录，新的在前）──
+── 最近 24 小时的换主（oplog 里成功当选的记录，新的在前）──
 +-------------------------+------+-----------+---------------+
 | time                    | term | primary   | held          |
 +-------------------------+------+-----------+---------------+
@@ -1615,14 +1615,16 @@ stepDownsByHigherTerm: 1
 3 rows in set
 注意：这个成员因为一段时间看不到主节点发起过 1 次选举并当选：副本集刚建好、整个副本集重启时也算在这里，除此之外就是主节点挂过、卡住过或网络断过，看当时的日志
 注意：优先级高的成员追上后又抢了 1 次主：一次故障会换两次主；不需要固定主节点时把优先级设成一样
-注意：这个成员当主节点时看到更高的 term、退位 1 次：别的成员在它当主时发起了选举（网络分区，或者它卡住了）
+注意：这个成员当主节点时看到更高的 term、退位 1 次：别的成员在它当主时发起了选举，可能是网络分区，或者它卡住了
 ```
 
 - 数据来自 `replSetGetStatus`、`replSetGetConfig`、`serverStatus().electionMetrics` 和 `getLog`。最近一次选举、投票、按原因分的次数 4.0 后期版本起才有；3.6 只有表头和换主历史。
-- 按原因分的次数只算这个成员自己发起的，重启后清零。`electionTimeout` 里也包括副本集刚建好、整个副本集重启时的那次（上面 `db1` 的 1 次就是建好时那次），所以要对照换主历史和当时的日志看。
-- 换主历史要扫整个 oplog（没有能用的索引），所以默认不查。从新往旧扫，带 `maxTimeMS`（默认 10 秒），超时就只列出扫到的最近几条。oplog 里只有 term 和时间、没有是哪个成员：现在的主节点、主节点记得的前任能直接填上，其余按 term 对上内存里的日志（只有最近 1024 行；4.4 之前投票的成员不记投票请求），对不上时空着，上面 term 1 就是这样。
-- 这些情况会在最后提示：最近一次是联系不上主节点才选举的；当选后 10 秒以上才能 `w: 'majority'` 写；因为看不到主节点、优先级抢主、追数据时被抢而选举过；当选后追数据没完成（旧主节点上没同步出去的写入会回滚）；当主节点时被更高的 term 赶下来；24 小时内换了 3 次以上主（不算副本集建好后的第一次）；连的不是主节点（最近一次选举的详情只在主节点上有）。
-- 只适用于副本集；单机、mongos 上只打印一行说明。仲裁节点没有 oplog，看不到换主历史。配置里的选举超时、优先级看 `mt.rsconf()`。
+- 按原因分的次数只算这个成员自己发起的，重启后清零。`electionTimeout` 里也包括副本集刚建好、整个副本集重启时的那次（上面 `db1` 的 1 次就是建好时那次），所以要对照换主记录和当时的日志看。
+- 换主记录默认不查。查的时候只扫最近 `hours` 小时（默认 24）的 oplog：`find` 带 `ts` 下限、从旧往新扫，服务端直接跳到起点（4.4 起自动这样做，3.6～4.2 带 `oplogReplay`），实测 20 万条的 oplog 只看最近 2 万条时也只扫这 2 万条。`hours: 0` 扫整个 oplog（没有能用的索引），oplog 很大时到从节点上看（oplog 一样）。都带 `maxTimeMS`（默认 10 秒），超时什么都不列出；要看的范围比 oplog 窗口长时提示 oplog 从什么时候开始。
+- 这里只有成功当选的那一条：没选上的选举、预选、退位后没人当选、配置变更都不在 oplog 里（这个成员没选上的次数看 `called` / `successful`），被回滚掉的那一条也没有，所以叫“换主”而不是“选举历史”。`term` 是当前任期，每轮正式选举加 1（失败的也算，预选不算），不能拿它当换主次数。
+- oplog 里只有 term 和时间、没有是哪个成员：现在的主节点、主节点记得的前任能直接填上，其余按 term 对上内存里的日志（只有最近 1024 行；4.4 之前投票的成员不记投票请求），对不上时空着，上面 term 1 就是这样。
+- 这些情况会在最后提示：最近一次是联系不上主节点才选举的；当选后 10 秒以上才能 `w: 'majority'` 写；因为看不到主节点、优先级抢主、追数据时被抢而选举过；当选后追数据没完成（旧主节点上没同步出去的写入可能被回滚，有没有真的回滚要看那个成员日志里的 rollback）；当主节点时被更高的 term 赶下来；24 小时内换了 3 次以上主（不算副本集建好后的第一次）；连的不是主节点（最近一次选举的详情只在主节点上有）。
+- 只适用于副本集；单机、mongos 上只打印一行说明。仲裁节点没有 oplog，看不到换主记录。配置里的选举超时、优先级看 `mt.rsconf()`。
 
 ### mt.concern()：读写关注的各层
 

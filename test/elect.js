@@ -16,13 +16,15 @@ var me = rs.status().members.filter(function (x) { return x.self; })[0].name;
 var other = rs.conf().members.filter(function (x) { return !x.arbiterOnly && !x.hidden && x.host !== me; })[0].host;
 
 // 最近一次选举是这个成员抢回主节点；前任是另一个数据成员
+// 抢主次数至少 1：副本集建好时如果是另一个数据成员先当选，这个成员当时就已经抢过一次主了
 run('elections: priority takeover', function () {
   var out = capOut(function () { mt.elections({ showCmd: false }); });
   print(out);
-}, ['primary: ' + me, 'reason: priorityTakeover — 优先级比主节点高，追上数据后抢主', 'priorPrimary: ' + other,
-  '| priorityTakeover |      1 |          1 |', '注意：优先级高的成员追上后又抢了 1 次主']);
+  var pt = /\| priorityTakeover \| +(\d+) \| +(\d+) \|/.exec(out), n = pt ? +pt[2] : 0;
+  print(pt && n >= 1 && +pt[1] === n && out.indexOf('注意：优先级高的成员追上后又抢了 ' + n + ' 次主') >= 0 ? 'takeovers counted' : 'priorityTakeover row: ' + (pt && pt[0]));
+}, ['primary: ' + me, 'reason: priorityTakeover — 优先级比主节点高，追上数据后抢主', 'priorPrimary: ' + other, 'takeovers counted']);
 
-// 换主历史：新的在前，最新一任是这个成员（现在的主节点），前一任是另一个数据成员（主节点记得的前任）
+// 换主记录（默认最近 24 小时）：新的在前，最新一任是这个成员（现在的主节点），前一任是另一个数据成员（主节点记得的前任）
 run('elections: history', function () {
   var out = capOut(function () { mt.elections({ history: true, showCmd: false }); });
   var rows = out.split('\n').filter(function (l) { return /^\| \d{4}-/.test(l); });
