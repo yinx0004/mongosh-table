@@ -28,8 +28,9 @@ run('elections: priority takeover', function () {
 run('elections: history', function () {
   var out = capOut(function () { mt.elections({ history: true, showCmd: false }); });
   var rows = out.split('\n').filter(function (l) { return /^\| \d{4}-/.test(l); });
-  print(rows.length >= 3 && rows[0].indexOf(' ' + me + ' ') > 0 && /（至今）/.test(rows[0]) ? 'newest is me' : out);
-  print(rows.length >= 3 && rows[1].indexOf(' ' + other + ' ') > 0 ? 'before me: other' : out);
-}, ['newest is me', 'before me: other']);
+  print(rows.length >= 3 && rows[0].indexOf(' ' + me + ' | status ') > 0 && /（至今）/.test(rows[0]) ? 'newest is me' : out);
+  print(rows.length >= 3 && rows[1].indexOf(' ' + other + ' | priorPrimary ') > 0 ? 'before me: other' : out);
+  print(/\| untilNext +\|/.test(out) && out.indexOf('| held') < 0 ? 'untilNext' : out);
+}, ['newest is me', 'before me: other', 'untilNext']);
 
 finish();
