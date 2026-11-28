@@ -1,13 +1,15 @@
-// MongoTab read-only audit, part 1: run every mt command once on a connection
-// with appName mongotab-audit. test/run.sh turns on logging of every command
-// first (command log verbosity 1, MongoDB 4.4+), then test/audit-check.js reads
-// the server log and checks that everything sent with that appName is read-only.
+// MongoTab read-only audit, part 1: run every mt command once, from a client
+// container of its own. test/run.sh turns on logging of every command first
+// (command log verbosity 1), then test/audit-check.js reads the server log and
+// checks that everything this client sent is read-only. The "audit client" line
+// is this client's address as the server sees it, which test/run.sh passes on.
 // Errors are fine here (some commands only work on a mongos, for example): only
 // what reaches the server matters. The data in mtaudit comes from test/run.sh,
 // on another connection.
 load('test/lib.js');
 load('mongotab.js');
 
+print('audit client: ' + db.adminCommand({ whatsmyuri: 1 }).you);
 print('### env server=' + db.version() + ' shell=' + SHELL + ' (read-only audit: commands)');
 mt.config({ lang: 'zh', tz: 'UTC' });
 var ad = db.getSiblingDB('mtaudit');

@@ -79,18 +79,25 @@ docker run -d --name "$name-builder" --network "$net" --entrypoint "$shell" "$cl
 
 msh test/compat.js
 
-# Read-only audit (MongoDB 4.4+, whose JSON log names the client's appName): log
-# every command, run every mt command on a connection with appName
-# mongotab-audit (test/audit.js), then check that the log shows nothing but
-# read-only commands from it (test/audit-check.js). Older servers are skipped.
-if [ "$(msh --eval "var v = db.version().split('.').map(Number); print(v[0] > 4 || (v[0] === 4 && v[1] >= 4))" | tail -n 1)" = true ]; then
-  msh test/audit-data.js >/dev/null
-  case "$uri" in *\?*) auri="$uri&appName=mongotab-audit" ;; *) auri="$uri?appName=mongotab-audit" ;; esac
-  msh --eval "db.setLogLevel(1, 'command')" >/dev/null
-  docker run --rm -i --network "$net" -v "$root":/w -w /w --entrypoint "$shell" "$client" --quiet "$auri" test/audit.js
-  msh --eval "db.setLogLevel(0, 'command')" >/dev/null
-  mkdir -p "$root/tmp"
-  log="tmp/audit-$name.log"
-  docker logs "$name" > "$root/$log" 2>&1
-  docker run --rm -i -e AUDIT_LOG="/w/$log" -v "$root":/w -w /w --entrypoint "$shell" "$client" --quiet --nodb test/audit-check.js
-fi
+# Read-only audit: log every command (command log level 1), run every mt command
+# from its own client container (test/audit.js), then check that the server log
+# shows nothing but read-only commands from that client (test/audit-check.js).
+# The audit's connections are the ones the server accepted from the audit
+# client's address between two readings of serverStatus().localTime (the clock
+# the log uses): the 3.6 shell does not send the appName in the connection
+# string. The readings run in shells of their own, apart from the setLogLevel
+# calls, so a shell that happens to get the same address adds only reads.
+msh test/audit-data.js >/dev/null
+case "$uri" in *\?*) auri="$uri&appName=mongotab-audit" ;; *) auri="$uri?appName=mongotab-audit" ;; esac
+msh --eval "db.setLogLevel(1, 'command')" >/dev/null
+from=$(msh --eval "print(db.serverStatus().localTime.toISOString())" | tail -n 1)
+aout=$(docker run --rm -i --network "$net" -v "$root":/w -w /w --entrypoint "$shell" "$client" --quiet "$auri" test/audit.js)
+echo "$aout"
+to=$(msh --eval "print(db.serverStatus().localTime.toISOString())" | tail -n 1)
+msh --eval "db.setLogLevel(0, 'command')" >/dev/null
+ip=$(echo "$aout" | sed -n 's/^audit client: \([0-9.]*\):.*/\1/p')
+mkdir -p "$root/tmp"
+log="tmp/audit-$name.log"
+docker logs "$name" > "$root/$log" 2>&1
+docker run --rm -i -v "$root":/w -w /w --entrypoint "$shell" "$client" --quiet --nodb \
+  --eval "var AUDIT = {log: '/w/$log', from: '$from', to: '$to', ip: '$ip'}" test/audit-check.js
