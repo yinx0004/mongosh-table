@@ -2026,6 +2026,7 @@ It runs `$collStats` for each collection (views are skipped) and sorts by `disk 
 | Column | Meaning |
 |---|---|
 | `count` | Number of documents |
+| `avgDoc` | Average logical size of a document: `logical / count` (`avgObjSize`). Through mongos it is the shards' totals divided, so weighted by count; empty for an empty collection |
 | `logical` | Logical data size (uncompressed BSON) |
 | `disk` | Disk space used by the data (compressed) |
 | `indexes` | Number of indexes |
@@ -2034,13 +2035,13 @@ It runs `$collStats` for each collection (views are skipped) and sorts by `disk 
 ```
 > mt.colls()
 -- db.getSiblingDB('shop').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}])
-+----------------+-------+---------+----------+---------+-----------+
-| name           | count | logical | disk     | indexes | indexDisk |
-+----------------+-------+---------+----------+---------+-----------+
-| orders         | 20000 |  3.6 MB | 964.0 KB |       4 |    1.2 MB |
-| users          |     2 |    68 B |  20.0 KB |       1 |   20.0 KB |
-| system.profile |     5 |  7.0 KB |   4.0 KB |       0 |       0 B |
-+----------------+-------+---------+----------+---------+-----------+
++----------------+-------+--------+---------+----------+---------+-----------+
+| name           | count | avgDoc | logical | disk     | indexes | indexDisk |
++----------------+-------+--------+---------+----------+---------+-----------+
+| orders         | 20000 |  189 B |  3.6 MB | 964.0 KB |       4 |    1.2 MB |
+| users          |     2 |   34 B |    68 B |  20.0 KB |       1 |   20.0 KB |
+| system.profile |     5 | 1.4 KB |  7.0 KB |   4.0 KB |       0 |       0 B |
++----------------+-------+--------+---------+----------+---------+-----------+
 3 rows in set
 ```
 
@@ -2054,7 +2055,7 @@ mt.desc('shop.orders', {sample: 10000})    // sample more to catch rare fields
 mt.desc(db.orders, {depth: 1})             // top-level fields only
 ```
 
-The lines on top describe the collection: type (collection / view / timeseries / capped / clustered), document count, documents sampled, validator, collation and indexes.
+The lines on top describe the collection: type (collection / view / timeseries / capped / clustered), document count, `avgDoc` (average document size of the whole collection, from `$collStats`), documents sampled, `sampledAvg` / `sampledBytes` (average size of the sampled documents and how much was read in all), validator, collation and indexes. The collection's and the sample's averages are listed apart and never mixed.
 
 | Column | Meaning |
 |---|---|
@@ -2066,33 +2067,37 @@ The lines on top describe the collection: type (collection / view / timeseries /
 ```
 > mt.desc('orders')
 -- db.getSiblingDB('shop').getCollection('orders').aggregate([{$sample: {size: 1000}}]); getCollectionInfos; getIndexes
-     ns: shop.orders
-   type: collection
-  count: 3000
-sampled: 1000
-indexes: _id_, status_1_createdAt_-1, customer.name_1
+          ns: shop.orders
+        type: collection
+       count: 3000
+      avgDoc: 181 B
+     sampled: 1000
+  sampledAvg: 181 B
+sampledBytes: 176.6 KB
+     indexes: _id_, status_1_createdAt_-1, customer.name_1
 +---------------+-----------------------+---------+--------------------------+
 | field         | types                 | present | example                  |
 +---------------+-----------------------+---------+--------------------------+
-| _id           | objectId              |  100.0% | 6b031c4a21ee270d468cdb85 |
-| orderNo       | string                |  100.0% | SO380                    |
-| status        | string                |  100.0% | SHIPPED                  |
-| amount        | decimal 87%, null 14% |  100.0% | 380.5                    |
+| _id           | objectId              |  100.0% | 6b0acb548d87e4c905d6e999 |
+| orderNo       | string                |  100.0% | SO643                    |
+| status        | string                |  100.0% | NEW                      |
+| amount        | decimal 89%, null 11% |  100.0% | 43.5                     |
 | customer      | object                |  100.0% |                          |
-| customer.name | string                |  100.0% | c30                      |
+| customer.name | string                |  100.0% | c3                       |
 | customer.vip  | bool                  |  100.0% | false                    |
 | items         | array<object>         |  100.0% |                          |
-| items.sku     | string                |  100.0% | A0                       |
-| items.n       | number                |  100.0% | 3                        |
-| createdAt     | date                  |  100.0% | 2024-01-01 06:20:00      |
-| coupon        | string                |   27.9% | VIP0                     |
-| tags          | array<string>         |   10.3% | [x, y]                   |
+| items.sku     | string                |  100.0% | A3                       |
+| items.n       | number                |  100.0% | 2                        |
+| createdAt     | date                  |  100.0% | 2024-01-27 19:00:00      |
+| coupon        | string                |   23.7% | VIP0                     |
+| tags          | array<string>         |    9.3% | [x, y]                   |
 +---------------+-----------------------+---------+--------------------------+
 13 rows in set
 ```
 
 - Plain collections are sampled with `$sample`, which reads random positions instead of scanning; rare fields may be missed, so raise `sample`.
-- When the sample is over 5% of a collection with more than 100,000 documents, `$sample` scans and sorts the whole collection, so it does not run unless you pass `{force: true}`.
+- When the sample is 5% or more of the collection, `$sample` scans and sorts the whole collection; if the collection has more than 100,000 documents or more than 64 MB of data, it does not run, suggests a count under 5%, and needs `{force: true}` to go ahead. The count alone is not enough: sampling 1000 of 3000 documents of 1 MB scans and sorts 3 GB (and fails on 3.6, past the 100 MB sort memory limit).
+- Sampled documents are read one by one and reading stops at `maxBytes` (64 MB by default, `0` = no limit); the note under the table says how many were analysed: with big documents 1000 can be several GB to read on the server, send over the network and keep in the shell's memory. Measured with 3000 documents of 1 MB: by default it stopped at 64.9 MB (68 documents).
 - On views and time series collections `$sample` scans everything (measured on 7.0: sampling 1000 from a view read all 50,000 underlying documents, and a time series collection read all 833,000 buckets), so the first `sample` documents are read instead, with a note that they are not random. When a view's pipeline (or a view it is built on) has `$group`, `$sort` or another stage that needs all its input, even the first few documents need the whole pipeline, so it does not run and suggests `{force: true}` or the underlying collection.
 - Fields are ordered by their average position in the documents, children right after their parent.
 - `number` covers int and double (the shell cannot tell them apart); `long` and `decimal` are listed separately. A field with several types (like `amount` above, null in 13% of documents) is often a hint of a data problem.

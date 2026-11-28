@@ -2028,6 +2028,7 @@ mt.colls('shop')    // 指定库，也可以传 db 对象
 | 列 | 说明 |
 |---|---|
 | `count` | 文档数 |
+| `avgDoc` | 平均每条文档的逻辑大小：`logical / count`（即 `avgObjSize`）。经 mongos 时是各分片加起来再除，按条数加权；空集合留空 |
 | `logical` | 数据的逻辑大小（未压缩的 BSON） |
 | `disk` | 数据占的磁盘空间（压缩后） |
 | `indexes` | 索引个数 |
@@ -2036,13 +2037,13 @@ mt.colls('shop')    // 指定库，也可以传 db 对象
 ```
 > mt.colls()
 -- db.getSiblingDB('shop').getCollectionInfos(); each: aggregate([{$collStats: {storageStats: {}}}])
-+----------------+-------+---------+----------+---------+-----------+
-| name           | count | logical | disk     | indexes | indexDisk |
-+----------------+-------+---------+----------+---------+-----------+
-| orders         | 20000 |  3.6 MB | 960.0 KB |       4 |    1.2 MB |
-| users          |     2 |    68 B |  20.0 KB |       1 |   20.0 KB |
-| system.profile |     5 |  7.0 KB |   4.0 KB |       0 |       0 B |
-+----------------+-------+---------+----------+---------+-----------+
++----------------+-------+--------+---------+----------+---------+-----------+
+| name           | count | avgDoc | logical | disk     | indexes | indexDisk |
++----------------+-------+--------+---------+----------+---------+-----------+
+| orders         | 20000 |  189 B |  3.6 MB | 960.0 KB |       4 |    1.2 MB |
+| users          |     2 |   34 B |    68 B |  20.0 KB |       1 |   20.0 KB |
+| system.profile |     5 | 1.4 KB |  7.0 KB |   4.0 KB |       0 |       0 B |
++----------------+-------+--------+---------+----------+---------+-----------+
 3 rows in set
 ```
 
@@ -2056,7 +2057,7 @@ mt.desc('shop.orders', {sample: 10000})    // 多抽一些，少见的字段也�
 mt.desc(db.orders, {depth: 1})             // 只看第一层字段
 ```
 
-上面几行是集合信息：类型（collection / view / timeseries / capped / clustered）、文档总数、抽样数、校验规则、collation、索引。
+上面几行是集合信息：类型（collection / view / timeseries / capped / clustered）、文档总数、`avgDoc`（全集合的平均文档大小，来自 `$collStats`）、抽样数、`sampledAvg` / `sampledBytes`（抽到的文档平均多大、一共读了多少）、校验规则、collation、索引。全集合的和抽样的平均大小分开列，不混用。
 
 | 列 | 说明 |
 |---|---|
@@ -2068,33 +2069,37 @@ mt.desc(db.orders, {depth: 1})             // 只看第一层字段
 ```
 > mt.desc('orders')
 -- db.getSiblingDB('shop').getCollection('orders').aggregate([{$sample: {size: 1000}}]); getCollectionInfos; getIndexes
-     ns: shop.orders
-   type: collection
-  count: 3000
-sampled: 1000
-indexes: _id_, status_1_createdAt_-1, customer.name_1
+          ns: shop.orders
+        type: collection
+       count: 3000
+      avgDoc: 181 B
+     sampled: 1000
+  sampledAvg: 181 B
+sampledBytes: 176.4 KB
+     indexes: _id_, status_1_createdAt_-1, customer.name_1
 +---------------+-----------------------+---------+--------------------------+
 | field         | types                 | present | example                  |
 +---------------+-----------------------+---------+--------------------------+
-| _id           | objectId              |  100.0% | 6b031c3a3a00992f040cb256 |
-| orderNo       | string                |  100.0% | SO2602                   |
+| _id           | objectId              |  100.0% | 6b0acb548d87e4c905d6e9a4 |
+| orderNo       | string                |  100.0% | SO654                    |
 | status        | string                |  100.0% | PAID                     |
-| amount        | decimal 87%, null 13% |  100.0% | 102.5                    |
+| amount        | decimal 88%, null 12% |  100.0% | 54.5                     |
 | customer      | object                |  100.0% |                          |
-| customer.name | string                |  100.0% | c2                       |
+| customer.name | string                |  100.0% | c14                      |
 | customer.vip  | bool                  |  100.0% | false                    |
 | items         | array<object>         |  100.0% |                          |
-| items.sku     | string                |  100.0% | A2                       |
-| items.n       | number                |  100.0% | 2                        |
-| createdAt     | date                  |  100.0% | 2024-01-02 19:22:00      |
-| coupon        | string                |   25.2% | VIP0                     |
-| tags          | array<string>         |    9.4% | [x, y]                   |
+| items.sku     | string                |  100.0% | A4                       |
+| items.n       | number                |  100.0% | 1                        |
+| createdAt     | date                  |  100.0% | 2024-01-28 06:00:00      |
+| coupon        | string                |   23.8% | VIP0                     |
+| tags          | array<string>         |    8.8% | [x, y]                   |
 +---------------+-----------------------+---------+--------------------------+
 13 rows in set
 ```
 
 - 普通集合用 `$sample` 随机抽样（读随机位置，不扫全表），很少出现的字段可能抽不到，可以调大 `sample`。
-- 要抽的超过集合的 5%、集合又超过 10 万条时，`$sample` 会扫描整个集合再随机排序，所以不执行，加 `{force: true}` 才抽。
+- 要抽的不少于集合的 5% 时，`$sample` 会扫描整个集合再随机排序；集合超过 10 万条或数据超过 64 MB 时不执行，提示一个少于 5% 的条数，加 `{force: true}` 才照样抽。只看条数不够：3000 条 1 MB 的文档抽 1000 条，就要扫 3 GB 再排序（3.6 上排序超过 100 MB 内存直接报错）。
+- 抽到的文档一条条读，累计到 `maxBytes`（默认 64 MB，`0` = 不限）就停，表下写明实际分析了多少条：文档很大时 1000 条可能就是几个 GB，要从服务器读出来、传回来、放在 shell 的内存里。实测 3000 条 1 MB 的文档，默认读到 64.9 MB（68 条）就停。
 - 视图和时序集合上 `$sample` 会全表扫描（实测 7.0：视图抽 1000 条扫了底层 5 万条，时序集合扫了全部 83 万个桶），所以默认改成取前 `sample` 条，表下注明不是随机抽样。视图的管道里（包括它依赖的视图）有 `$group`、`$sort` 等要读完全部数据的阶段时，取前几条也要先跑完整条管道，所以不执行，提示加 `{force: true}` 或者看底层集合。
 - 字段按它在文档里的平均位置排，子字段紧跟在父字段后面。
 - `number` 是 int 和 double（shell 里分不出来），`long`、`decimal` 单独列出；同一个字段有多种类型（如上面 `amount` 有 13% 是 null）往往是数据问题的线索。
