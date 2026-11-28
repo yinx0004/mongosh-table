@@ -27,6 +27,7 @@ fi
 cleanup() {
   # -v: also remove the anonymous /data/db volume, or every run leaves one behind
   docker rm -f -v "$name" "$name-slow" "$name-writer" "$name-builder" >/dev/null 2>&1 || true
+  rm -f "$root/tmp/audit-$name.log"   # the server log saved for the read-only audit, also when it failed
   docker network rm "$net" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -77,3 +78,19 @@ docker run -d --name "$name-builder" --network "$net" --entrypoint "$shell" "$cl
   --eval "var d = db.getSiblingDB('mtbuild'); for (var i = 0; i < 1500 && !d.go.findOne(); i++) sleep(200); if (d.go.findOne()) d.c.createIndex({a: 1, b: 1}, {background: true})" >/dev/null
 
 msh test/compat.js
+
+# Read-only audit (MongoDB 4.4+, whose JSON log names the client's appName): log
+# every command, run every mt command on a connection with appName
+# mongotab-audit (test/audit.js), then check that the log shows nothing but
+# read-only commands from it (test/audit-check.js). Older servers are skipped.
+if [ "$(msh --eval "var v = db.version().split('.').map(Number); print(v[0] > 4 || (v[0] === 4 && v[1] >= 4))" | tail -n 1)" = true ]; then
+  msh test/audit-data.js >/dev/null
+  case "$uri" in *\?*) auri="$uri&appName=mongotab-audit" ;; *) auri="$uri?appName=mongotab-audit" ;; esac
+  msh --eval "db.setLogLevel(1, 'command')" >/dev/null
+  docker run --rm -i --network "$net" -v "$root":/w -w /w --entrypoint "$shell" "$client" --quiet "$auri" test/audit.js
+  msh --eval "db.setLogLevel(0, 'command')" >/dev/null
+  mkdir -p "$root/tmp"
+  log="tmp/audit-$name.log"
+  docker logs "$name" > "$root/$log" 2>&1
+  docker run --rm -i -e AUDIT_LOG="/w/$log" -v "$root":/w -w /w --entrypoint "$shell" "$client" --quiet --nodb test/audit-check.js
+fi
