@@ -171,16 +171,20 @@ run('mt.slow writes', function () {
   var wd = db.getSiblingDB('mtprofw'); wd.dropDatabase(); wd.c.insertOne({ a: 1, t: [] }); wd.c.createIndex({ t: 1 });
   wd.runCommand({ profile: 2 });
   wd.c.updateOne({ a: 1 }, { $inc: { n: 1 }, $push: { t: 5 } }); wd.c.insertOne({ a: 2 }); wd.c.deleteOne({ a: 2 });
+  // 一条超时失败的 update：服务端不记扫描数、修改数，要列出错误（4.0 起 errName，3.6 只有错误码）
+  try { wd.runCommand({ update: 'c', updates: [{ q: { $where: 'sleep(300) || true' }, u: { $set: { f: 1 } } }], maxTimeMS: 100 }); } catch (e) {}
   wd.runCommand({ profile: 0 });
-  var out = capOut(function () { mt.slow('mtprofw', { vertical: true, showCmd: false, cols: 'op,nreturned,nMatched,nModified,ninserted,ndeleted,keysInserted,keysDeleted,app' }); });
+  var out = capOut(function () { mt.slow('mtprofw', { vertical: true, showCmd: false, cols: 'op,error,nreturned,nMatched,nModified,ninserted,ndeleted,keysInserted,keysDeleted,app' }); });
   var rec = out.split(/\*+ \d+\. row \*+/), by = {};
-  rec.forEach(function (r) { var m = /op: (\w+)/.exec(r); if (m && !by[m[1]]) by[m[1]] = r; });
+  rec.forEach(function (r) { var m = /op: (\w+)/.exec(r); if (m && !by[m[1]] && !/error:/.test(r)) by[m[1]] = r; });   // 失败的那条另外看
   print(/nMatched: 1/.test(by.update || '') && /nModified: 1/.test(by.update || '') && /keysInserted: 1/.test(by.update || '') ? 'update counts' : out);
   print(/ninserted: 1/.test(by.insert || '') && /ndeleted: 1/.test(by.remove || '') && /keysDeleted: \d/.test(by.remove || '') ? 'insert / delete counts' : out);
   print(!/nreturned:/.test((by.update || '') + (by.insert || '') + (by.remove || '')) && !/: *\n/.test(out + '\n') ? 'no blank fields' : out);
   print(/app: \S/.test(out) ? 'app' : out);
+  var failed = capOut(function () { mt.slow('mtprofw', { vertical: true, showCmd: false, sort: 'ms', limit: 1, cols: 'op,error,keysExamined,nMatched' }); });
+  print(/op: update\n\s*error: (MaxTimeMSExpired|code 50): operation exceeded time limit/.test(failed) && !/keysExamined|nMatched/.test(failed) ? 'failed update error' : failed);
   wd.dropDatabase();
-}, ['update counts', 'insert / delete counts', 'no blank fields', 'app']);
+}, ['update counts', 'insert / delete counts', 'no blank fields', 'app', 'failed update error']);
 // 总数只在 {count: true} 时算（平时多取一条看还有没有更多）
 run('mt.slow count', function () { mt.slow('mtprof', { limit: 1, cols: 'command', count: true, showCmd: false }); }, ['(共 2 行，只显示前 1 行)']);
 run('mt.slow sort asc', function () { mt.slow('mtprof', { sort: 'asc', limit: 1, cols: 'command' }); }, ['.sort({ts: 1})', '{find: c, filter: {a: 1}']);

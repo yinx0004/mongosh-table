@@ -54,7 +54,7 @@ scp mongotab.js user@jumphost:~/
 
 These links fetch the latest release; older versions are on the [Releases](https://github.com/yinx0004/mongosh-table/releases) page. For the development version on `main`, use `https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js` instead.
 
-In production, prefer a fixed version, which is easier to verify and to roll back: replace `latest/download` in the link with a version such as `download/v0.4.0`. Each release page lists the SHA-256 of `mongotab.js`; check the download with `shasum -a 256 mongotab.js` (or `sha256sum` on Linux, `Get-FileHash mongotab.js` in PowerShell).
+In production, prefer a fixed version, which is easier to verify and to roll back: replace `latest/download` in the link with a version such as `download/v0.4.1`. Each release page lists the SHA-256 of `mongotab.js`; check the download with `shasum -a 256 mongotab.js` (or `sha256sum` on Linux, `Get-FileHash mongotab.js` in PowerShell).
 
 ## Loading
 
@@ -695,6 +695,7 @@ The header shows the profiler settings:
 | `ms` | Duration in milliseconds (`millis`) |
 | `op` | `query`, `update`, `insert`, `remove`, `command`... |
 | `ns` | database.collection |
+| `error` | The error when the operation failed, e.g. `MaxTimeMSExpired: operation exceeded time limit` (3.6 gives only the code: `code 50: ...`). The server records no scan or modify counts for a failed operation, so such a row has only the time, waits and error |
 | `app` | The client's appName, to tell which program sent it |
 | `plan` | Plan summary, e.g. `COLLSCAN`, `IXSCAN { status: 1 }` |
 | `keysExamined` / `docsExamined` | Index keys and documents scanned |

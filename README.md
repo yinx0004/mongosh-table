@@ -54,7 +54,7 @@ scp mongotab.js user@jumphost:~/
 
 以上链接下载的是最新正式版，历史版本见 [Releases](https://github.com/yinx0004/mongosh-table/releases)。
 
-生产上建议用固定的版本，方便核对和回退：把链接里的 `latest/download` 换成 `download/v0.4.0` 这样的版本号。每个版本页面上都列了 `mongotab.js` 的 SHA-256，下载后可以核对：`shasum -a 256 mongotab.js`（Linux 上也可以用 `sha256sum`，PowerShell 用 `Get-FileHash mongotab.js`）。
+生产上建议用固定的版本，方便核对和回退：把链接里的 `latest/download` 换成 `download/v0.4.1` 这样的版本号。每个版本页面上都列了 `mongotab.js` 的 SHA-256，下载后可以核对：`shasum -a 256 mongotab.js`（Linux 上也可以用 `sha256sum`，PowerShell 用 `Get-FileHash mongotab.js`）。
 
 想用 `main` 上的开发版，把链接换成 `https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js`。
 
@@ -697,6 +697,7 @@ mt.slow('shop', {sort: 'ms'})       // 最慢的在前
 | `ms` | 耗时（毫秒），即 `millis` |
 | `op` | `query`、`update`、`insert`、`remove`、`command`... |
 | `ns` | 库.集合 |
+| `error` | 操作失败时的错误，如 `MaxTimeMSExpired: operation exceeded time limit`（3.6 只有错误码：`code 50: ...`）。失败的操作服务端不记扫描数、修改数，这样的行只有耗时、等待和错误 |
 | `app` | 客户端的 appName，看是哪个程序发的 |
 | `plan` | 执行计划摘要，如 `COLLSCAN`、`IXSCAN { status: 1 }` |
 | `keysExamined` / `docsExamined` | 扫描了多少索引键、多少文档 |
