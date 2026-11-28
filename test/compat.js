@@ -163,7 +163,7 @@ pdb.c.insert({ a: 1 });
 pdb.runCommand({ profile: 1, slowms: 0 });
 pdb.c.find({ a: 1 }).toArray();
 pdb.c.find({ $where: 'sleep(50) || true' }).toArray();   // 更慢、更晚的一条
-run('mt.slow', function () { mt.slow('mtprof', { table: true }); }, ['-- db.getSiblingDB(\'mtprof\').system.profile.find({}).sort({ts: -1})', 'level: 1', 'slowms: 0', '| mtprof.c ', '| ts ']);
+run('mt.slow', function () { mt.slow('mtprof', { table: true }); }, ['-- db.getSiblingDB(\'mtprof\').system.profile.find({}).sort({$natural: -1})', 'level: 1', 'slowms: 0', '| mtprof.c ', '| ts ']);
 run('mt.slow ns filter', function () { mt.slow(pdb, { ns: 'c', cols: 'ns,op,docsExamined,command', showCmd: false }); }, ['| mtprof.c | query ', '{find: c, filter: {a: 1}']);
 run('mt.slow sort desc', function () { mt.slow('mtprof', { limit: 1, cols: 'command' }); }, ['$where', '只列了前 1 条，还有更多：{limit: 0} 全部列出，{count: true} 算出总数']);
 // 写操作：匹配、修改、插入、删除、索引键的增删都列出；每行只有这条操作有的字段，竖排时不出现空行（如写操作没有 nreturned）
@@ -187,7 +187,7 @@ run('mt.slow writes', function () {
 }, ['update counts', 'insert / delete counts', 'no blank fields', 'app', 'failed update error']);
 // 总数只在 {count: true} 时算（平时多取一条看还有没有更多）
 run('mt.slow count', function () { mt.slow('mtprof', { limit: 1, cols: 'command', count: true, showCmd: false }); }, ['(共 2 行，只显示前 1 行)']);
-run('mt.slow sort asc', function () { mt.slow('mtprof', { sort: 'asc', limit: 1, cols: 'command' }); }, ['.sort({ts: 1})', '{find: c, filter: {a: 1}']);
+run('mt.slow sort asc', function () { mt.slow('mtprof', { sort: 'asc', limit: 1, cols: 'command' }); }, ['.sort({$natural: 1})', '{find: c, filter: {a: 1}']);
 run('mt.slow sort ms', function () { mt.slow('mtprof', { sort: 'ms', limit: 1, cols: 'ms,command' }); }, ['.sort({millis: -1, ts: -1})', '$where']);
 run('mt.slow sort doc', function () { mt.slow('mtprof', { sort: { millis: 1 }, limit: 1, cols: 'command' }); }, ['.sort({millis: 1})', '{find: c, filter: {a: 1}']);
 run('mt.slow bad sort', function () { mt.slow('mtprof', { sort: 'x' }); }, ["mongotab: mt.slow() 的 sort 可以是 'desc'"]);
