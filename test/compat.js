@@ -103,7 +103,7 @@ run('mt.help each command', function () {
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
 run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'mem'、'vars'"]);
-run('mt.ps', function () { mt.ps(); }, ["-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true}}, {$match: {active: true}}, {$sort: {secs_running: -1}}, {$limit: 51}])，去掉 $currentOp 自己、内部线程和驱动心跳的长轮询"]);
+run('mt.ps', function () { mt.ps(); }, ["-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true}}, {$match: {active: true}}, {$sort: {secs_running: -1}}, {$limit: 21}])，去掉 $currentOp 自己、内部线程和驱动心跳的长轮询"]);
 run('mt.ps slow query', function () {
   for (var i = 0; i < 20 && !db.currentOp({ ns: 'mtslow.slow' }).inprog.length; i++) sleep(500);
   mt.ps({ ns: 'mtslow.slow' });
@@ -129,6 +129,9 @@ run('mt.ps sort opid', function () { var v = psCol('opid', { sort: 'opid' }); pr
 run('mt.ps sort doc', function () { var v = psCol('opid', { sort: { opid: -1 } }); print(orderOk(v, -1) ? 'order ok' : 'order bad ' + v); }, ['order ok']);
 run('mt.ps bad sort', function () { mt.ps({ sort: 'x' }); }, ["mongotab: mt.ps() 的 sort 可以是 'desc'"]);
 // 条数在服务端截断（多取一条看还有没有）；按服务端排不了的列排时全部取回来，知道总数
+// 默认最多列 20 个（多取一条），这一次给了 limit 就按它；不跟 mt.config() 的 limit
+run('mt.ps limit 50', function () { mt.ps({ limit: 50 }); }, ['{$sort: {secs_running: -1}}, {$limit: 51}]']);
+run('mt.ps ignores config limit', function () { mt.config({ limit: 5 }); try { mt.ps(); } finally { mt.config({ limit: 50 }); } }, ['{$sort: {secs_running: -1}}, {$limit: 21}]']);
 run('mt.ps more', function () { mt.ps({ all: true, limit: 1, cols: 'opid' }); }, ['{$limit: 2}]', '1 row in set', '只列了前 1 个，还有更多：{limit: 0} 全部列出']);
 run('mt.ps sort client-side', function () { mt.ps({ all: true, sort: { client: 1 }, limit: 1, cols: 'opid' }); }, ["{$currentOp: {allUsers: true, idleConnections: true}}])，去掉 $currentOp 自己", '1 row in set  (共 ']);
 run('mt.ps filters on server', function () { mt.ps({ secs: 5, ns: 'mtslow' }); }, ['{$match: {active: true, secs_running: {$gte: 5}, $or: [{ns: mtslow}, {ns: {$regex: ^mtslow\\.}}]}}']);
@@ -192,6 +195,8 @@ run('mt.explainLog log row', function () { mt.log(/Zed/, { n: 1, cols: '#,msg' }
     .concat(V44 ? ['durationMillis: '] : []));
 run('mt.slow ms filter', function () { mt.slow('mtprof', { ms: 100000000 }); }, ['.find({millis: {$gte: 100000000}})', 'Empty set']);
 // mt.profile：mtprof 开着 level 1、slowms 0
+// 4.4 之前 mt.profile() 先看有没有占着库写锁的操作和多文档事务。test/run.sh 的 writer 用 mongosh 时一直在做可重试写入，
+// 它们在 $currentOp 里也带 transaction（只有 txnNumber，没有 autocommit: false），不能当成事务，这几个测试照常读出 level
 run('mt.profile', function () {
   var out = capOut(function () { mt.profile('mtprof'); });
   print(out);

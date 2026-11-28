@@ -427,7 +427,7 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
   ns     库或 库.集合
   all    true：同 currentOp 的 $all，包括空闲连接和内部线程
   sort   'desc' / 'asc' / 'opid' / 按列名的排序文档
-  limit  最多列几个，默认 50（mt.config() 可改），0 = 全部
+  limit  最多列几个，默认 20（不跟 mt.config() 的 limit），0 = 全部
 
 输出：
   opid          操作 ID，db.killOp(opid) 用它
@@ -441,7 +441,7 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
 
 说明：
   - 执行的是 $currentOp 聚合，分批返回；不用 currentOp 命令，因为它的结果装在一个文档里，连接、会话很多时超过 16MB 就失败
-  - 过滤（active、secs、ns）、排序和条数都在服务端做，只传回要显示的那些：最多 limit 条（默认 50），多取一条看还有没有更多，有就在表下写明（不知道总数）；{limit: 0} 全部取回。按 secs、opid、ns 以外的列排序时全部取回来在 shell 里排
+  - 过滤（active、secs、ns）、排序和条数都在服务端做，只传回要显示的那些：最多 limit 条（默认 20），多取一条看还有没有更多，有就在表下写明（不知道总数）；{limit: 0} 全部取回。按 secs、opid、ns 以外的列排序时全部取回来在 shell 里排
   - $currentOp 不用读写票据：票据用完、别的命令都在排队时 mt.ps() 照样能用（实测 4.4～8.0）
   - 默认不显示空闲连接、内部线程、驱动的心跳长轮询和 mt.ps() 自己
 
@@ -460,7 +460,7 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
   - 读票据用完时还能用的：`$currentOp`、`serverStatus`、`replSetGetStatus`、`top`、`lockInfo`、`getLog`、`getParameter` 不用票据（实测 4.4～8.0），所以 `mt.ps()`、`mt.locks()`、`mt.conns()`、`mt.status()`、`mt.engine()`、`mt.repl()` 照常出结果，可以用来看是谁占着票据。
   - 逐个集合查的命令（`mt.colls()`、`mt.frag()`、`mt.cache()`、`mt.ttl()`、`mt.unusedIdx()`、`mt.dupIdx()`、`mt.latency()`、`mt.check()`）默认最多查 1000 个集合、30 秒（`maxColls`、`budgetMs`；`mt.config()` 或这一次的选项可以改，`0` = 不限），没查全时表下注明“只查了前 N/M 个集合”。
   - 打开的文件和连接快到上限（`maxOpenFiles`）的 80% 时也会停，这一条不能关。多久看一次按离 80% 还剩多少定：一个集合最多打开 65 个文件（集合本身和最多 64 个索引），余量不到 65 个就停，所以 MongoTab 自己不会把它推过 80%（别的连接、别的操作同时打开文件时仍可能越过），余量大时很少看。拿不到上限或打开文件数时（不是 Linux、连的是 mongos），表下会写明这层保护不可用。原因是：`$collStats` 会让 WiredTiger 打开平时关着的集合和索引文件，实测 3000 个集合时，`mt.cache()` 让 mongod 打开的文件从 48 个涨到 9051 个，集合再多可能超过上限（Too many open files）。
-  - 查运行中的操作（`mt.ps()`、`mt.conns()`、`mt.locks()`、`mt.txns()`、`mt.builds()` 等）用 `$currentOp` 聚合分批取：`currentOp` 命令的结果装在一个文档里，连接、会话很多时超过 16MB 就失败。`mt.ps()` 的过滤、排序和条数在服务端做，连接风暴时也只传回要显示的几十条。
+  - 查运行中的操作（`mt.ps()`、`mt.conns()`、`mt.locks()`、`mt.txns()`、`mt.builds()` 等）用 `$currentOp` 聚合分批取：`currentOp` 命令的结果装在一个文档里，连接、会话很多时超过 16MB 就失败。`mt.ps()` 的过滤、排序和条数在服务端做，连接风暴时也只传回要显示的几十条（默认 20 条）。
   - `mt.desc()` 在视图和时序集合上不做会全表扫描的 `$sample`，见 [mt.desc()](#mtdesc集合的字段结构)。
 - **采样两次的命令**（`mt.status()`、`mt.engine()`、`mt.qstats()`、`mt.top()`、`mt.latency()`、`mt.flow()`）：两次之间连到了别的节点（切主后 shell 重连到新的主节点），或者 mongod 重启过（`uptime` 比第一次的加上中间过的时间少），计数器不能相减，这时改用第二次取到的启动以来累计值，开头写明原因，不会算出负数或者离谱的速率。逐集合的计数变小了（集合删掉重建过）时，这些集合不列出，表下写明。老的 mongo shell 在 mongod 重启后不会自动重连，这时直接报网络错误。
 - **大小分逻辑和磁盘**：列名里带 `logical` 的是未压缩的数据量（BSON 大小），带 `disk` 的是磁盘上实际占的（WiredTiger 压缩后），带 `cached` 的是在内存缓存里占的（解压后）。同一份数据三者可以差好几倍。
@@ -557,7 +557,7 @@ CRIT 1，WARN 5，OK 13，INFO 2 （逐个集合的检查：2/2 个集合）
 
 ### mt.ps()：正在执行的操作
 
-相当于 `SHOW PROCESSLIST`，执行的是 `$currentOp` 聚合，分批返回，连接再多也不受 16MB 的限制。过滤（active、`secs`、`ns`）、排序和条数都在服务端做：最多取 `limit` 条（默认 50），多取一条看还有没有更多，有就在表下写明（不知道总数）；`{limit: 0}` 全部取回。按 `secs`、`opid`、`ns` 以外的列排序时全部取回来在 shell 里排。`$currentOp` 不用读写票据，票据用完时 `mt.ps()` 照样能用。
+相当于 `SHOW PROCESSLIST`，执行的是 `$currentOp` 聚合，分批返回，连接再多也不受 16MB 的限制。过滤（active、`secs`、`ns`）、排序和条数都在服务端做：最多取 `limit` 条（默认 20，不跟 `mt.config()` 的 `limit`），多取一条看还有没有更多，有就在表下写明（不知道总数）；`{limit: 0}` 全部取回。按 `secs`、`opid`、`ns` 以外的列排序时全部取回来在 shell 里排。`$currentOp` 不用读写票据，票据用完时 `mt.ps()` 照样能用。
 
 | 选项 | 说明 |
 |---|---|
@@ -582,7 +582,7 @@ CRIT 1，WARN 5，OK 13，INFO 2 （逐个集合的检查：2/2 个集合）
 
 ```
 > mt.ps()
--- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true}}, {$match: {active: true}}, {$sort: {secs_running: -1}}, {$limit: 51}])，去掉 $currentOp 自己、内部线程和驱动心跳的长轮询
+-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true}}, {$match: {active: true}}, {$sort: {secs_running: -1}}, {$limit: 21}])，去掉 $currentOp 自己、内部线程和驱动心跳的长轮询
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
 | opid | secs | op      | ns             | client              | app            | lock | plan                                | command                                  |
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
