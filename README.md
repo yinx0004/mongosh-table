@@ -510,31 +510,31 @@ mt.config({checkThresholds: {longOps: [600, 3600]}})      // 改本会话的默�
 version: 7.0.48
    role: PRIMARY (rs0)
  uptime: 19s
-+-----------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
-| check                 | status | value                                                            | advice                                                      |
-+-----------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
-| 启动警告              | WARN   | 2 条：Access control is not enabled for the database. Read an... | mt.log({startup: true})                                     |
-| 写入被锁（fsyncLock） | CRIT   | 已锁                                                             | db.fsyncUnlock()                                            |
-| FCV 版本              | OK     | FCV 7.0，二进制 7.0                                              |                                                             |
-| 副本集成员            | OK     | 1 个成员，都正常                                                 | mt.repl()                                                   |
-| 复制延迟              | OK     | 0s                                                               | mt.repl()                                                   |
-| oplog 窗口            | INFO   | 7s，还没写满（用了 0.2%），时间太短估不出写满后能覆盖多久        | mt.oplog()                                                  |
-| 缓存使用率            | OK     | 0.2% (15.1 MB / 7.3 GB)                                          | mt.cache()                                                  |
-| 缓存脏数据            | OK     | 0.0% (0 B)                                                       | mt.status()                                                 |
-| 读写并发票据          | OK     | read 1/10, write 1/10                                            | mt.ps()                                                     |
-| 等锁队列              | OK     | readers 0, writers 3                                             | mt.locks()                                                  |
-| 连接数                | OK     | 10 / 8192 (0.1%)                                                 | mt.conns()                                                  |
-| 长时间运行的操作      | OK     | 没有超过 60 秒的                                                 |                                                             |
-| 等锁的操作            | WARN   | 1 个                                                             | mt.locks()                                                  |
-| 长事务                | OK     | 没有开了 30 秒以上的                                             |                                                             |
-| 正在建的索引          | OK     | 0 个                                                             |                                                             |
-| TTL 线程              | WARN   | 已停止                                                           | db.adminCommand({setParameter: 1, ttlMonitorEnabled: true}) |
-| profiler              | OK     | 没有库是 level 2                                                 |                                                             |
-| TTL 超期              | WARN   | 1 个超期 1 小时以上，最多 5h 30m                                 | mt.ttl()                                                    |
-| 冗余索引              | WARN   | 1 个，共 116.0 KB                                                | mt.dupIdx()                                                 |
-| 没被用过的索引        | INFO   | 只运行了 19s，统计不够，满 7 天再看                              | mt.unusedIdx()                                              |
-| 可回收的磁盘空间      | OK     | 0 B / 1.4 MB（0.0%）                                             |                                                             |
-+-----------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
++-----------------------+--------+------------------------------------------------------------------+----------------------------------------------------------+
+| check                 | status | value                                                            | advice                                                   |
++-----------------------+--------+------------------------------------------------------------------+----------------------------------------------------------+
+| 启动警告              | WARN   | 2 条：Access control is not enabled for the database. Read an... | mt.log({startup: true})                                  |
+| 写入被锁（fsyncLock） | CRIT   | 已锁                                                             | 确认不是备份等有意加的锁后：db.fsyncUnlock()             |
+| FCV 版本              | OK     | FCV 7.0，二进制 7.0                                              |                                                          |
+| 副本集成员            | OK     | 1 个成员，都正常                                                 | mt.repl()                                                |
+| 复制延迟              | OK     | 0s                                                               | mt.repl()                                                |
+| oplog 窗口            | INFO   | 7s，还没写满（用了 0.2%），时间太短估不出写满后能覆盖多久        | mt.oplog()                                               |
+| 缓存使用率            | OK     | 0.2% (15.1 MB / 7.3 GB)                                          | mt.cache()                                               |
+| 缓存脏数据            | OK     | 0.0% (0 B)                                                       | mt.status()                                              |
+| 读写并发票据          | OK     | read 1/10, write 1/10                                            | mt.ps()                                                  |
+| 等锁队列              | OK     | readers 0, writers 3                                             | mt.locks()                                               |
+| 连接数                | OK     | 10 / 8192 (0.1%)                                                 | mt.conns()                                               |
+| 长时间运行的操作      | OK     | 没有超过 60 秒的                                                 |                                                          |
+| 等锁的操作            | WARN   | 1 个                                                             | mt.locks()                                               |
+| 长事务                | OK     | 没有开了 30 秒以上的                                             |                                                          |
+| 正在建的索引          | OK     | 0 个                                                             |                                                          |
+| TTL 线程              | WARN   | 已停止                                                           | 确认不是有意停的后：setParameter ttlMonitorEnabled: true |
+| profiler              | OK     | 没有库是 level 2                                                 |                                                          |
+| TTL 超期              | WARN   | 1 个超期 1 小时以上，最多 5h 30m                                 | mt.ttl()                                                 |
+| 冗余索引              | WARN   | 1 个，共 116.0 KB                                                | mt.dupIdx()                                              |
+| 没被用过的索引        | INFO   | 只运行了 19s，统计不够，满 7 天再看                              | mt.unusedIdx()                                           |
+| 可回收的磁盘空间      | OK     | 0 B / 1.4 MB（0.0%）                                             |                                                          |
++-----------------------+--------+------------------------------------------------------------------+----------------------------------------------------------+
 CRIT 1，WARN 5，OK 13，INFO 2 （逐个集合的检查：2/2 个集合）
 ```
 
@@ -542,6 +542,7 @@ CRIT 1，WARN 5，OK 13，INFO 2 （逐个集合的检查：2/2 个集合）
 - 逐库 / 逐集合的检查（profiler、TTL 超期、冗余索引、没被用过的索引、可回收空间）有一部分失败时：没发现问题也不报 OK，而是 UNKNOWN，value 写“查了 40/42 个集合，2 个失败”，advice 写第一个失败的集合和原因；有发现时照常 WARN，value 后面附上覆盖情况。列不出库（`listDatabases` 失败）时这几项都是 UNKNOWN。
 - SKIP 只表示不适用：单机上副本集相关的几项、存储引擎不是 WiredTiger 时的缓存两项。只能连 mongod，在 mongos 上只打印一行说明。
 - `{issues: true}` 显示 WARN、CRIT 和 UNKNOWN。
+- `advice` 列是建议或者进一步看的只读命令。会改东西的（解除 fsyncLock、打开 TTL 线程、改 profiler 级别、调大 oplog、compact）都先写了前提，比如 fsyncLock 可能是备份在用，要先确认；MongoTab 自己从不执行它们。
 - 逐个集合的四项（TTL 超期、冗余索引、没被用过的索引、可回收空间）共用一次遍历：每个库一次 `listCollections`，每个集合一次 `getIndexes`、一次 `$collStats`；运行满 7 天才查 `$indexStats`；每个 TTL 索引再查一次最老的文档。
 - 默认最多查 1000 个集合（`maxColls`）、30 秒（`budgetMs`），可以用 `mt.config()` 改；打开的文件和连接快到上限的 80% 也会停（这一条不能关）。按库名、集合名的顺序，到了就停下。没查到的集合不能算没问题：这几项没发现问题时是 UNKNOWN，value 写“只查了前 1000/15000 个集合（maxColls 1000）”；有发现时照常 WARN 并附上这句。最后一行写实际查了几个集合。
 - 缓存使用率、缓存脏数据、读写并发票据、等锁队列、连接数里有 CRIT 时，服务器已经很吃力，默认跳过逐个集合的检查，最后一行写明原因；`{deep: true}` 照样做。
@@ -839,7 +840,7 @@ sampleRate: 1
 | shop    |     1 | 5    | 6.1 KB / 1.0 MB | 2026-11-23 16:31:08.105 | 0s     |
 +---------+-------+------+-----------------+-------------------------+--------+
 6 rows in set
-注意：level 2 的库（reports）会记录所有操作，影响性能：db.setProfilingLevel(1, {slowms: 100})
+注意：level 2 的库（reports）会记录所有操作，影响性能；不是有意开的，在这些库里改回 db.setProfilingLevel(1, {slowms: 100})
 ```
 
 - 这些情况会在最后提示：有库是 level 2；开着 profiler、`system.profile` 已经满了、只存了不到 1 小时；`slowms` 是 0（所有操作都会写进日志）。
@@ -1516,6 +1517,8 @@ mt.rsconf({cols: 'host,priority,votes'})   // 只看某几列
 | 字段 | 说明 |
 |---|---|
 | 表头 | set、version、term（4.4 起）、chainingAllowed、选举和心跳的超时、`majorityJournalDefault`（即 `writeConcernMajorityJournalDefault`）、自定义的写关注模式、默认读写关注（4.4 起，括号里是来源：`implicit` 隐含的默认值，`global` 用 setDefaultRWConcern 设过） |
+| `electionMajority` | 选主要几票 / 有投票权的成员数 |
+| `writeMajority` | `w: 'majority'` 的写入要几个确认 / 有投票权的数据节点数（不算仲裁节点）。要几个 = 投票多数和有投票权的数据节点数里小的那个，和服务端 `rs.status()` 的 `writeMajorityCount` 一样 |
 | `id` / `host` | 成员编号、地址 |
 | `state` | 现在的状态（来自 `rs.status()`） |
 | `priority` / `votes` | 选举优先级、有没有投票权 |
@@ -1537,6 +1540,8 @@ heartbeatIntervalMillis: 2000
  majorityJournalDefault: true
     defaultWriteConcern: {w: 1, wtimeout: 0} (global)
      defaultReadConcern: {level: local} (implicit)
+       electionMajority: 3 / 4
+          writeMajority: 3 / 3
 +----+-----------+-----------+----------+-------+---------+--------+-------+--------------+
 | id | host      | state     | priority | votes | arbiter | hidden | delay | tags         |
 +----+-----------+-----------+----------+-------+---------+--------+-------+--------------+
@@ -1547,13 +1552,17 @@ heartbeatIntervalMillis: 2000
 +----+-----------+-----------+----------+-------+---------+--------+-------+--------------+
 4 rows in set
 注意：有投票权的成员是偶数个（4 个）：能容忍挂掉的个数和少一个成员时一样，建议改成奇数个
-注意：有仲裁节点：一个数据节点挂掉后，w: 'majority' 的写入会等不到确认，缓存压力也会变大；能换成数据节点最好
-注意：延迟成员有投票权（db3:27017）：w: 'majority' 的写入可能要等它，建议设成 votes: 0
+注意：有仲裁节点，有投票权的数据节点只有 3 个，w: 'majority' 的写入要 3 个确认：任何一个数据节点挂掉或者跟不上，majority 写入就等不到确认，多数派提交点也停住、缓存压力变大；能把仲裁节点换成数据节点最好
+注意：延迟成员有投票权（db3:27017）：w: 'majority' 的写入要 3 个有投票权的数据节点确认，不延迟的只有 2 个，所以每次都要等延迟成员，至少多等 1h 0m；建议设成 votes: 0
 ```
 
-- 这些情况会在最后提示：有投票权的成员是偶数个；有仲裁节点（PSA 架构里一个数据节点挂掉后，`w: 'majority'` 的写入等不到确认）；延迟成员有投票权。
+- 这些情况会在最后提示，按 `electionMajority` / `writeMajority` 算：
+  - 有投票权的成员是偶数个：能容忍挂掉的个数和少一个成员时一样。
+  - 有仲裁节点：`w: 'majority'` 的写入能容忍挂掉的数据节点比选举少。有投票权的数据节点不超过投票多数时一个也不能挂，比如 PSA、上面 3 个数据节点加 1 个仲裁节点；PSSSA 能挂 1 个（选举能挂 2 个）。
+  - 延迟成员有投票权：不延迟的数据节点不够 `writeMajority` 要的个数，每次 majority 写入都要等延迟成员（上面就是这样，至少多等 1 小时）；够的话写明不延迟的挂掉几个后才要等。
+- 只看配置，不看成员现在是不是健康；各成员的状态在 `state` 列，复制延迟看 `mt.repl()`。
 - 延迟的字段 5.0 起叫 `secondaryDelaySecs`，之前叫 `slaveDelay`，这里都显示成 `delay`。
-- 只适用于副本集；单机、mongos 上只打印一行说明。各成员的复制延迟看 `mt.repl()`。
+- 只适用于副本集；单机、mongos 上只打印一行说明。
 
 ### mt.elections()：选举和换主
 

@@ -510,31 +510,31 @@ An instance with problems: fsyncLock left on (writes queue behind it), the TTL t
 version: 7.0.48
    role: PRIMARY (rs0)
  uptime: 19s
-+---------------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
-| check                     | status | value                                                            | advice                                                      |
-+---------------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
-| Startup warnings          | WARN   | 2 lines: Access control is not enabled for the database. Read... | mt.log({startup: true})                                     |
-| Writes locked (fsyncLock) | CRIT   | locked                                                           | db.fsyncUnlock()                                            |
-| FCV                       | OK     | FCV 7.0, binary 7.0                                              |                                                             |
-| Replica set members       | OK     | 1 member, all healthy                                            | mt.repl()                                                   |
-| Replication lag           | OK     | 0s                                                               | mt.repl()                                                   |
-| Oplog window              | INFO   | 8s, not full yet (0.2% used), too early to estimate how much ... | mt.oplog()                                                  |
-| Cache used                | OK     | 0.2% (15.1 MB / 7.3 GB)                                          | mt.cache()                                                  |
-| Cache dirty               | OK     | 0.0% (0 B)                                                       | mt.status()                                                 |
-| Read/write tickets        | OK     | read 1/10, write 1/10                                            | mt.ps()                                                     |
-| Lock queue                | OK     | readers 0, writers 3                                             | mt.locks()                                                  |
-| Connections               | OK     | 10 / 8192 (0.1%)                                                 | mt.conns()                                                  |
-| Long-running operations   | OK     | none over 60 seconds                                             |                                                             |
-| Lock waits                | WARN   | 1                                                                | mt.locks()                                                  |
-| Long transactions         | OK     | none open 30 seconds or more                                     |                                                             |
-| Index builds              | OK     | 0                                                                |                                                             |
-| TTL thread                | WARN   | stopped                                                          | db.adminCommand({setParameter: 1, ttlMonitorEnabled: true}) |
-| Profiler                  | OK     | no database at level 2                                           |                                                             |
-| TTL overdue               | WARN   | 1 overdue by over 1 hour, worst 5h 30m                           | mt.ttl()                                                    |
-| Redundant indexes         | WARN   | 1, 116.0 KB in total                                             | mt.dupIdx()                                                 |
-| Unused indexes            | INFO   | up only 19s; check again after 7 days                            | mt.unusedIdx()                                              |
-| Reusable disk space       | OK     | 0 B / 1.4 MB (0.0%)                                              |                                                             |
-+---------------------------+--------+------------------------------------------------------------------+-------------------------------------------------------------+
++---------------------------+--------+------------------------------------------------------------------+-----------------------------------------------------------------+
+| check                     | status | value                                                            | advice                                                          |
++---------------------------+--------+------------------------------------------------------------------+-----------------------------------------------------------------+
+| Startup warnings          | WARN   | 2 lines: Access control is not enabled for the database. Read... | mt.log({startup: true})                                         |
+| Writes locked (fsyncLock) | CRIT   | locked                                                           | unless a backup or someone meant it: db.fsyncUnlock()           |
+| FCV                       | OK     | FCV 7.0, binary 7.0                                              |                                                                 |
+| Replica set members       | OK     | 1 member, all healthy                                            | mt.repl()                                                       |
+| Replication lag           | OK     | 0s                                                               | mt.repl()                                                       |
+| Oplog window              | INFO   | 8s, not full yet (0.2% used), too early to estimate how much ... | mt.oplog()                                                      |
+| Cache used                | OK     | 0.2% (15.1 MB / 7.3 GB)                                          | mt.cache()                                                      |
+| Cache dirty               | OK     | 0.0% (0 B)                                                       | mt.status()                                                     |
+| Read/write tickets        | OK     | read 1/10, write 1/10                                            | mt.ps()                                                         |
+| Lock queue                | OK     | readers 0, writers 3                                             | mt.locks()                                                      |
+| Connections               | OK     | 10 / 8192 (0.1%)                                                 | mt.conns()                                                      |
+| Long-running operations   | OK     | none over 60 seconds                                             |                                                                 |
+| Lock waits                | WARN   | 1                                                                | mt.locks()                                                      |
+| Long transactions         | OK     | none open 30 seconds or more                                     |                                                                 |
+| Index builds              | OK     | 0                                                                |                                                                 |
+| TTL thread                | WARN   | stopped                                                          | unless stopped on purpose: setParameter ttlMonitorEnabled: true |
+| Profiler                  | OK     | no database at level 2                                           |                                                                 |
+| TTL overdue               | WARN   | 1 overdue by over 1 hour, worst 5h 30m                           | mt.ttl()                                                        |
+| Redundant indexes         | WARN   | 1, 116.0 KB in total                                             | mt.dupIdx()                                                     |
+| Unused indexes            | INFO   | up only 19s; check again after 7 days                            | mt.unusedIdx()                                                  |
+| Reusable disk space       | OK     | 0 B / 1.4 MB (0.0%)                                              |                                                                 |
++---------------------------+--------+------------------------------------------------------------------+-----------------------------------------------------------------+
 CRIT 1, WARN 5, OK 13, INFO 2 (per-collection checks: 2/2 collections)
 ```
 
@@ -542,6 +542,7 @@ CRIT 1, WARN 5, OK 13, INFO 2 (per-collection checks: 2/2 collections)
 - When part of a per-database / per-collection check (profiler, TTL overdue, redundant indexes, unused indexes, reusable space) fails: if it found nothing it is UNKNOWN rather than OK, with "40/42 collections checked, 2 failed" as the value and the first failing collection and error as the advice; if it found problems it is WARN as usual with that note added to the value. If the databases cannot be listed (`listDatabases` fails) these checks are all UNKNOWN.
 - SKIP only means not applicable: replica set checks on a standalone, the two cache checks when the storage engine is not WiredTiger. It must run on a mongod; on a mongos it prints a one-line explanation.
 - `{issues: true}` shows WARN, CRIT and UNKNOWN.
+- The `advice` column holds advice or read-only commands to look further. Anything that changes the server (fsyncUnlock, turning the TTL thread back on, the profiler level, growing the oplog, compact) comes with a condition first, e.g. an fsyncLock may belong to a running backup; MongoTab never runs them itself.
 - The four per-collection checks (TTL overdue, redundant indexes, unused indexes, reusable space) share one pass: one `listCollections` per database, one `getIndexes` and one `$collStats` per collection, `$indexStats` only after 7 days of uptime, plus one query for the oldest document per TTL index.
 - By default the pass stops after 1000 collections (`maxColls`) or 30 seconds (`budgetMs`), which `mt.config()` can change; it also stops when open files plus connections get close to 80% of the limit (that stop cannot be turned off). It goes through databases and collections in name order. Collections it did not reach are not treated as fine: if these checks found nothing they are UNKNOWN with "only the first 1000/15000 collections checked (maxColls 1000)"; if they found problems they are WARN with that note added. The last line says how many collections were checked.
 - When cache used, cache dirty, read / write tickets, lock queue or connections is CRIT, the server is already struggling, so the per-collection checks are skipped by default and the last line says why; `{deep: true}` runs them anyway.
@@ -839,7 +840,7 @@ sampleRate: 1
 | shop    |     1 | 5    | 6.1 KB / 1.0 MB | 2026-11-23 16:31:19.298 | 0s     |
 +---------+-------+------+-----------------+-------------------------+--------+
 6 rows in set
-Note: databases at level 2 (reports) record every operation, which costs performance: db.setProfilingLevel(1, {slowms: 100})
+Note: databases at level 2 (reports) record every operation, which costs performance; unless that is on purpose, go back with db.setProfilingLevel(1, {slowms: 100}) in them
 ```
 
 - A note is printed at the end when a database is at level 2; when the profiler is on and `system.profile` is full but holds under an hour; when `slowms` is 0 (every operation is written to the log).
@@ -1516,6 +1517,8 @@ mt.rsconf({cols: 'host,priority,votes'})   // only some columns
 | Field | Meaning |
 |---|---|
 | header | set, version, term (4.4+), chainingAllowed, election and heartbeat timeouts, `majorityJournalDefault` (`writeConcernMajorityJournalDefault`), custom write concern modes, default read/write concern (4.4+, with the source in parentheses: `implicit`, or `global` if set with setDefaultRWConcern) |
+| `electionMajority` | votes needed to elect a primary / voting members |
+| `writeMajority` | acknowledgements a `w: 'majority'` write needs / voting data-bearing members (arbiters excluded). The number needed is the smaller of the voting majority and the voting data-bearing members, the same as `writeMajorityCount` in `rs.status()` |
 | `id` / `host` | member id, address |
 | `state` | current state (from `rs.status()`) |
 | `priority` / `votes` | election priority, whether it votes |
@@ -1537,6 +1540,8 @@ heartbeatIntervalMillis: 2000
  majorityJournalDefault: true
     defaultWriteConcern: {w: 1, wtimeout: 0} (global)
      defaultReadConcern: {level: local} (implicit)
+       electionMajority: 3 / 4
+          writeMajority: 3 / 3
 +----+-----------+-----------+----------+-------+---------+--------+-------+--------------+
 | id | host      | state     | priority | votes | arbiter | hidden | delay | tags         |
 +----+-----------+-----------+----------+-------+---------+--------+-------+--------------+
@@ -1547,13 +1552,17 @@ heartbeatIntervalMillis: 2000
 +----+-----------+-----------+----------+-------+---------+--------+-------+--------------+
 4 rows in set
 Note: an even number of voting members (4): it tolerates no more failures than one member fewer would; use an odd number
-Note: there is an arbiter: with one data-bearing member down, w: 'majority' writes cannot be acknowledged and cache pressure grows; a data-bearing member is better
-Note: delayed members can vote (db3:27017): w: 'majority' writes may wait for them; consider votes: 0
+Note: there is an arbiter and only 3 voting data-bearing members, while w: 'majority' writes need 3 acknowledgements: with any data-bearing member down or behind, majority writes cannot be acknowledged, the majority commit point stalls and cache pressure grows; a data-bearing member in place of the arbiter is better
+Note: delayed members can vote (db3:27017): w: 'majority' writes need 3 voting data-bearing members, only 2 of which are not delayed, so every majority write waits for a delayed member, at least 1h 0m longer; consider votes: 0
 ```
 
-- A note is printed at the end when the number of voting members is even, when there is an arbiter (in a PSA set, `w: 'majority'` writes cannot be acknowledged once a data-bearing member is down), or when a delayed member votes.
+- Notes at the end, worked out from `electionMajority` / `writeMajority`:
+  - An even number of voting members: it tolerates no more failures than one member fewer would.
+  - An arbiter: `w: 'majority'` writes tolerate fewer data-bearing members down than elections do. When the voting data-bearing members are no more than the voting majority, not even one may be down, e.g. PSA or the 3 data-bearing members plus an arbiter above; PSSSA tolerates 1 (elections tolerate 2).
+  - A delayed member that votes: when the non-delayed data-bearing members are fewer than `writeMajority` needs, every majority write waits for a delayed member (as above, at least an hour longer); otherwise the note says after how many non-delayed members are down it has to.
+- It looks at the configuration only, not at whether members are healthy now; each member's state is in the `state` column, and replication lag in `mt.repl()`.
 - The delay field is `secondaryDelaySecs` since 5.0 and `slaveDelay` before; both show as `delay`.
-- Replica sets only; on a standalone or a mongos it prints a one-line explanation. For each member's replication lag, use `mt.repl()`.
+- Replica sets only; on a standalone or a mongos it prints a one-line explanation.
 
 ### mt.elections(): elections and primary changes
 
