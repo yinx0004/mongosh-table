@@ -33,6 +33,9 @@ run('concern: defaults (PSA)', function () {
   print(/majorityJournalDefault: true/.test(out) ? 'journal default' : out);
   print(/注意：有 1 个仲裁节点，隐含的默认写关注是 w: 1/.test(out) === v50 ? 'implicit w:1 note right' : out);
 }, ['defaults', 'journal default', 'implicit w:1 note right']);
+// 真的 PSA：写多数要 2 个确认，有投票权的数据节点也只有 2 个，一个也不能挂
+run('rsconf: PSA', function () { mt.rsconf({ showCmd: false }); }, [
+  'electionMajority: 2 / 3', 'writeMajority: 2 / 2', '注意：有仲裁节点，有投票权的数据节点只有 2 个，w: \'majority\' 的写入要 2 个确认']);
 
 run('concern: this connection', function () {
   var out = capOut(function () { mt.concern({ showCmd: false, width: 300 }); });

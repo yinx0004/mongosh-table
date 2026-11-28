@@ -703,6 +703,31 @@ run('mt.rsconf versions', function () {
   print(/defaultWriteConcern: \{w: majority, wtimeout: 0\} \(implicit\)/.test(out) === (vmaj >= 5) ? 'rwc right' : out);
   print(/\| (arbiter|hidden|delay|tags) /.test(out) || /注意：/.test(out) ? out : 'no optional columns, no notes');
 }, ['term right', 'journal right', 'rwc right', 'no optional columns, no notes']);
+// mt.rsconf 的提示按 electionMajority / writeMajority 算：writeMajority = min(投票多数, 有投票权的数据节点数)。
+// 用 _members 换成各种拓扑的配置（只用来算表和提示）
+function rsNotes(members) {
+  var out = capOut(function () { mt.rsconf({ showCmd: false, _members: members }); });
+  return out.split('\n').filter(function (l) { return /Majority: |注意：|Note: /.test(l); }).map(function (l) { return l.trim(); }).join('\n');
+}
+function rsD(i, x) { return Object.assign({ _id: i, host: 'd' + i + ':27017', priority: 1, votes: 1 }, x || {}); }
+function rsA(i) { return { _id: i, host: 'a' + i + ':27017', arbiterOnly: true, priority: 0, votes: 1 }; }
+var rsDl = { priority: 0, hidden: true, secondaryDelaySecs: 3600 };
+run('mt.rsconf PSS', function () { print(rsNotes([rsD(0), rsD(1), rsD(2)])); }, ['electionMajority: 2 / 3\nwriteMajority: 2 / 3']);
+run('mt.rsconf PSA', function () { print(rsNotes([rsD(0), rsD(1), rsA(2)])); }, [
+  'writeMajority: 2 / 2\n注意：有仲裁节点，有投票权的数据节点只有 2 个，w: \'majority\' 的写入要 2 个确认：任何一个数据节点挂掉或者跟不上，majority 写入就等不到确认']);
+run('mt.rsconf PSSSA', function () { print(rsNotes([rsD(0), rsD(1), rsD(2), rsD(3), rsA(4)])); }, [
+  'electionMajority: 3 / 5\nwriteMajority: 3 / 4\n注意：有仲裁节点：选举能容忍挂掉 2 个成员，w: \'majority\' 的写入只能容忍挂掉 1 个有投票权的数据节点']);
+run('mt.rsconf delayed always', function () { print(rsNotes([rsD(0), rsD(1), rsD(2, rsDl), rsA(3)])); }, [
+  '注意：有投票权的成员是偶数个（4 个）', '注意：有仲裁节点，有投票权的数据节点只有 3 个，w: \'majority\' 的写入要 3 个确认',
+  '注意：延迟成员有投票权（d2:27017）：w: \'majority\' 的写入要 3 个有投票权的数据节点确认，不延迟的只有 2 个，所以每次都要等延迟成员，至少多等 1h 0m']);
+run('mt.rsconf delayed later', function () { print(rsNotes([rsD(0), rsD(1), rsD(2), rsD(3), rsD(4, { priority: 0, slaveDelay: 600 })])); }, [
+  'writeMajority: 3 / 5\n注意：延迟成员有投票权（d4:27017）：不延迟的数据节点挂掉 2 个后，w: \'majority\' 的写入就要等延迟成员，至少多等 10m 0s']);
+run('mt.rsconf non-voting', function () { var x = rsNotes([rsD(0), rsD(1), rsD(2), rsD(3, { votes: 0, priority: 0, secondaryDelaySecs: 60 })]); print(/注意/.test(x) ? x : x + '\nno notes'); }, ['electionMajority: 2 / 3\nwriteMajority: 2 / 3\nno notes']);
+run('mt.rsconf en', function () {
+  mt.config({ lang: 'en' });
+  try { print(rsNotes([rsD(0), rsD(1), rsD(2), rsD(3), rsA(4)])); print(rsNotes([rsD(0), rsD(1), rsD(2), rsD(3, rsDl)])); } finally { mt.config({ lang: 'zh' }); }
+}, ["Note: there is an arbiter: elections tolerate 2 members down, but w: 'majority' writes tolerate only 1 voting data-bearing member down",
+  "Note: delayed members can vote (d3:27017): once 1 non-delayed data-bearing member is down, w: 'majority' writes wait for a delayed member, at least 1h 0m longer"]);
 run('mt.engine cols', function () {
   var out = capOut(function () { mt.engine({ cols: 'checkpoint', interval: 0, showCmd: false }); });
   print(/checkpoint\.count:/.test(out) && !/cache\./.test(out) ? 'only checkpoint' : out);
