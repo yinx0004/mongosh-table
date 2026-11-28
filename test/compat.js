@@ -774,10 +774,32 @@ run('timeout mt.colls', function () { timeoutAll(function () { mt.colls('mtcheck
 run('timeout mt.oplog', function () { timeoutAll(function () { mt.oplog(); }); }, ['mongotab: find local.oplog.rs 没在 10000 ms 内返回']);
 run('timeout mt.users', function () { timeoutAll(function () { mt.users(); }); }, [' 没在 10000 ms 内返回（maxTimeMS）']);
 run('timeout mt.ps', function () { timeoutAll(function () { mt.ps({ all: true, limit: 1, cols: 'opid' }); }); }, ['1 row in set']);
+// 4.4 之前 mt.check() 不查 profiler（profile 命令要拿库锁），这一项是 SKIP
+var ckProf44 = vmaj > 4 || (vmaj === 4 && Number(db.version().split('.')[1]) >= 4);
 run('timeout mt.check quick', function () { timeoutAll(function () { mt.check({ quick: true, table: true }); }); }, [
-  '| oplog 窗口 ', '| UNKNOWN | find local.oplog.rs 超过 maxTimeMS（10000 ms）', '| profiler ', '| UNKNOWN | 没查：前面的 find local.oplog.rs 已经超过 maxTimeMS（10000 ms）',
+  '| oplog 窗口 ', '| UNKNOWN | find local.oplog.rs 超过 maxTimeMS（10000 ms）', '| profiler ',
+  ckProf44 ? '| UNKNOWN | 没查：前面的 find local.oplog.rs 已经超过 maxTimeMS（10000 ms）' : '| SKIP    | 4.4 之前查 profile 要拿库锁，可能让写入排队',
   '服务器可能很忙或读票据用完了：mt.ps()、mt.status()'
 ]);
+run('timeout mt.explainLog', function () { timeoutAll(function () { mt.explainLog({ find: 'orders', filter: { qty: 2 }, $db: 'mtest' }); }); }, ['mongotab: explain 没在 10000 ms 内返回（maxTimeMS）']);
+// 4.4 之前 profile 命令要拿库锁：库上有占着写锁的操作或没提交的事务时，mt.profile() / mt.slow() 不查这个库，mt.check() 不查这一项。
+// 用一个没提交的事务（4.0 起）占着 mtxn；4.4 起照常查
+if (vmaj >= 4) {
+  run('profile: open transaction', function () {
+    var xd = db.getSiblingDB('mtxn'); xd.dropDatabase(); xd.c.insertOne({ a: 1 });
+    var ses = db.getMongo().startSession(), sc = ses.getDatabase('mtxn').getCollection('c');
+    ses.startTransaction();
+    sc.insertOne({ b: 1 });
+    try {
+      var p = capOut(function () { mt.profile('mtxn', { showCmd: false }); }), sl = capOut(function () { mt.slow('mtxn', { showCmd: false }); });
+      var ck = capOut(function () { mt.check({ quick: true, table: true }); });
+      if (ckProf44) print(!/没查 level|profiler 的设置没查/.test(p + sl) && /\| mtxn \|\s+0 \|/.test(p) && /\| profiler .*\| OK /.test(ck) ? 'read as usual' : p + '\n' + sl + '\n' + ck);
+      else print(/注意：这些库没查 level：mtxn: 没提交的事务（开了 \d+s）/.test(p) && /注意：profiler 的设置没查（没提交的事务（开了 \d+s））/.test(sl) &&
+        /\| profiler .*\| SKIP .*4\.4 之前查 profile 要拿库锁/.test(ck) ? 'not read' : p + '\n' + sl + '\n' + ck);
+    } finally { ses.abortTransaction(); ses.endSession(); }
+    xd.dropDatabase();
+  }, [ckProf44 ? 'read as usual' : 'not read']);
+}
 run('timeout mt.check', function () { timeoutAll(function () { mt.check({ table: true }); }); }, ['| 冗余索引 ', '没查：前面的 find local.oplog.rs', '（有命令超过 maxTimeMS，跳过了逐个集合的检查）']);
 run('timeout en', function () { mt.config({ lang: 'en' }); try { timeoutAll(function () { mt.dbs(); }); } finally { mt.config({ lang: 'zh' }); } }, [
   'mongotab: listDatabases did not return within 10000 ms (maxTimeMS): the server may be busy or out of read tickets; mt.ps() and mt.status() need no ticket and still work'
@@ -851,10 +873,11 @@ if (hasFailCmd) {
     failCmd(['listDatabases']);
     var out;
     try { out = capOut(function () { mt.check({ issues: true, table: true }); }); } finally { failOff(); }
-    ['profiler', 'TTL 超期', '冗余索引', '可回收的磁盘空间'].forEach(function (k) {
+    // 4.4 之前 profiler 这一项是 SKIP（不列库也不查），{issues: true} 不显示
+    (ckProf44 ? ['profiler'] : []).concat(['TTL 超期', '冗余索引', '可回收的磁盘空间']).forEach(function (k) {
       print(new RegExp(k + '\\s*\\|\\s*UNKNOWN').test(out) ? k + ' unknown' : k + ' wrong: ' + out);
     });
-  }, ['profiler unknown', 'TTL 超期 unknown', '冗余索引 unknown', '可回收的磁盘空间 unknown']);
+  }, (ckProf44 ? ['profiler unknown'] : []).concat(['TTL 超期 unknown', '冗余索引 unknown', '可回收的磁盘空间 unknown']));
   run('mt.frag aggregate fails', function () {
     failCmd(['aggregate']);
     try { mt.frag('mtest', { showCmd: false }); } finally { failOff(); }

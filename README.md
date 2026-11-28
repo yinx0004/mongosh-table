@@ -456,6 +456,7 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
 - **只读**：不会改任何设置，`mt.slow()` 也不会打开 profiler。`mt.explain()` / `mt.explainLog()` 默认只取执行计划，加 `{analyze: true}` 才真正执行一遍查询。CI 里在每个版本上打开命令日志，把每个 `mt` 命令跑一遍，再按服务端日志检查它发出的每一条命令都在只读命令的清单里（没有写入、没有带 `$out` / `$merge` 的聚合、`profile` 只用 `-1` 查看），见下面的“兼容性”。
 - **生产上的保护**：
   - 要读票据的命令都带 `maxTimeMS`（默认 10 秒，`0` 不限）：列库、列集合和索引、读 oplog 和 `system.profile`、逐集合的 `$collStats` / `$indexStats`、`mt.desc()` 的抽样、查用户和角色等，`$currentOp` 也带。读票据用完时（压力大，或者有操作一直占着），这些命令不带 `maxTimeMS` 会一直等下去；带了就按时报“xxx 没在 10000 ms 内返回（maxTimeMS）”。`mt.check()` 和逐个集合查的命令有一条超时就停下，不再一条条等。
+  - 不让写入排队：4.4 之前 `profile` 命令要拿库锁，库上有没提交的事务或长写入时会让这个库的写入排队。`mt.check()` 在 4.4 之前不查 profiler；`mt.profile()` / `mt.slow()` 先用 `$currentOp` 看有没有占着写锁的操作，有就不查这个库，没有才查、最多等 1 秒。
   - 读票据用完时还能用的：`$currentOp`、`serverStatus`、`replSetGetStatus`、`top`、`lockInfo`、`getLog`、`getParameter` 不用票据（实测 4.4～8.0），所以 `mt.ps()`、`mt.locks()`、`mt.conns()`、`mt.status()`、`mt.engine()`、`mt.repl()` 照常出结果，可以用来看是谁占着票据。
   - 逐个集合查的命令（`mt.colls()`、`mt.frag()`、`mt.cache()`、`mt.ttl()`、`mt.unusedIdx()`、`mt.dupIdx()`、`mt.latency()`、`mt.check()`）默认最多查 1000 个集合、30 秒（`maxColls`、`budgetMs`；`mt.config()` 或这一次的选项可以改，`0` = 不限），没查全时表下注明“只查了前 N/M 个集合”。
   - 打开的文件和连接快到上限（`maxOpenFiles`）的 80% 时也会停，这一条不能关。多久看一次按离 80% 还剩多少定：一个集合最多打开 65 个文件（集合本身和最多 64 个索引），余量不到 65 个就停，所以 MongoTab 自己不会把它推过 80%（别的连接、别的操作同时打开文件时仍可能越过），余量大时很少看。拿不到上限或打开文件数时（不是 Linux、连的是 mongos），表下会写明这层保护不可用。原因是：`$collStats` 会让 WiredTiger 打开平时关着的集合和索引文件，实测 3000 个集合时，`mt.cache()` 让 mongod 打开的文件从 48 个涨到 9051 个，集合再多可能超过上限（Too many open files）。
@@ -546,6 +547,7 @@ CRIT 1，WARN 5，OK 13，INFO 2 （逐个集合的检查：2/2 个集合）
 - 逐个集合的四项（TTL 超期、冗余索引、没被用过的索引、可回收空间）共用一次遍历：每个库一次 `listCollections`，每个集合一次 `getIndexes`、一次 `$collStats`；运行满 7 天才查 `$indexStats`；每个 TTL 索引再查一次最老的文档。
 - 默认最多查 1000 个集合（`maxColls`）、30 秒（`budgetMs`），可以用 `mt.config()` 改；打开的文件和连接快到上限的 80% 也会停（这一条不能关）。按库名、集合名的顺序，到了就停下。没查到的集合不能算没问题：这几项没发现问题时是 UNKNOWN，value 写“只查了前 1000/15000 个集合（maxColls 1000）”；有发现时照常 WARN 并附上这句。最后一行写实际查了几个集合。
 - 缓存使用率、缓存脏数据、读写并发票据、等锁队列、连接数里有 CRIT 时，服务器已经很吃力，默认跳过逐个集合的检查，最后一行写明原因；`{deep: true}` 照样做。
+- 4.4 之前 profiler 这一项是 SKIP：`profile` 命令要拿库锁，库上有没提交的事务或长写入时会让写入排队（见 [mt.profile()](#mtprofileprofiler-设置)），`mt.check()` 出事时也要能放心跑，所以不查，用 `mt.profile()` 单独看。
 - 读 oplog、列库、profile 和逐个集合的检查要用读票据，都带 `maxTimeMS`。有一条超时，后面的多半也一样：不再一条条等，直接标 UNKNOWN，value 写“没查：前面的 find local.oplog.rs 已经超过 maxTimeMS（10000 ms）”。读票据用完时 `mt.check()` 大约一个 `maxTimeMS` 就结束，不用票据的几项（成员、延迟、缓存、票据、连接数、长操作等）照常出结果。
 - 集合很多时可以先 `{quick: true}`，再用 `mt.dupIdx('库')`、`mt.unusedIdx('库')`、`mt.ttl('库')`、`mt.frag('库')` 逐个库看。
 - 表里的阈值是默认值，是常见的经验值，不一定适合每个场景（比如离线分析库的长操作、跨机房副本的复制延迟）；WARN 不代表一定有问题，按建议列的命令再细看。
@@ -682,6 +684,7 @@ mt.slow('shop', {sort: 'ms'})       // 最慢的在前
 
 - profiler 按库开关：`level` 0 关闭，1 只记超过 `slowms` 毫秒的操作，2 全记；`sampleRate` 是抽样比例。
 - 默认是关的。没开时 `mt.slow()` 会提示用 `db.setProfilingLevel(1, {slowms: 100})` 打开，要在每个库里分别执行。
+- 表头的 `level`、`slowms` 来自 `profile` 命令。4.4 之前库上有占着写锁的操作或没提交的事务时不查（会让写入排队，见 [mt.profile()](#mtprofileprofiler-设置)），表下写明，慢查询照常列出。
 
 | 列 | 说明 |
 |---|---|
@@ -847,6 +850,7 @@ sampleRate: 1
 - `system.profile` 是固定大小的集合，满了就覆盖最早的。要存得久，先停掉 profiler，再用 `db.createCollection('system.profile', {capped: true, size: ...})` 重建。
 - level 2 的库会把 `mt.profile()` 自己的查询也记下来，所以读的过程中条数会变。
 - 只能连 mongod；具体的慢查询用 `mt.slow()` 看。
+- 4.4 之前 `profile` 命令（哪怕只是看设置）要拿库锁：库上有占着写锁的操作（没提交的事务、不让出锁的长写入）时它会排队，后面这个库的新写入也跟着排队，实测 3.6～4.2 上插一条从 1 ms 变成 3～6 秒（别的库不受影响）。所以 4.4 之前先用 `$currentOp`（不用票据、不拿锁）看：这个库上有运行超过 1 秒、占着写锁的操作，或者有占着写锁的事务（4.0 / 4.2 里看不出事务占着哪个库，有就都不查），就不查这个库的 `level`，表下写明是哪些操作；没有才查，最多等 1 秒。4.4 起不拿锁，照常查。
 
 ### mt.qstats()：查询效率
 
@@ -1015,7 +1019,7 @@ docsExaminedPerReturned: 1
 ```
 
 - 默认只看计划：表格里只有计划，没有扫描数、返回数、耗时这几列，也看不出 `docsExaminedPerReturned`；但全表扫描、内存排序、取出后再过滤这些在计划里就能看出来。
-- `{analyze: true}` 会真的执行一遍查询来统计，大查询要注意耗时；写操作（update / delete）只统计，不会真的改数据。
+- `{analyze: true}` 会真的执行一遍查询来统计，大查询要注意耗时；写操作（update / delete）只统计，不会真的改数据。用的是你给的游标，执行多久按游标自己的设置：mongosh 里 `cursor.maxTimeMS()` 管不到 explain，要限时用 `mt.explainLog()`（它带 `maxTimeMS`）。
 - 传进来的如果已经是 explain 的结果（如上面第三种写法），里面有什么就显示什么，`analyze` 不起作用。
 - `sbe` 引擎的计划只拿得到每一步的返回行数和耗时，扫描行数只有上面的合计。
 - 分片集群（mongos）的计划会按分片分开显示，但还没测过。
@@ -1158,6 +1162,7 @@ mt.explainLog({find: 'orders', filter: {userId: 24530, status: {$in: ['paid', 's
 - 去掉 mongos、驱动加的字段（`shardVersion`、`databaseVersion`、`lsid`、`$clusterTime`、`readConcern`、投影里的 `$sortKey`...），再用 `db.runCommand({explain: 命令, verbosity: 'queryPlanner'})` 执行（`{analyze: true}` 时是 `'executionStats'`）。
 - 去掉了哪些字段，在计划前面列一行（`explain 时去掉了 lsid、readConcern...`）：它们不影响选哪个索引，但读关注、事务里看到的数据可能不一样，比较前后差别时要考虑进去。
 - 在哪个库上执行：命令里的 `$db`，或者 `ns` 的库名；都没有就用 `{db: 'shop'}` 选项，再没有就是当前库。
+- explain 带 `maxTimeMS`（`mt.config()` 的，默认 10 秒）：默认只取计划；`{analyze: true}` 真的执行一遍，超过时间就停下报超时。只统计、不写入：update / delete / findAndModify 和带 `$out` / `$merge` 的聚合做 explain 都不改数据（实测 3.6～8.0）。
 - 支持 `find`、`aggregate`、`count`、`distinct`、`update`、`delete`、`findAndModify`。profile 和日志里单条的 update / remove 会自动包成 `update` / `delete` 命令；getMore 用它的原始命令（`originatingCommand`）。explain 写操作不会真的修改数据。
 - JSON 日志里的 `{"$date": ...}`、`{"$oid": ...}`、`{"$numberLong": ...}` 会换回真正的类型，否则条件就对不上了。
 - 先把整行解析完：命令用来做 explain，命令后面的 `planSummary`、`keysExamined`、`docsExamined`、`nreturned`、`hasSortStage`、`numYields`、`reslen`、耗时等就是上面「慢日志里记录的执行情况」；4.4 起的 JSON 行从 `attr` 里取，profile 文档从对应字段取。

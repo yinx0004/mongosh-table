@@ -27,7 +27,6 @@ fi
 cleanup() {
   # -v: also remove the anonymous /data/db volume, or every run leaves one behind
   docker rm -f -v "$name" "$name-slow" "$name-writer" "$name-builder" >/dev/null 2>&1 || true
-  rm -f "$root/tmp/audit-$name.log"   # the server log saved for the read-only audit, also when it failed
   docker network rm "$net" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -90,14 +89,16 @@ msh test/compat.js
 msh test/audit-data.js >/dev/null
 case "$uri" in *\?*) auri="$uri&appName=mongotab-audit" ;; *) auri="$uri?appName=mongotab-audit" ;; esac
 msh --eval "db.setLogLevel(1, 'command')" >/dev/null
-from=$(msh --eval "print(db.serverStatus().localTime.toISOString())" | tail -n 1)
+stamp() { msh --eval "print('server time ' + db.serverStatus().localTime.toISOString())" | sed -n 's/^server time //p' | tail -n 1; }
+from=$(stamp)
 aout=$(docker run --rm -i --network "$net" -v "$root":/w -w /w --entrypoint "$shell" "$client" --quiet "$auri" test/audit.js)
 echo "$aout"
-to=$(msh --eval "print(db.serverStatus().localTime.toISOString())" | tail -n 1)
+to=$(stamp)
 msh --eval "db.setLogLevel(0, 'command')" >/dev/null
 ip=$(echo "$aout" | sed -n 's/^audit client: \([0-9.]*\):.*/\1/p')
-mkdir -p "$root/tmp"
-log="tmp/audit-$name.log"
-docker logs "$name" > "$root/$log" 2>&1
-docker run --rm -i -v "$root":/w -w /w --entrypoint "$shell" "$client" --quiet --nodb \
-  --eval "var AUDIT = {log: '/w/$log', from: '$from', to: '$to', ip: '$ip'}" test/audit-check.js
+# The server log goes to the checker on stdin, not through a file in the shared
+# folder: Docker Desktop's file sharing can show a just-written file incomplete.
+# KEEP_AUDIT_LOG=1 also keeps a copy in tmp/ to look at.
+if [ -n "${KEEP_AUDIT_LOG:-}" ]; then mkdir -p "$root/tmp"; keep() { tee "$root/tmp/audit-$name.log"; }; else keep() { cat; }; fi
+docker logs "$name" 2>&1 | keep | docker run --rm -i -v "$root":/w -w /w -e AFROM="$from" -e ATO="$to" -e AIP="$ip" --entrypoint sh "$client" -c \
+  'cat > /tmp/audit.log && exec "$0" --quiet --nodb --eval "var AUDIT = {log: \"/tmp/audit.log\", from: \"$AFROM\", to: \"$ATO\", ip: \"$AIP\"}" test/audit-check.js' "$shell"
