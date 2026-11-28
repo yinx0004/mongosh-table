@@ -52,7 +52,11 @@ mongosh 在跳板机上运行、而跳板机连不了外网时，先在自己电
 scp mongotab.js user@jumphost:~/
 ```
 
-以上链接下载的是最新正式版，历史版本见 [Releases](https://github.com/yinx0004/mongosh-table/releases)。想用 `main` 上的开发版，把链接换成 `https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js`。
+以上链接下载的是最新正式版，历史版本见 [Releases](https://github.com/yinx0004/mongosh-table/releases)。
+
+生产上建议用固定的版本，方便核对和回退：把链接里的 `latest/download` 换成 `download/v0.4.0` 这样的版本号。每个版本页面上都列了 `mongotab.js` 的 SHA-256，下载后可以核对：`shasum -a 256 mongotab.js`（Linux 上也可以用 `sha256sum`，PowerShell 用 `Get-FileHash mongotab.js`）。
+
+想用 `main` 上的开发版，把链接换成 `https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js`。
 
 ## 加载
 

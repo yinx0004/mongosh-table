@@ -54,6 +54,8 @@ scp mongotab.js user@jumphost:~/
 
 These links fetch the latest release; older versions are on the [Releases](https://github.com/yinx0004/mongosh-table/releases) page. For the development version on `main`, use `https://raw.githubusercontent.com/yinx0004/mongosh-table/main/mongotab.js` instead.
 
+In production, prefer a fixed version, which is easier to verify and to roll back: replace `latest/download` in the link with a version such as `download/v0.4.0`. Each release page lists the SHA-256 of `mongotab.js`; check the download with `shasum -a 256 mongotab.js` (or `sha256sum` on Linux, `Get-FileHash mongotab.js` in PowerShell).
+
 ## Loading
 
 ```js
