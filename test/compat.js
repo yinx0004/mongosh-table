@@ -494,7 +494,14 @@ run('mt.logQuery others', function () {
 
 run('mt.repl', function () { mt.repl(); }, ['-- rs.status()', 'set: rs0', '| name ', '| PRIMARY ', '| lagSecs |', '1 row in set']);
 run('mt.dbs', function () { mt.dbs(); }, ['| name ', '| disk ', '| mtest ', '合计 ']);
-run('mt.colls', function () { mt.colls('mtest'); }, ['| orders | ', '| name   | count | logical | disk ']);
+run('mt.colls', function () { mt.colls('mtest'); }, ['| orders | ', '| name   | count | avgDoc | logical | disk ']);
+// avgDoc = 逻辑大小 / 条数，和 $collStats 的 avgObjSize 一致
+run('mt.colls avgDoc', function () {
+  var st = tdb.orders.aggregate([{ $collStats: { storageStats: {} } }]).toArray()[0].storageStats;
+  var out = capOut(function () { mt.colls('mtest', { cols: 'name,avgDoc', showCmd: false, table: true }); });
+  var want = st.size / st.count < 1024 ? Math.round(st.size / st.count) + ' B' : (st.size / st.count / 1024).toFixed(1) + ' KB';
+  print(new RegExp('\\| orders\\s+\\|\\s+' + want.replace('.', '\\.') + ' \\|').test(out) ? 'avgDoc right' : want + '\n' + out);
+}, ['avgDoc right']);
 run('mt.colls db handle', function () { mt.colls(tdb, { cols: 'name,count', showCmd: false }); }, ['| orders |     3 |']);
 run('mt.idx', function () { mt.idx('orders'.length ? 'mtest.orders' : ''); }, ['| _id_ ', '{_id: 1}', '| disk ', '| orderNo_1 ', 'unique']);
 run('mt.idx coll object', function () { mt.idx(c, 'name,key,options'); }, ['| customer.name_1_createdAt_-1 | {customer.name: 1, createdAt: -1} |']);
@@ -915,7 +922,7 @@ dsc.o.insertMany([{ a: 1, s: 'x', n: null, sub: { k: 1 }, arr: [{ q: 1 }], tags:
 dsc.o.createIndex({ s: 1 }); dsc.o.createIndex({ s: 1, a: 1 });
 for (var pi = 0; pi < 3; pi++) dsc.o.find({ s: 'x', a: 1 }).toArray();
 run('mt.desc', function () { mt.desc(dsc.o, { table: true }); }, [
-  "aggregate([{$sample: {size: 1000}}])", 'ns: mtdesc.o', 'type: collection', 'count: 3', 'sampled: 3', 'indexes: _id_, s_1, s_1_a_1',
+  "aggregate([{$sample: {size: 1000}}])", 'ns: mtdesc.o', 'type: collection', 'count: 3', 'avgDoc: ', 'sampled: 3', 'sampledAvg: ', 'sampledBytes: ', 'indexes: _id_, s_1, s_1_a_1',
   '| field ', '| a     | number 67%, long 33% ', '| s     | string ', '| n     | null 50%, number 50% |   66.7% |', '| sub.k | number ', '| sub.j | bool ',
   '| arr   | array<object> ', '| arr.q | number ', '| tags  | array<string> ', '[t]', '| when  | date '
 ]);
@@ -941,8 +948,14 @@ if (VER[0] >= 5) {
 // 要抽的超过集合的 5% 时 $sample 会扫全表：集合超过 10 万条时不执行
 var big = []; for (var bi = 0; bi < 100001; bi++) big.push({ i: bi });
 dsc.big.insertMany(big, { ordered: false }); big = null;
-run('mt.desc big sample', function () { mt.desc(dsc.big, { sample: 6000 }); }, ['要抽 6000 条，超过了集合 100001 条的 5%']);
+run('mt.desc big sample', function () { mt.desc(dsc.big, { sample: 6000 }); }, ['要抽 6000 条，不少于集合 100001 条的 5%：这时 $sample 会扫描全表（', '）再随机排序。少抽一些，如 {sample: 5000}']);
 run('mt.desc big sample ok', function () { mt.desc(dsc.big, { sample: 100, showCmd: false, table: true }); }, ['sampled: 100']);
+// 读到 maxBytes 就停（文档很大时抽样也可能读出几个 GB）：每条约 40 B，上限 1000 字节，读到二十多条就停
+run('mt.desc maxBytes', function () {
+  var out = capOut(function () { mt.desc(dsc.big, { sample: 100, maxBytes: 1000, showCmd: false, table: true }); });
+  var m2 = /sampled: (\d+)/.exec(out);
+  print(m2 && Number(m2[1]) > 0 && Number(m2[1]) < 100 && /注意：读到 \d+ B 就停了（maxBytes），只分析了 \d+ 条，不是 100 条/.test(out) ? 'capped' : out);
+}, ['capped']);
 run('mt.planCache', function () { mt.planCache('mtdesc.o', { table: true }); }, ['| shape ', '| plan ', '{s: x, a: 1}', 'IXSCAN']);
 run('mt.planCache hash none', function () { mt.planCache(dsc.o, { hash: 'NOPE' }); }, ['Empty set']);
 run('mt.desc missing', function () { mt.desc('nope_no_such'); }, ['mongotab: 集合 test.nope_no_such 不存在']);
