@@ -103,7 +103,7 @@ run('mt.help each command', function () {
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
 run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'mem'、'vars'"]);
-run('mt.ps', function () { mt.ps(); }, ["-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true}}, {$match: {active: true}}])"]);
+run('mt.ps', function () { mt.ps(); }, ["-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true}}, {$match: {active: true}}, {$sort: {secs_running: -1}}, {$limit: 51}])，去掉 $currentOp 自己、内部线程和驱动心跳的长轮询"]);
 run('mt.ps slow query', function () {
   for (var i = 0; i < 20 && !db.currentOp({ ns: 'mtslow.slow' }).inprog.length; i++) sleep(500);
   mt.ps({ ns: 'mtslow.slow' });
@@ -128,6 +128,10 @@ run('mt.ps sort asc', function () { var v = psCol('secs', { sort: 'asc' }); prin
 run('mt.ps sort opid', function () { var v = psCol('opid', { sort: 'opid' }); print(orderOk(v, 1) ? 'order ok' : 'order bad ' + v); }, ['order ok']);
 run('mt.ps sort doc', function () { var v = psCol('opid', { sort: { opid: -1 } }); print(orderOk(v, -1) ? 'order ok' : 'order bad ' + v); }, ['order ok']);
 run('mt.ps bad sort', function () { mt.ps({ sort: 'x' }); }, ["mongotab: mt.ps() 的 sort 可以是 'desc'"]);
+// 条数在服务端截断（多取一条看还有没有）；按服务端排不了的列排时全部取回来，知道总数
+run('mt.ps more', function () { mt.ps({ all: true, limit: 1, cols: 'opid' }); }, ['{$limit: 2}]', '1 row in set', '只列了前 1 个，还有更多：{limit: 0} 全部列出']);
+run('mt.ps sort client-side', function () { mt.ps({ all: true, sort: { client: 1 }, limit: 1, cols: 'opid' }); }, ["{$currentOp: {allUsers: true, idleConnections: true}}])，去掉 $currentOp 自己", '1 row in set  (共 ']);
+run('mt.ps filters on server', function () { mt.ps({ secs: 5, ns: 'mtslow' }); }, ['{$match: {active: true, secs_running: {$gte: 5}, $or: [{ns: mtslow}, {ns: {$regex: ^mtslow\\.}}]}}']);
 // mt.builds：打开让建索引停在中途的 fail point（4.4 起和之前名字不同），写入 mtbuild.go，
 // run.sh 起的 builder 就会开始建 {a: 1, b: 1}；看完关掉 fail point，等它建完
 var BUILD_FPS = ['hangAfterIndexBuildDumpsInsertsFromBulk', 'hangAfterStartingIndexBuild'];
@@ -734,6 +738,25 @@ run('mt.check budgetMs', function () {
   var out = capOut(function () { mt.check({ budgetMs: 1, table: true }); });
   print(/只查了前 \d+\/\d+ 个集合（budgetMs 1）/.test(out) ? 'budget hit' : out);
 }, ['budget hit']);
+// 要读票据的命令都带 maxTimeMS，读票据用完时不会一直等。maxTimeAlwaysTimeOut 让带 maxTimeMS 的命令立刻超时，相当于一直拿不到票据
+function timeoutAll(fn) {
+  db.adminCommand({ configureFailPoint: 'maxTimeAlwaysTimeOut', mode: 'alwaysOn' });
+  try { fn(); } finally { db.adminCommand({ configureFailPoint: 'maxTimeAlwaysTimeOut', mode: 'off' }); }
+}
+run('timeout mt.dbs', function () { timeoutAll(function () { mt.dbs(); }); }, ['mongotab: listDatabases 没在 10000 ms 内返回（maxTimeMS）：服务器可能很忙，或者读票据用完了']);
+run('timeout maxTimeMS 0', function () { timeoutAll(function () { mt.dbs({ maxTimeMS: 0 }); }); }, ['| mtcheck ']);
+run('timeout mt.colls', function () { timeoutAll(function () { mt.colls('mtcheck'); }); }, ['mongotab: listCollections 没在 10000 ms 内返回']);
+run('timeout mt.oplog', function () { timeoutAll(function () { mt.oplog(); }); }, ['mongotab: find local.oplog.rs 没在 10000 ms 内返回']);
+run('timeout mt.users', function () { timeoutAll(function () { mt.users(); }); }, [' 没在 10000 ms 内返回（maxTimeMS）']);
+run('timeout mt.ps', function () { timeoutAll(function () { mt.ps({ all: true, limit: 1, cols: 'opid' }); }); }, ['1 row in set']);
+run('timeout mt.check quick', function () { timeoutAll(function () { mt.check({ quick: true, table: true }); }); }, [
+  '| oplog 窗口 ', '| UNKNOWN | find local.oplog.rs 超过 maxTimeMS（10000 ms）', '| profiler ', '| UNKNOWN | 没查：前面的 find local.oplog.rs 已经超过 maxTimeMS（10000 ms）',
+  '服务器可能很忙或读票据用完了：mt.ps()、mt.status()'
+]);
+run('timeout mt.check', function () { timeoutAll(function () { mt.check({ table: true }); }); }, ['| 冗余索引 ', '没查：前面的 find local.oplog.rs', '（有命令超过 maxTimeMS，跳过了逐个集合的检查）']);
+run('timeout en', function () { mt.config({ lang: 'en' }); try { timeoutAll(function () { mt.dbs(); }); } finally { mt.config({ lang: 'zh' }); } }, [
+  'mongotab: listDatabases did not return within 10000 ms (maxTimeMS): the server may be busy or out of read tickets; mt.ps() and mt.status() need no ticket and still work'
+]);
 // 缓存、票据、等锁队列、连接数有 CRIT 时，默认跳过逐个集合的检查；{deep: true} 照样做。用阈值把连接数调成 CRIT
 run('mt.check under pressure', function () {
   var out = capOut(function () { mt.check({ thresholds: { conns: [0, 0] }, table: true }); });
