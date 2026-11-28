@@ -427,7 +427,7 @@ Options:
   ns     database or database.collection
   all    true: like currentOp's $all, including idle connections and internal threads
   sort   'desc' / 'asc' / 'opid' / a sort document on column names
-  limit  at most this many rows, 50 by default (mt.config()), 0 = all
+  limit  at most this many rows, 20 by default (not mt.config()'s limit), 0 = all
 
 Output:
   opid          operation ID, used by db.killOp(opid)
@@ -441,7 +441,7 @@ Output:
 
 Notes:
   - Runs the $currentOp aggregation, which returns batches; not the currentOp command, whose result is one document that fails past 16 MB when there are many connections or sessions
-  - Filtering (active, secs, ns), sorting and the row limit run on the server, so only the rows to show come back: at most limit rows (50 by default), plus one to tell whether there are more, which is noted under the table (without a total); {limit: 0} fetches everything. Sorting on columns other than secs, opid and ns fetches everything and sorts in the shell
+  - Filtering (active, secs, ns), sorting and the row limit run on the server, so only the rows to show come back: at most limit rows (20 by default), plus one to tell whether there are more, which is noted under the table (without a total); {limit: 0} fetches everything. Sorting on columns other than secs, opid and ns fetches everything and sorts in the shell
   - $currentOp needs no read or write ticket: when tickets run out and other commands queue, mt.ps() still works (tested on 4.4 to 8.0)
   - Hidden by default: idle connections, internal threads, drivers' awaitable hello and mt.ps() itself
 
@@ -460,7 +460,7 @@ All of them:
   - What still works with read tickets exhausted: `$currentOp`, `serverStatus`, `replSetGetStatus`, `top`, `lockInfo`, `getLog` and `getParameter` need no ticket (tested on 4.4 to 8.0), so `mt.ps()`, `mt.locks()`, `mt.conns()`, `mt.status()`, `mt.engine()` and `mt.repl()` still answer and show who is holding the tickets.
   - The per-collection commands (`mt.colls()`, `mt.frag()`, `mt.cache()`, `mt.ttl()`, `mt.unusedIdx()`, `mt.dupIdx()`, `mt.latency()`, `mt.check()`) look at no more than 1000 collections or 30 seconds by default (`maxColls`, `budgetMs`; change them with `mt.config()` or per call, `0` = no limit), and say "only the first N/M collections" under the table when they stop early.
   - They also stop when open files plus connections get close to 80% of the limit (`maxOpenFiles`), which cannot be turned off. How often they look depends on how much room is left below 80%: a collection opens at most 65 files (itself and up to 64 indexes), and they stop once less than 65 is left, so MongoTab itself does not push it past 80% (other connections and operations opening files at the same time still can), and with plenty of room they rarely look. When the limit or the open file count is not available (not Linux, or a mongos), a note under the table says the guard is off. The reason: `$collStats` makes WiredTiger open collection and index files that are normally closed. Measured with 3000 collections, `mt.cache()` took mongod from 48 to 9051 open files; with many more collections that can exceed the limit (Too many open files).
-  - Commands that list running operations (`mt.ps()`, `mt.conns()`, `mt.locks()`, `mt.txns()`, `mt.builds()`...) use the `$currentOp` aggregation, which returns batches: the `currentOp` command puts everything in one document and fails past 16 MB when there are many connections or sessions. `mt.ps()` filters, sorts and limits on the server, so even in a connection storm only the few dozen rows it shows come back.
+  - Commands that list running operations (`mt.ps()`, `mt.conns()`, `mt.locks()`, `mt.txns()`, `mt.builds()`...) use the `$currentOp` aggregation, which returns batches: the `currentOp` command puts everything in one document and fails past 16 MB when there are many connections or sessions. `mt.ps()` filters, sorts and limits on the server, so even in a connection storm only the rows it shows come back (20 by default).
   - `mt.desc()` does not run a `$sample` that would scan a whole view or time series collection; see [mt.desc()](#mtdesc-field-structure-of-a-collection).
 - **Commands that sample twice** (`mt.status()`, `mt.engine()`, `mt.qstats()`, `mt.top()`, `mt.latency()`, `mt.flow()`): when the two samples came from different nodes (the shell reconnected to a new primary after a failover) or mongod restarted in between (`uptime` is less than the first one plus the time in between), the counters cannot be subtracted, so the cumulative values since startup from the second sample are shown instead, with the reason at the top; no negative or absurd rates. When a collection's counters went down (dropped and recreated), it is left out and named under the table. The legacy mongo shell does not reconnect after a mongod restart, so there it fails with a network error.
 - **Tell logical from disk sizes**: columns with `logical` in the name are the uncompressed data size (BSON), `disk` is what it actually takes on disk (compressed by WiredTiger), and `cached` is what it takes in the in-memory cache (uncompressed). The three can differ several times over for the same data.
@@ -557,7 +557,7 @@ CRIT 1, WARN 5, OK 13, INFO 2 (per-collection checks: 2/2 collections)
 
 ### mt.ps(): running operations
 
-Like `SHOW PROCESSLIST`. It runs the `$currentOp` aggregation, which returns batches, so the 16 MB limit does not apply however many connections there are. Filtering (active, `secs`, `ns`), sorting and the row limit run on the server: at most `limit` rows (50 by default), plus one to tell whether there are more, which is noted under the table (without a total); `{limit: 0}` fetches everything. Sorting on columns other than `secs`, `opid` and `ns` fetches everything and sorts in the shell. `$currentOp` needs no read or write ticket, so `mt.ps()` still works when tickets run out.
+Like `SHOW PROCESSLIST`. It runs the `$currentOp` aggregation, which returns batches, so the 16 MB limit does not apply however many connections there are. Filtering (active, `secs`, `ns`), sorting and the row limit run on the server: at most `limit` rows (20 by default, not `mt.config()`'s `limit`), plus one to tell whether there are more, which is noted under the table (without a total); `{limit: 0}` fetches everything. Sorting on columns other than `secs`, `opid` and `ns` fetches everything and sorts in the shell. `$currentOp` needs no read or write ticket, so `mt.ps()` still works when tickets run out.
 
 | Option | Meaning |
 |---|---|
@@ -582,7 +582,7 @@ Hidden by default: idle connections, internal threads with no client, drivers' a
 
 ```
 > mt.ps()
--- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true}}, {$match: {active: true}}, {$sort: {secs_running: -1}}, {$limit: 51}]), without $currentOp itself, internal threads and driver heartbeat long-polls
+-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true}}, {$match: {active: true}}, {$sort: {secs_running: -1}}, {$limit: 21}]), without $currentOp itself, internal threads and driver heartbeat long-polls
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
 | opid | secs | op      | ns             | client              | app            | lock | plan                                | command                                  |
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
