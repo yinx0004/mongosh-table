@@ -312,7 +312,7 @@ SO20240101002,Bob,2.5,(无字段)
 | `missingText` | 跟随语言 | 没有这个字段时显示什么，默认 `(无字段)` / `(missing)` |
 | `lang` | 自动 | `'zh'` / `'en'`：提示和帮助的语言 |
 | `showCmd` | `true` | DBA 命令先打印等价的原生命令 |
-| `maxTimeMS` | `10000` | 较重的读（逐集合统计、抽样、`$currentOp`）每次最多执行多久（毫秒），`0` 不限，见下一节“生产上的保护” |
+| `maxTimeMS` | `10000` | 要读票据的命令（列库、列集合和索引、读 oplog、逐集合统计、抽样等）和 `$currentOp` 每次最多执行多久（毫秒），`0` 不限，见下一节“生产上的保护” |
 | `maxColls` | `1000` | 逐个集合查的命令（`mt.cache()`、`mt.unusedIdx()` 等）最多查几个集合，`0` 不限 |
 | `budgetMs` | `30000` | 逐个集合查的命令最多花多少毫秒，`0` 不限 |
 | `checkThresholds` | `null` | `mt.check()` 的阈值，如 `{lag: [30, 300]}`，按键合并，见 [mt.check()](#mtcheck一键体检) |
@@ -423,10 +423,11 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
   mt.ps({sort: 'opid'})       // 排序：'desc'（默认）、'asc'、'opid'，或 {ns: 1, secs: -1}
 
 选项：
-  secs  只看运行超过这么多秒的
-  ns    库或 库.集合
-  all   true：同 currentOp 的 $all，包括空闲连接和内部线程
-  sort  'desc' / 'asc' / 'opid' / 按列名的排序文档
+  secs   只看运行超过这么多秒的
+  ns     库或 库.集合
+  all    true：同 currentOp 的 $all，包括空闲连接和内部线程
+  sort   'desc' / 'asc' / 'opid' / 按列名的排序文档
+  limit  最多列几个，默认 50（mt.config() 可改），0 = 全部
 
 输出：
   opid          操作 ID，db.killOp(opid) 用它
@@ -439,7 +440,9 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
   command       命令，去掉了驱动加的字段
 
 说明：
-  - 执行的是 $currentOp 聚合（只取 active 的），分批返回；不用 currentOp 命令，因为它的结果装在一个文档里，连接、会话很多时超过 16MB 就失败
+  - 执行的是 $currentOp 聚合，分批返回；不用 currentOp 命令，因为它的结果装在一个文档里，连接、会话很多时超过 16MB 就失败
+  - 过滤（active、secs、ns）、排序和条数都在服务端做，只传回要显示的那些：最多 limit 条（默认 50），多取一条看还有没有更多，有就在表下写明（不知道总数）；{limit: 0} 全部取回。按 secs、opid、ns 以外的列排序时全部取回来在 shell 里排
+  - $currentOp 不用读写票据：票据用完、别的命令都在排队时 mt.ps() 照样能用（实测 4.4～8.0）
   - 默认不显示空闲连接、内部线程、驱动的心跳长轮询和 mt.ps() 自己
 
 都可以加 t() 的选项（cols、exclude、limit、vertical、table、tz...）；mt.config({showCmd: false}) 不打印原生命令
@@ -452,10 +455,11 @@ mt.ps() — 正在执行的操作    MySQL: SHOW PROCESSLIST
 - **选项和 `t()` 通用**：`cols`、`exclude`、`limit`、`vertical`、`table`、`tz` 都能用，例如 `mt.ps({secs: 5, cols: 'opid,secs,ns,command'})`、`mt.idx('orders', {vertical: true})`。
 - **只读**：不会改任何设置，`mt.slow()` 也不会打开 profiler。`mt.explain()` / `mt.explainLog()` 默认只取执行计划，加 `{analyze: true}` 才真正执行一遍查询。
 - **生产上的保护**：
-  - 较重的读（逐集合的 `$collStats` / `$indexStats`、`mt.desc()` 的抽样、`$currentOp`）都带 `maxTimeMS`，默认 10 秒，碰到被锁住或太慢的集合不会一直卡着。
+  - 要读票据的命令都带 `maxTimeMS`（默认 10 秒，`0` 不限）：列库、列集合和索引、读 oplog 和 `system.profile`、逐集合的 `$collStats` / `$indexStats`、`mt.desc()` 的抽样、查用户和角色等，`$currentOp` 也带。读票据用完时（压力大，或者有操作一直占着），这些命令不带 `maxTimeMS` 会一直等下去；带了就按时报“xxx 没在 10000 ms 内返回（maxTimeMS）”。`mt.check()` 和逐个集合查的命令有一条超时就停下，不再一条条等。
+  - 读票据用完时还能用的：`$currentOp`、`serverStatus`、`replSetGetStatus`、`top`、`lockInfo`、`getLog`、`getParameter` 不用票据（实测 4.4～8.0），所以 `mt.ps()`、`mt.locks()`、`mt.conns()`、`mt.status()`、`mt.engine()`、`mt.repl()` 照常出结果，可以用来看是谁占着票据。
   - 逐个集合查的命令（`mt.colls()`、`mt.frag()`、`mt.cache()`、`mt.ttl()`、`mt.unusedIdx()`、`mt.dupIdx()`、`mt.latency()`、`mt.check()`）默认最多查 1000 个集合、30 秒（`maxColls`、`budgetMs`；`mt.config()` 或这一次的选项可以改，`0` = 不限），没查全时表下注明“只查了前 N/M 个集合”。
   - 打开的文件和连接快到上限（`maxOpenFiles`）的 80% 时也会停，这一条不能关。多久看一次按离 80% 还剩多少定：一个集合最多打开 65 个文件（集合本身和最多 64 个索引），余量不到 65 个就停，所以 MongoTab 自己不会把它推过 80%（别的连接、别的操作同时打开文件时仍可能越过），余量大时很少看。拿不到上限或打开文件数时（不是 Linux、连的是 mongos），表下会写明这层保护不可用。原因是：`$collStats` 会让 WiredTiger 打开平时关着的集合和索引文件，实测 3000 个集合时，`mt.cache()` 让 mongod 打开的文件从 48 个涨到 9051 个，集合再多可能超过上限（Too many open files）。
-  - 查运行中的操作（`mt.ps()`、`mt.conns()`、`mt.locks()`、`mt.txns()`、`mt.builds()` 等）用 `$currentOp` 聚合分批取：`currentOp` 命令的结果装在一个文档里，连接、会话很多时超过 16MB 就失败。
+  - 查运行中的操作（`mt.ps()`、`mt.conns()`、`mt.locks()`、`mt.txns()`、`mt.builds()` 等）用 `$currentOp` 聚合分批取：`currentOp` 命令的结果装在一个文档里，连接、会话很多时超过 16MB 就失败。`mt.ps()` 的过滤、排序和条数在服务端做，连接风暴时也只传回要显示的几十条。
   - `mt.desc()` 在视图和时序集合上不做会全表扫描的 `$sample`，见 [mt.desc()](#mtdesc集合的字段结构)。
 - **采样两次的命令**（`mt.status()`、`mt.engine()`、`mt.qstats()`、`mt.top()`、`mt.latency()`、`mt.flow()`）：两次之间连到了别的节点（切主后 shell 重连到新的主节点），或者 mongod 重启过（`uptime` 比第一次的加上中间过的时间少），计数器不能相减，这时改用第二次取到的启动以来累计值，开头写明原因，不会算出负数或者离谱的速率。逐集合的计数变小了（集合删掉重建过）时，这些集合不列出，表下写明。老的 mongo shell 在 mongod 重启后不会自动重连，这时直接报网络错误。
 - **大小分逻辑和磁盘**：列名里带 `logical` 的是未压缩的数据量（BSON 大小），带 `disk` 的是磁盘上实际占的（WiredTiger 压缩后），带 `cached` 的是在内存缓存里占的（解压后）。同一份数据三者可以差好几倍。
@@ -485,7 +489,7 @@ mt.config({checkThresholds: {longOps: [600, 3600]}})      // 改本会话的默�
 | 复制延迟 | 最大的 lagSecs；延迟成员只算超出设定延迟的部分 | ≥ 10 秒 | ≥ 60 秒 | `lag` |
 | oplog 窗口 | 最早到最晚一条；没写满时按估算的写满后能覆盖多久判断，运行不到 1 小时估不出，是 INFO | < 24 小时 | < 3 小时 | `oplog`（小时，越低越坏） |
 | 缓存使用率 / 缓存脏数据 | WiredTiger 缓存 | ≥ 90% / ≥ 10% | ≥ 95% / ≥ 20% | `cacheUsed` / `cacheDirty` |
-| 读写并发票据 | 已用 / 总数（7.0 之前） | ≥ 80% | ≥ 95% | `tickets` |
+| 读写并发票据 | 已用 / 总数（7.0 起总数会自动调整，比的是当时的总数） | ≥ 80% | ≥ 95% | `tickets` |
 | 等锁队列 | `globalLock.currentQueue` 读 + 写 | ≥ 5 | ≥ 50 | `queue` |
 | 连接数 | current / (current + available) | ≥ 80% | ≥ 95% | `conns` |
 | 长时间运行的操作 | 客户端的操作 | 超过 60 秒 | 超过 600 秒 | `longOps`（秒） |
@@ -541,6 +545,7 @@ CRIT 1，WARN 5，OK 13，INFO 2 （逐个集合的检查：2/2 个集合）
 - 逐个集合的四项（TTL 超期、冗余索引、没被用过的索引、可回收空间）共用一次遍历：每个库一次 `listCollections`，每个集合一次 `getIndexes`、一次 `$collStats`；运行满 7 天才查 `$indexStats`；每个 TTL 索引再查一次最老的文档。
 - 默认最多查 1000 个集合（`maxColls`）、30 秒（`budgetMs`），可以用 `mt.config()` 改；打开的文件和连接快到上限的 80% 也会停（这一条不能关）。按库名、集合名的顺序，到了就停下。没查到的集合不能算没问题：这几项没发现问题时是 UNKNOWN，value 写“只查了前 1000/15000 个集合（maxColls 1000）”；有发现时照常 WARN 并附上这句。最后一行写实际查了几个集合。
 - 缓存使用率、缓存脏数据、读写并发票据、等锁队列、连接数里有 CRIT 时，服务器已经很吃力，默认跳过逐个集合的检查，最后一行写明原因；`{deep: true}` 照样做。
+- 读 oplog、列库、profile 和逐个集合的检查要用读票据，都带 `maxTimeMS`。有一条超时，后面的多半也一样：不再一条条等，直接标 UNKNOWN，value 写“没查：前面的 find local.oplog.rs 已经超过 maxTimeMS（10000 ms）”。读票据用完时 `mt.check()` 大约一个 `maxTimeMS` 就结束，不用票据的几项（成员、延迟、缓存、票据、连接数、长操作等）照常出结果。
 - 集合很多时可以先 `{quick: true}`，再用 `mt.dupIdx('库')`、`mt.unusedIdx('库')`、`mt.ttl('库')`、`mt.frag('库')` 逐个库看。
 - 表里的阈值是默认值，是常见的经验值，不一定适合每个场景（比如离线分析库的长操作、跨机房副本的复制延迟）；WARN 不代表一定有问题，按建议列的命令再细看。
 - 阈值可以改：`mt.check({thresholds: {...}})` 只改这一次；`mt.config({checkThresholds: {...}})` 改本会话的默认值，重新 `load()` 会恢复。键见上表的“阈值键”，有 CRIT 的写 `[WARN, CRIT]`，只有 WARN 的写一个数；`oplog` 越低越坏，WARN 要大于等于 CRIT，其余 WARN 不能大于 CRIT；百分比不能超过 100。`mt.help('check')` 列出全部键、默认值和本会话改过的值。
@@ -549,7 +554,7 @@ CRIT 1，WARN 5，OK 13，INFO 2 （逐个集合的检查：2/2 个集合）
 
 ### mt.ps()：正在执行的操作
 
-相当于 `SHOW PROCESSLIST`，执行的是 `$currentOp` 聚合（只取 active 的），分批返回，连接再多也不受 16MB 的限制。
+相当于 `SHOW PROCESSLIST`，执行的是 `$currentOp` 聚合，分批返回，连接再多也不受 16MB 的限制。过滤（active、`secs`、`ns`）、排序和条数都在服务端做：最多取 `limit` 条（默认 50），多取一条看还有没有更多，有就在表下写明（不知道总数）；`{limit: 0}` 全部取回。按 `secs`、`opid`、`ns` 以外的列排序时全部取回来在 shell 里排。`$currentOp` 不用读写票据，票据用完时 `mt.ps()` 照样能用。
 
 | 选项 | 说明 |
 |---|---|
@@ -570,11 +575,11 @@ CRIT 1，WARN 5，OK 13，INFO 2 （逐个集合的检查：2/2 个集合）
 | `plan` | 执行计划摘要，`COLLSCAN` 是全表扫描 |
 | `command` | 命令内容，去掉了 `lsid`、`$clusterTime` 这类驱动加的字段 |
 
-默认不显示：空闲连接、没有客户端的内部线程、驱动的心跳长轮询（awaitable `hello`），以及 `mt.ps()` 自己这条查询。
+默认不显示：空闲连接、没有客户端的内部线程、驱动的心跳长轮询（awaitable `hello`），以及 `$currentOp` 自己（`mt.ps()` 这次的和别的监控工具的）。
 
 ```
 > mt.ps()
--- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true}}, {$match: {active: true}}])
+-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true}}, {$match: {active: true}}, {$sort: {secs_running: -1}}, {$limit: 51}])，去掉 $currentOp 自己、内部线程和驱动心跳的长轮询
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
 | opid | secs | op      | ns             | client              | app            | lock | plan                                | command                                  |
 +------+------+---------+----------------+---------------------+----------------+------+-------------------------------------+------------------------------------------+
@@ -587,7 +592,7 @@ CRIT 1，WARN 5，OK 13，INFO 2 （逐个集合的检查：2/2 个集合）
 
 ```
 > mt.ps({all: true, cols: 'opid,secs,op,ns,client,app', limit: 5})
--- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true, idleConnections: true}}])
+-- db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true, idleConnections: true}}, {$sort: {secs_running: -1}}, {$limit: 6}])，去掉 $currentOp 自己
 +------+------+---------+-------------+---------------------+----------------+
 | opid | secs | op      | ns          | client              | app            |
 +------+------+---------+-------------+---------------------+----------------+
@@ -597,7 +602,8 @@ CRIT 1，WARN 5，OK 13，INFO 2 （逐个集合的检查：2/2 个集合）
 |      |    0 | idle    |             | 192.168.117.5:45414 | mongosh 2.14.2 |
 |      |    0 | idle    |             | 192.168.117.4:38384 |                |
 +------+------+---------+-------------+---------------------+----------------+
-5 rows in set  (共 78 行，只显示前 5 行)
+5 rows in set
+只列了前 5 个，还有更多：{limit: 0} 全部列出，或者用 secs、ns 缩小范围
 ```
 
 ### mt.cursors()：打开着的游标
