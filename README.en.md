@@ -359,6 +359,7 @@ mt.config({tz: '+08:00', limit: 100})        // change them for this session
 | mt.pool({all})               | ProxySQL stats_mysql_connection_pool     | Outgoing connection pools (mongos to shards, between members) per target host; all = per pool too                                                                                                                                                     |
 | mt.users('db')               | SELECT * FROM mysql.user                 | Users and custom roles: each user's database, roles and login mechanisms, each custom role's privileges and how many users have it directly; notes authentication being off, overly powerful users, SHA-1 only and users without roles; optional 'db' |
 | mt.locks({all})              | sys.innodb_lock_waits                    | Who is waiting for a lock and who holds it; all = every lock that is held                                                                                                                                                                             |
+| mt.conflicts('ns', {quick})  | SHOW STATUS LIKE 'Innodb_row_lock%'      | Write conflicts: per second for the server, running operations that hit them, recent ones grouped by collection and query shape; quick = the first two only                                                                                           |
 | mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX            | Open transactions: how long open, how long idle, when they get aborted; secs = minimum seconds, sort: 'desc' / 'asc'                                                                                                                                  |
 | mt.top({interval, ns})       | sys.schema_table_statistics              | Read/write time per collection, busiest first; interval = seconds to sample, 0 = totals since startup; ns = db or collection                                                                                                                          |
 | mt.latency('db', {interval}) | sys.statement_analysis                   | Average latency (ms) of reads / writes / commands, server-wide and per collection; interval = seconds to sample, 0 = since startup; quick = server-wide only; all user databases by default                                                           |
@@ -1481,6 +1482,60 @@ This is what it looks like after `db.fsyncLock()`: `fsyncLockWorker` holds the g
 - By default only holders that conflict with a waiter are listed: `IS` and `S` do not conflict, so running reads do not show up above. Use `{all: true}` to see everything.
 - WiredTiger has document-level concurrency: conflicts between ordinary reads and writes are retried (WriteConflict), not lock waits, so they do not appear here. Lock waits usually come from operations that need an exclusive lock, such as `fsyncLock`, the start and end of an index build, `collMod`, `renameCollection` and `drop`.
 - On 4.2 the global lock is not in `lockInfo`; then the waits come from `waitingForLock` in `currentOp`: a waiter is queued for the last entry in its `locks`, and the holders are operations with a conflicting mode on that lock.
+
+### mt.conflicts(): write conflicts
+
+When several operations change the same document at once, WiredTiger lets one succeed and the others hit a write conflict (WriteConflict) and retry on the server. Many conflicts slow writes and raise CPU; an operation that keeps retrying until its time limit fails. Roughly the row lock waits (`Innodb_row_lock%`) on the MySQL side.
+
+```js
+mt.conflicts()                               // conflicts per second, running operations that hit them, operations with conflicts in the last 10 minutes (by collection and query shape)
+mt.conflicts({quick: true})                  // the server and running operations only, no profiler or log; use it first when conflicts are heavy
+mt.conflicts('shop.orders', {minutes: 30})   // one collection (or database), the last 30 minutes
+mt.conflicts({source: 'log'})                // the slow log only (by default the profiler when it has entries)
+```
+
+Three parts:
+
+| Part | Source | Meaning |
+|---|---|---|
+| header | `serverStatus().metrics.operation.writeConflicts`, sampled twice `interval` seconds apart | `conflicts` (write conflicts per second), `updated` / `deleted` (documents updated, deleted per second), `conflicts/updated` (their ratio, not the share of requests that had conflicts: one request can conflict many times); `temporarilyUnavailableErrors` and the like when present |
+| running operations that have had write conflicts | `writeConflicts` in `$currentOp` (4.2+) | how many conflicts an operation has had so far, not that it is conflicting right now |
+| recent operations with conflicts | the profiler or the slow log, one per call, never both | grouped by collection and query shape: `ops` (operations with conflicts), `conflicts` (total), `maxPerOp`, `failed` (had conflicts and then failed), `errors` (why), `topIds` (the `_id` values with most conflicts), `app`; the line below gives the concentration |
+
+```
+> mt.conflicts()
+-- db.serverStatus().metrics.operation.writeConflicts; sampled twice 1 s apart, /s values are per second; db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true}}, {$match: {active: true}}]); each db: system.profile.find().sort({$natural: -1}).limit(...)
+                     conflicts/s: 614.3
+                       updated/s: 534.3
+                       deleted/s: 0
+               conflicts/updated: 1.15
+  temporarilyUnavailableErrors/s: 0
+transactionTooLargeForCacheErrors/s: 0
+
+── running operations that have had write conflicts ──
+none
+
+── operations with write conflicts in the last 10 minutes (by collection and query shape) ──
++----------------+--------------------------------------+-----+-----------+----------+--------+--------------------------------+---------------+
+| ns             | shape                                | ops | conflicts | maxPerOp | failed | topIds                         | app           |
++----------------+--------------------------------------+-----+-----------+----------+--------+--------------------------------+---------------+
+| shop.inventory | {_id: ?, stock: {$gt: ?}, $where: ?} | 403 |      2065 |       26 |      0 | SKU-1001 (2029), SKU-2002 (36) | stock-service |
+| shop.accounts  | {_id: ?, $where: ?}                  |  31 |        50 |        5 |      0 | A-7 (50)                       | billing       |
++----------------+--------------------------------------+-----+-----------+----------+--------+--------------------------------+---------------+
+2 rows in set
+conflicts are concentrated in: collection shop.inventory (98%), query shape {_id: ?, stock: {$gt: ?}, $where: ?} (98%), _id SKU-1001 96%; recorded operations only
+Note: source: the profiler (shop (level 1, slowms 20)); read 554 entries newest first, 554 of them in this period, the oldest at 2026-11-28 14:02:39.135
+Note: conflicts/updated is only the ratio of two rates, not the share of requests that had conflicts: one request can conflict many times, and conflicts can also come from deletes and transactions
+Note: profiler level 1 and the slow log record slow operations only (also subject to sampleRate and filter): conflicts in operations that were not slow are not below, only in the server-wide count above
+```
+
+- **Read-only**: never turns the profiler on or changes log levels. When the databases asked about have no profiler or no entries in the period, the slow log is used; `{source: 'profile' | 'log'}` chooses.
+- **Bounded profiler reads**: each database's `system.profile` is read newest first by `$natural`, with no condition, stopping at the limit (it has no index, so a condition would read the whole collection); time and `writeConflicts` are filtered in the shell; at most 10000 entries in all and 2000 per database (`maxEntries` / `maxEntriesPerDb`). Reaching a limit is noted, and less time than `minutes` may be covered. The slow log is `getLog`, the last 1024 lines only.
+- **Slow operations only**: profiler level 1 and the slow log record operations over `slowms` (also subject to `sampleRate` and `filter`); conflicts in operations that were not slow only count in the server-wide header. The note gives each database's profiler settings.
+- **Query shape** replaces values with `?`, keeping field names and operators, e.g. `{_id: ?, stock: {$gt: ?}}`; `queryHash` is not used (3.6 and 4.0 lack it, and 7.0 updates too). An equality on `_id` (including `$eq` and inside `$and`) is an explicit target, listed in `topIds`.
+- **Failures apart**: `failed` counts only operations that had conflicts and then failed; a timeout or other failure is not necessarily caused by the conflicts, see `errors`.
+- In the example `shop.inventory` has 98% of the conflicts, nearly all on one document, `SKU-1001`: many requests decrementing the same stock, a typical hot document. Common fixes are spreading it (buckets, several counter documents) or queueing in the application.
+- Must run on a mongod.
 
 ### mt.txns(): open transactions
 
