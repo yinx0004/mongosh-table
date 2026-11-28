@@ -680,7 +680,7 @@ mt.slow('shop', {sort: 'ms'})       // slowest first
 |---|---|
 | `ms` | Only operations that took at least this many milliseconds; becomes `{millis: {$gte: ms}}` |
 | `ns` | A collection name (`'orders'`) or a full `'db.collection'` |
-| `sort` | `'desc'` (default, `{ts: -1}`, newest first), `'asc'` (`{ts: 1}`, oldest first), `'ms'` (`{millis: -1, ts: -1}`, slowest first), or a sort document such as `{docsExamined: -1}` |
+| `sort` | `'desc'` (default, `{$natural: -1}`, newest first), `'asc'` (`{$natural: 1}`, oldest first), `'ms'` (`{millis: -1, ts: -1}`, slowest first; reads all of `system.profile` and sorts it), or a sort document such as `{docsExamined: -1}` |
 | `count` | `true` also counts every matching entry (one `count` on `system.profile`); otherwise it reads one extra entry to tell whether there are more |
 
 The header shows the profiler settings:
@@ -720,7 +720,7 @@ Each row lists only the fields that operation has: reads have no `nMatched`, wri
 
 ```
 > mt.slow()
--- db.getSiblingDB('shop').system.profile.find({}).sort({ts: -1})
+-- db.getSiblingDB('shop').system.profile.find({}).sort({$natural: -1})
         db: shop
      level: 1
     slowms: 20
@@ -834,7 +834,7 @@ only the first 2 are listed and there are more: {limit: 0} lists them all, {coun
 
 ```
 > mt.slow('crm')
--- db.getSiblingDB('crm').system.profile.find({}).sort({ts: -1})
+-- db.getSiblingDB('crm').system.profile.find({}).sort({$natural: -1})
         db: crm
      level: 0
     slowms: 20
@@ -845,7 +845,8 @@ the profiler is off (level 0); turn it on with db.setProfilingLevel(1, {slowms: 
 
 How it works:
 
-- It runs `profile: -1` for the header (the same as `db.getProfilingStatus()`), `count` for the number of matching entries, then `find(filter).sort(sort).limit(limit)`. So by default you get the 50 newest, and with `{sort: 'ms'}` the 50 slowest; when there are more than `limit`, the footer gives the total.
+- It runs `profile: -1` for the header (the same as `db.getProfilingStatus()`), then `find(filter).sort(sort).limit(limit + 1)`: one extra entry tells whether there are more. So by default you get the 50 newest, and with `{sort: 'ms'}` the 50 slowest; only `{count: true}` also runs `count` for the total (which reads all of a grown `system.profile` too).
+- By default it reads in reverse insertion order (`$natural: -1`) and stops once it has enough. `system.profile` has no index on `ts`, so sorting by `ts` reads and sorts all of it: measured with 3000 entries and 10 wanted, sorting by `ts` read 3000 and `$natural` read 10. It shows on a `system.profile` grown to hundreds of MB. `'ms'` or another sort document has to read and sort all of it.
 - Reads of `system.profile` itself and `profile` commands are always left out, so at level 2 you do not see `mt.slow()` itself.
 - `docsExamined` far above `nreturned`, or a `COLLSCAN` plan, usually means a missing index. Run `mt.explainLog(n)` on that row to see its plan, see [mt.explainLog()](#mtexplainlog-explain-a-query-from-a-slow-log); `mt.logQuery(n)` turns it into a statement you can run.
 - `system.profile` is a 1 MB capped collection that overwrites its oldest entries when full, so it only covers recent activity.

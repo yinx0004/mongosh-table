@@ -682,7 +682,7 @@ mt.slow('shop', {sort: 'ms'})       // 最慢的在前
 |---|---|
 | `ms` | 只看耗时不少于这么多毫秒的，变成 `{millis: {$gte: ms}}` |
 | `ns` | 集合名（`'orders'`）或完整的 `'库.集合'` |
-| `sort` | `'desc'`（默认，`{ts: -1}` 最新的在前）、`'asc'`（`{ts: 1}` 最早的在前）、`'ms'`（`{millis: -1, ts: -1}` 最慢的在前），或排序文档如 `{docsExamined: -1}` |
+| `sort` | `'desc'`（默认，`{$natural: -1}` 最新的在前）、`'asc'`（`{$natural: 1}` 最早的在前）、`'ms'`（`{millis: -1, ts: -1}` 最慢的在前，要把 `system.profile` 整个读一遍再排），或排序文档如 `{docsExamined: -1}` |
 | `count` | `true` 时再算出符合条件的总数（对 `system.profile` 做一次 `count`）；平时只多取一条，看还有没有更多 |
 
 表头显示 profiler 的设置：
@@ -722,7 +722,7 @@ mt.slow('shop', {sort: 'ms'})       // 最慢的在前
 
 ```
 > mt.slow()
--- db.getSiblingDB('shop').system.profile.find({}).sort({ts: -1})
+-- db.getSiblingDB('shop').system.profile.find({}).sort({$natural: -1})
         db: shop
      level: 1
     slowms: 20
@@ -836,7 +836,7 @@ docsExamined: 80
 
 ```
 > mt.slow('crm')
--- db.getSiblingDB('crm').system.profile.find({}).sort({ts: -1})
+-- db.getSiblingDB('crm').system.profile.find({}).sort({$natural: -1})
         db: crm
      level: 0
     slowms: 20
@@ -847,7 +847,8 @@ Empty set
 
 怎么查的：
 
-- 先执行 `profile: -1` 拿到表头的设置（和 `db.getProfilingStatus()` 一样），再用 `count` 数出符合条件的总数，然后 `find(条件).sort(sort).limit(limit)`。所以默认拿到的是最近的 50 条，`{sort: 'ms'}` 拿到的是最慢的 50 条；总数比 `limit` 多时页脚会显示“共 N 行”。
+- 先执行 `profile: -1` 拿到表头的设置（和 `db.getProfilingStatus()` 一样），然后 `find(条件).sort(sort).limit(limit + 1)`：多取一条，看还有没有更多。所以默认拿到的是最近的 50 条，`{sort: 'ms'}` 拿到的是最慢的 50 条；`{count: true}` 时才再用 `count` 数出总数（`system.profile` 调大了时 `count` 也要读一遍）。
+- 默认按写入顺序倒着读（`$natural: -1`），读够就停。`system.profile` 上没有 `ts` 的索引，按 `ts` 排序要把它整个读一遍再排：实测 3000 条记录取 10 条，按 `ts` 排读了 3000 条，按 `$natural` 读了 10 条。`system.profile` 被调大到几百 MB 时差别很明显。`'ms'` 或别的排序文档只能整个读一遍再排。
 - 总会排除读 `system.profile` 本身的操作和 `profile` 命令，否则在 level 2 下会看到 `mt.slow()` 自己。
 - `docsExamined` 远大于 `nreturned`、`plan` 是 `COLLSCAN` 的，通常就是缺索引。用 `mt.explainLog(行号)` 看它的执行计划，见 [mt.explainLog()](#mtexplainlog对慢日志里的查询做-explain)；`mt.logQuery(行号)` 把它转成可以直接运行的查询语句。
 - `system.profile` 是个 1 MB 的 capped 集合，满了会覆盖最早的记录，所以只能看到最近一段时间的。
