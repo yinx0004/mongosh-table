@@ -1,5 +1,5 @@
 // MongoTab read-only audit, part 2 (mongosh / mongo --nodb): read the server log
-// saved by test/run.sh and check every command test/audit.js sent against a list
+// test/run.sh hands it and check every command test/audit.js sent against a list
 // of read-only commands. Fails on anything else, on an aggregation with $out /
 // $merge, on profile with anything but -1 (that would change the profiler level),
 // on a WRITE log line, and when too few commands were logged to mean anything.
@@ -102,7 +102,8 @@ lines.forEach(function (line) {
 });
 var ips = {};
 Object.keys(others).forEach(function (k) { ips[others[k]] = (ips[others[k]] || 0) + 1; });
-print('audit client ' + AUDIT.ip + ': ' + Object.keys(mine).length + ' connections, ' + total + ' commands logged');
+print('audit client ' + AUDIT.ip + ', ' + AUDIT.from + ' to ' + AUDIT.to + ': ' + Object.keys(mine).length + ' connections, ' + total + ' commands logged');
+if (isNaN(t0) || isNaN(t1) || !AUDIT.ip) { T.fails++; print('!!FAIL audit: bad window or client address: ' + JSON.stringify(AUDIT)); }
 if (Object.keys(ips).length) print('other clients during the audit (not checked): ' + Object.keys(ips).map(function (k) { return k + ' x' + ips[k]; }).join(', '));
 print(Object.keys(counts).sort().map(function (k) { return k + ' ' + counts[k]; }).join(', '));
 if (unknown.length) print('rejected as unknown (nothing ran): ' + unknown.join('; '));
