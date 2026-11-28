@@ -693,13 +693,28 @@ The header shows the profiler settings:
 | `#` | Row number, used by `mt.explainLog(n)` / `mt.logQuery(n)` |
 | `ts` | When the operation finished |
 | `ms` | Duration in milliseconds (`millis`) |
-| `op` | `query`, `update`, `command`... |
+| `op` | `query`, `update`, `insert`, `remove`, `command`... |
 | `ns` | database.collection |
+| `app` | The client's appName, to tell which program sent it |
 | `plan` | Plan summary, e.g. `COLLSCAN`, `IXSCAN { status: 1 }` |
 | `keysExamined` / `docsExamined` | Index keys and documents scanned |
-| `nreturned` | Documents returned |
-| `client` / `user` | Client IP and user; without authentication `user` is always empty, so that column is hidden |
+| `nreturned` | Documents returned (reads) |
+| `nMatched` / `nModified` / `nUpserted` | Documents an update matched, modified, upserted (`nUpserted` from 7.0) |
+| `ninserted` / `ndeleted` | Documents inserted, deleted |
+| `keysInserted` / `keysDeleted` | Index keys changed: the more indexes and indexed fields a write touches, the slower it is |
+| `hasSortStage` / `usedDisk` | Sorted in memory (no index gave the order); a sort or aggregation spilled to disk |
+| `numYield` | Times it yielded its locks |
+| `writeConflicts` | Write conflicts: operations changing the same document at once retry against each other |
+| `lockWaitMs` / `flowWaitMs` | Time spent waiting for locks, for flow control (ms) |
+| `cacheWaitMs` | Time spent waiting for the WiredTiger cache (eviction) (ms) |
+| `diskRead` / `diskReadMs` | Data read from disk and how long it took |
+| `cpuMs` / `planningMs` | CPU time (7.0+, Linux); time to choose a plan (7.0+, shown from 1 ms) |
+| `reslen` | Size of the reply to the client |
+| `queryHash` | Hash of the query shape, matching `mt.planCache()` and the log (`planCacheShapeHash` from 8.0) |
+| `client` / `user` | Client IP and user; no `user` without authentication |
 | `command` | The command, without driver fields |
+
+Each row lists only the fields that operation has: reads have no `nMatched`, writes no `nreturned`; `numYield`, `writeConflicts` and the waits are left out when 0. They are usually where the time went: a large `lockWaitMs` means waiting for locks, `cacheWaitMs` cache pressure, `diskReadMs` reading from disk, many `writeConflicts` a hot document.
 
 ```
 > mt.slow()
@@ -710,53 +725,61 @@ The header shows the profiler settings:
 sampleRate: 1
 *************************** 1. row ***************************
            #: 1
-          ts: 2026-11-22 12:51:23.118
-          ms: 30
-          op: command
-          ns: shop.orders
-        plan: COLLSCAN
-keysExamined: 0
-docsExamined: 20000
-   nreturned: 2
-      client: 192.168.107.6
-     command: {aggregate: orders, pipeline: [{$group: {_id: $status, n: {$sum: 1}, total: {$sum: $amount}}}, {$sort: {_id: 1}}], cursor: {}}
-*************************** 2. row ***************************
-           #: 2
-          ts: 2026-11-22 12:51:22.888
-          ms: 10295
+          ts: 2026-11-28 10:12:53.169
+          ms: 10378
           op: query
           ns: shop.orders
+         app: mongosh 2.14.2
         plan: IXSCAN { status: 1, createdAt: -1 }
 keysExamined: 101
 docsExamined: 101
    nreturned: 101
-      client: 192.168.107.5
+    numYield: 100
+       cpuMs: 41.5
+      reslen: 13.2 KB
+   queryHash: FFC3D9E1
+      client: 192.168.107.3
      command: {find: orders, filter: {$where: sleep(100) || true, status: NEW}}
-*************************** 3. row ***************************
-           #: 3
-          ts: 2026-11-22 12:51:11.812
-          ms: 43
+*************************** 2. row ***************************
+           #: 2
+          ts: 2026-11-28 10:12:42.767
+          ms: 28
           op: update
           ns: shop.orders
+         app: mongosh 2.14.2
         plan: COLLSCAN
 keysExamined: 0
 docsExamined: 20000
-   nreturned: 
-      client: 192.168.107.5
+    nMatched: 2223
+   nModified: 2223
+   nUpserted: 0
+keysInserted: 0
+ keysDeleted: 0
+    numYield: 20
+       cpuMs: 28.5
+      client: 192.168.107.3
      command: {q: {customer.vip: true}, u: {$set: {level: gold}}, multi: true, upsert: false}
-*************************** 4. row ***************************
-           #: 4
-          ts: 2026-11-22 12:51:11.764
-          ms: 178
+*************************** 3. row ***************************
+           #: 3
+          ts: 2026-11-28 10:12:42.733
+          ms: 200
           op: query
           ns: shop.orders
+         app: mongosh 2.14.2
         plan: IXSCAN { status: 1, createdAt: -1 }
 keysExamined: 80
 docsExamined: 80
    nreturned: 80
-      client: 192.168.107.5
+    numYield: 14
+    diskRead: 208.6 KB
+  diskReadMs: 0.1
+       cpuMs: 13.8
+  planningMs: 29.5
+      reslen: 10.3 KB
+   queryHash: FFC3D9E1
+      client: 192.168.107.3
      command: {find: orders, filter: {$where: sleep(1) || true, status: NEW}, limit: 80}
-4 rows in set
+3 rows in set
 ```
 
 ```
@@ -768,27 +791,40 @@ docsExamined: 80
 sampleRate: 1
 *************************** 1. row ***************************
            #: 1
-          ts: 2026-11-22 12:51:22.888
-          ms: 10295
+          ts: 2026-11-28 10:12:53.169
+          ms: 10378
           op: query
           ns: shop.orders
+         app: mongosh 2.14.2
         plan: IXSCAN { status: 1, createdAt: -1 }
 keysExamined: 101
 docsExamined: 101
    nreturned: 101
-      client: 192.168.107.5
+    numYield: 100
+       cpuMs: 41.5
+      reslen: 13.2 KB
+   queryHash: FFC3D9E1
+      client: 192.168.107.3
      command: {find: orders, filter: {$where: sleep(100) || true, status: NEW}}
 *************************** 2. row ***************************
            #: 2
-          ts: 2026-11-22 12:51:11.764
-          ms: 178
+          ts: 2026-11-28 10:12:42.733
+          ms: 200
           op: query
           ns: shop.orders
+         app: mongosh 2.14.2
         plan: IXSCAN { status: 1, createdAt: -1 }
 keysExamined: 80
 docsExamined: 80
    nreturned: 80
-      client: 192.168.107.5
+    numYield: 14
+    diskRead: 208.6 KB
+  diskReadMs: 0.1
+       cpuMs: 13.8
+  planningMs: 29.5
+      reslen: 10.3 KB
+   queryHash: FFC3D9E1
+      client: 192.168.107.3
      command: {find: orders, filter: {$where: sleep(1) || true, status: NEW}, limit: 80}
 2 rows in set
 only the first 2 are listed and there are more: {limit: 0} lists them all, {count: true} counts them

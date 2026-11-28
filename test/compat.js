@@ -166,6 +166,21 @@ pdb.c.find({ $where: 'sleep(50) || true' }).toArray();   // 更慢、更晚的�
 run('mt.slow', function () { mt.slow('mtprof', { table: true }); }, ['-- db.getSiblingDB(\'mtprof\').system.profile.find({}).sort({ts: -1})', 'level: 1', 'slowms: 0', '| mtprof.c ', '| ts ']);
 run('mt.slow ns filter', function () { mt.slow(pdb, { ns: 'c', cols: 'ns,op,docsExamined,command', showCmd: false }); }, ['| mtprof.c | query ', '{find: c, filter: {a: 1}']);
 run('mt.slow sort desc', function () { mt.slow('mtprof', { limit: 1, cols: 'command' }); }, ['$where', '只列了前 1 条，还有更多：{limit: 0} 全部列出，{count: true} 算出总数']);
+// 写操作：匹配、修改、插入、删除、索引键的增删都列出；每行只有这条操作有的字段，竖排时不出现空行（如写操作没有 nreturned）
+run('mt.slow writes', function () {
+  var wd = db.getSiblingDB('mtprofw'); wd.dropDatabase(); wd.c.insertOne({ a: 1, t: [] }); wd.c.createIndex({ t: 1 });
+  wd.runCommand({ profile: 2 });
+  wd.c.updateOne({ a: 1 }, { $inc: { n: 1 }, $push: { t: 5 } }); wd.c.insertOne({ a: 2 }); wd.c.deleteOne({ a: 2 });
+  wd.runCommand({ profile: 0 });
+  var out = capOut(function () { mt.slow('mtprofw', { vertical: true, showCmd: false, cols: 'op,nreturned,nMatched,nModified,ninserted,ndeleted,keysInserted,keysDeleted,app' }); });
+  var rec = out.split(/\*+ \d+\. row \*+/), by = {};
+  rec.forEach(function (r) { var m = /op: (\w+)/.exec(r); if (m && !by[m[1]]) by[m[1]] = r; });
+  print(/nMatched: 1/.test(by.update || '') && /nModified: 1/.test(by.update || '') && /keysInserted: 1/.test(by.update || '') ? 'update counts' : out);
+  print(/ninserted: 1/.test(by.insert || '') && /ndeleted: 1/.test(by.remove || '') && /keysDeleted: \d/.test(by.remove || '') ? 'insert / delete counts' : out);
+  print(!/nreturned:/.test((by.update || '') + (by.insert || '') + (by.remove || '')) && !/: *\n/.test(out + '\n') ? 'no blank fields' : out);
+  print(/app: \S/.test(out) ? 'app' : out);
+  wd.dropDatabase();
+}, ['update counts', 'insert / delete counts', 'no blank fields', 'app']);
 // 总数只在 {count: true} 时算（平时多取一条看还有没有更多）
 run('mt.slow count', function () { mt.slow('mtprof', { limit: 1, cols: 'command', count: true, showCmd: false }); }, ['(共 2 行，只显示前 1 行)']);
 run('mt.slow sort asc', function () { mt.slow('mtprof', { sort: 'asc', limit: 1, cols: 'command' }); }, ['.sort({ts: 1})', '{find: c, filter: {a: 1}']);

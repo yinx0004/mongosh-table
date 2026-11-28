@@ -695,13 +695,28 @@ mt.slow('shop', {sort: 'ms'})       // 最慢的在前
 | `#` | 行号，`mt.explainLog(n)` / `mt.logQuery(n)` 用它 |
 | `ts` | 操作结束的时间 |
 | `ms` | 耗时（毫秒），即 `millis` |
-| `op` | `query`、`update`、`command`... |
+| `op` | `query`、`update`、`insert`、`remove`、`command`... |
 | `ns` | 库.集合 |
+| `app` | 客户端的 appName，看是哪个程序发的 |
 | `plan` | 执行计划摘要，如 `COLLSCAN`、`IXSCAN { status: 1 }` |
 | `keysExamined` / `docsExamined` | 扫描了多少索引键、多少文档 |
-| `nreturned` | 返回了多少条 |
-| `client` / `user` | 客户端 IP、用户；没开认证时 `user` 全空，这一列不显示 |
+| `nreturned` | 返回了多少条（读） |
+| `nMatched` / `nModified` / `nUpserted` | 更新匹配、修改、插入了多少条（`nUpserted` 7.0 起） |
+| `ninserted` / `ndeleted` | 插入、删除了多少条 |
+| `keysInserted` / `keysDeleted` | 改了多少索引键：索引越多、改到的索引字段越多，写入越慢 |
+| `hasSortStage` / `usedDisk` | 在内存里排序（没有能直接按顺序读的索引）；排序或聚合用了磁盘 |
+| `numYield` | 让出锁的次数 |
+| `writeConflicts` | 写冲突的次数：几个操作同时改同一条文档时会互相重试 |
+| `lockWaitMs` / `flowWaitMs` | 等锁、等 flow control 的时间（毫秒） |
+| `cacheWaitMs` | 等 WiredTiger 缓存（驱逐）的时间（毫秒） |
+| `diskRead` / `diskReadMs` | 从磁盘读了多少数据、花了多久 |
+| `cpuMs` / `planningMs` | 用的 CPU 时间（7.0 起，Linux）；选执行计划的时间（7.0 起，1 毫秒以上才显示） |
+| `reslen` | 返回给客户端的大小 |
+| `queryHash` | 查询形状的哈希，和 `mt.planCache()`、日志里的对得上（8.0 起是 `planCacheShapeHash`） |
+| `client` / `user` | 客户端 IP、用户；没开认证时没有 `user` |
 | `command` | 命令内容，去掉了驱动加的字段 |
+
+每行只列这条操作有的字段：读没有 `nMatched`，写没有 `nreturned`；`numYield`、`writeConflicts` 和几种等待是 0 时不列。慢在哪往往就看这几项：`lockWaitMs` 大是在等锁，`cacheWaitMs` 大是缓存压力，`diskReadMs` 大是读盘，`writeConflicts` 多是热点文档。
 
 ```
 > mt.slow()
@@ -712,53 +727,61 @@ mt.slow('shop', {sort: 'ms'})       // 最慢的在前
 sampleRate: 1
 *************************** 1. row ***************************
            #: 1
-          ts: 2026-11-22 12:50:12.272
-          ms: 10444
+          ts: 2026-11-28 10:12:53.169
+          ms: 10378
           op: query
           ns: shop.orders
+         app: mongosh 2.14.2
         plan: IXSCAN { status: 1, createdAt: -1 }
 keysExamined: 101
 docsExamined: 101
    nreturned: 101
-      client: 192.168.107.5
+    numYield: 100
+       cpuMs: 41.5
+      reslen: 13.2 KB
+   queryHash: FFC3D9E1
+      client: 192.168.107.3
      command: {find: orders, filter: {$where: sleep(100) || true, status: NEW}}
 *************************** 2. row ***************************
            #: 2
-          ts: 2026-11-22 12:50:01.103
-          ms: 23
-          op: command
-          ns: shop.orders
-        plan: COLLSCAN
-keysExamined: 0
-docsExamined: 20000
-   nreturned: 4
-      client: 192.168.107.5
-     command: {aggregate: orders, pipeline: [{$group: {_id: $customer.name, total: {$sum: $amount}}}], cursor: {}}
-*************************** 3. row ***************************
-           #: 3
-          ts: 2026-11-22 12:50:01.067
-          ms: 40
+          ts: 2026-11-28 10:12:42.767
+          ms: 28
           op: update
           ns: shop.orders
+         app: mongosh 2.14.2
         plan: COLLSCAN
 keysExamined: 0
 docsExamined: 20000
-   nreturned: 
-      client: 192.168.107.5
+    nMatched: 2223
+   nModified: 2223
+   nUpserted: 0
+keysInserted: 0
+ keysDeleted: 0
+    numYield: 20
+       cpuMs: 28.5
+      client: 192.168.107.3
      command: {q: {customer.vip: true}, u: {$set: {level: gold}}, multi: true, upsert: false}
-*************************** 4. row ***************************
-           #: 4
-          ts: 2026-11-22 12:50:01.025
-          ms: 181
+*************************** 3. row ***************************
+           #: 3
+          ts: 2026-11-28 10:12:42.733
+          ms: 200
           op: query
           ns: shop.orders
+         app: mongosh 2.14.2
         plan: IXSCAN { status: 1, createdAt: -1 }
 keysExamined: 80
 docsExamined: 80
    nreturned: 80
-      client: 192.168.107.5
+    numYield: 14
+    diskRead: 208.6 KB
+  diskReadMs: 0.1
+       cpuMs: 13.8
+  planningMs: 29.5
+      reslen: 10.3 KB
+   queryHash: FFC3D9E1
+      client: 192.168.107.3
      command: {find: orders, filter: {$where: sleep(1) || true, status: NEW}, limit: 80}
-4 rows in set
+3 rows in set
 ```
 
 ```
@@ -770,27 +793,40 @@ docsExamined: 80
 sampleRate: 1
 *************************** 1. row ***************************
            #: 1
-          ts: 2026-11-22 12:50:12.272
-          ms: 10444
+          ts: 2026-11-28 10:12:53.169
+          ms: 10378
           op: query
           ns: shop.orders
+         app: mongosh 2.14.2
         plan: IXSCAN { status: 1, createdAt: -1 }
 keysExamined: 101
 docsExamined: 101
    nreturned: 101
-      client: 192.168.107.5
+    numYield: 100
+       cpuMs: 41.5
+      reslen: 13.2 KB
+   queryHash: FFC3D9E1
+      client: 192.168.107.3
      command: {find: orders, filter: {$where: sleep(100) || true, status: NEW}}
 *************************** 2. row ***************************
            #: 2
-          ts: 2026-11-22 12:50:01.025
-          ms: 181
+          ts: 2026-11-28 10:12:42.733
+          ms: 200
           op: query
           ns: shop.orders
+         app: mongosh 2.14.2
         plan: IXSCAN { status: 1, createdAt: -1 }
 keysExamined: 80
 docsExamined: 80
    nreturned: 80
-      client: 192.168.107.5
+    numYield: 14
+    diskRead: 208.6 KB
+  diskReadMs: 0.1
+       cpuMs: 13.8
+  planningMs: 29.5
+      reslen: 10.3 KB
+   queryHash: FFC3D9E1
+      client: 192.168.107.3
      command: {find: orders, filter: {$where: sleep(1) || true, status: NEW}, limit: 80}
 2 rows in set
 只列了前 2 条，还有更多：{limit: 0} 全部列出，{count: true} 算出总数
