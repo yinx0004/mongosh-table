@@ -18,7 +18,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.3.0';
+  var VERSION = '0.4.0';
   var MARK = '__mongotab__';
 
   // mongosh 跑在 Node 上，有 globalThis / process / Intl；老的 mongo shell 都没有：
