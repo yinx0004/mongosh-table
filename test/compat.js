@@ -86,7 +86,7 @@ run('mt.cmds', function () { mt.cmds(); }, ['── 运行状态 ──', '─�
   '| mt.ps({secs, ns, all, sort}) | SHOW PROCESSLIST ', 'mt.config({showCmd: false})', "mt.help('ps') 看某个命令的详细用法"]);
 // 每个命令都有中英文的详细帮助
 var ALL_CMDS = ['host', 'latency', 'desc', 'planCache', 'check', 'ps', 'slow', 'top', 'locks', 'txns', 'repl', 'dbs', 'colls', 'frag', 'idx', 'unusedIdx', 'dupIdx', 'builds',
-  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'balancer', 'pool', 'users', 'mem', 'cursors', 'flow', 'initialSync', 'concern', 'elections'];
+  'explain', 'explainLog', 'logQuery', 'conns', 'oplog', 'status', 'cache', 'ttl', 'log', 'vars', 'engine', 'qstats', 'rsconf', 'profile', 'shards', 'balancer', 'pool', 'users', 'mem', 'cursors', 'flow', 'initialSync', 'concern', 'elections', 'conflicts'];
 run('mt.help each command', function () {
   var bad = [];
   ['zh', 'en'].forEach(function (lang) {
@@ -99,7 +99,7 @@ run('mt.help each command', function () {
   });
   mt.config({ lang: 'zh' });
   print(bad.length ? 'bad: ' + bad.join(' ') : 'all ' + ALL_CMDS.length + ' ok');
-}, ['all 42 ok']);
+}, ['all 43 ok']);
 run('mt.help one', function () { mt.help('mt.slow()'); mt.cmds('ps'); }, ['mt.slow() — 慢查询（profiler）    MySQL: mysql.slow_log', '用法：', '选项：', '输出：', '说明：', '另见：mt.explainLog()',
   'mt.ps() — 正在执行的操作', 'opid          操作 ID']);
 run('mt.help unknown', function () { mt.help('nope'); }, ["没有叫 nope 的命令。可以看：'host'、'mem'、'vars'"]);
@@ -805,6 +805,30 @@ run('timeout mt.colls', function () { timeoutAll(function () { mt.colls('mtcheck
 run('timeout mt.oplog', function () { timeoutAll(function () { mt.oplog(); }); }, ['mongotab: find local.oplog.rs 没在 10000 ms 内返回']);
 run('timeout mt.users', function () { timeoutAll(function () { mt.users(); }); }, [' 没在 10000 ms 内返回（maxTimeMS）']);
 run('timeout mt.ps', function () { timeoutAll(function () { mt.ps({ all: true, limit: 1, cols: 'opid' }); }); }, ['1 row in set']);
+// mt.conflicts：一个开着的事务改了一条文档，事务外再改同一条（maxTimeMS 300）：一直冲突、重试，最后超时失败。
+// profiler（slowms 0）和慢日志里都有这一条，带 writeConflicts 和 MaxTimeMSExpired
+run('mt.conflicts quick', function () { mt.conflicts({ quick: true, interval: 0, showCmd: false }); }, ['conflicts: ', 'updated: ', '── 执行中、发生过写冲突的操作 ──']);
+if (vmaj >= 4) {
+  var cfd = db.getSiblingDB('mtcf'); cfd.dropDatabase(); cfd.c.insertOne({ _id: 1, n: 0 }); cfd.runCommand({ profile: 1, slowms: 0 });
+  var cfs = db.getMongo().startSession();
+  cfs.startTransaction();
+  cfs.getDatabase('mtcf').getCollection('c').updateOne({ _id: 1 }, { $inc: { n: 1 } });
+  try { cfd.runCommand({ update: 'c', updates: [{ q: { _id: 1 }, u: { $inc: { n: 10 } } }], maxTimeMS: 300 }); } catch (e) {}
+  cfs.abortTransaction(); cfs.endSession();
+  cfd.runCommand({ profile: 0, slowms: 100 });
+  run('mt.conflicts profile', function () { mt.conflicts('mtcf.c', { interval: 0, minutes: 5, table: true }); }, [
+    "each db: system.profile.find().sort({$natural: -1})", '── 最近 5 分钟有写冲突的操作（按集合和写法） ──', '| mtcf.c | {_id: ?} |   1 |', '| MaxTimeMSExpired 1 |', '| 1 (',
+    '冲突集中在：集合 mtcf.c（100%），写法 {_id: ?}（100%），_id 1 100%', '注意：来源：profiler（mtcf', 'failed 是有冲突、最后也失败了的条数'
+  ]);
+  run('mt.conflicts log', function () { mt.conflicts('mtcf', { interval: 0, source: 'log', showCmd: false, table: true }); }, [
+    '| mtcf.c | {_id: ?} |   1 |', '| MaxTimeMSExpired 1 |', '注意：来源：慢日志（getLog 只有最近的'
+  ]);
+  run('mt.conflicts none', function () { mt.conflicts('mtcf.nosuch', { interval: 0, showCmd: false }); }, ['最近 10 分钟记录下来的操作里没有写冲突']);
+  run('mt.conflicts en', function () { mt.config({ lang: 'en' }); try { mt.conflicts('mtcf.c', { interval: 0, showCmd: false, table: true }); } finally { mt.config({ lang: 'zh' }); } }, [
+    'operations with write conflicts in the last 10 minutes', 'conflicts are concentrated in: collection mtcf.c (100%)'
+  ]);
+  cfd.dropDatabase();
+}
 // 4.4 之前 mt.check() 不查 profiler（profile 命令要拿库锁），这一项是 SKIP
 var ckProf44 = vmaj > 4 || (vmaj === 4 && Number(db.version().split('.')[1]) >= 4);
 run('timeout mt.check quick', function () { timeoutAll(function () { mt.check({ quick: true, table: true }); }); }, [

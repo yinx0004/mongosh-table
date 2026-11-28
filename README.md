@@ -361,6 +361,7 @@ mt.config({tz: '+08:00', limit: 100})        // 修改，只影响本会话
 | mt.pool({all})               | ProxySQL stats_mysql_connection_pool     | 连出去的连接池（mongos 到各分片、成员之间），按目标主机汇总；all 再按连接池列出                                                                                      |
 | mt.users('db')               | SELECT * FROM mysql.user                 | 用户和自定义角色：每个用户的库、角色、登录方式，自定义角色的权限和被几个用户直接用到；提示没开认证、权限过大、只能用 SHA-1、没有角色的用户；可传 'db'                |
 | mt.locks({all})              | sys.innodb_lock_waits                    | 谁在等锁、锁被谁占着；all 显示所有被占用的锁                                                                                                                         |
+| mt.conflicts('ns', {quick})  | SHOW STATUS LIKE 'Innodb_row_lock%'      | 写冲突：整台每秒多少次、执行中冲突过的操作、最近有冲突的操作按集合和写法分组；quick 只看前两项                                                                       |
 | mt.txns({secs, sort})        | INFORMATION_SCHEMA.INNODB_TRX            | 未提交的事务：开了多久、空闲多久、多久后自动中止；secs 最短秒数，sort: 'desc' / 'asc'                                                                                |
 | mt.top({interval, ns})       | sys.schema_table_statistics              | 各集合读写耗时，忙的在前；interval 采样秒数，0 = 启动以来累计；ns 库或集合                                                                                           |
 | mt.latency('db', {interval}) | sys.statement_analysis                   | 读 / 写 / 命令的平均延迟（毫秒），整台和各集合；interval 采样秒数，0 = 启动以来；quick 只看整台；默认所有用户库                                                      |
@@ -1482,6 +1483,66 @@ mt.locks({all: true})   // 所有被占用的锁，包括没人排队的
 - 默认只列和排队者冲突的持有者：`IS` 和 `S` 不冲突，所以正在跑的读操作不会出现在上面。想看全部用 `{all: true}`。
 - WiredTiger 是文档级并发，普通读写之间的冲突是重试（WriteConflict），不是等锁，不会出现在这里。会等锁的多是 `fsyncLock`、建索引的开始和结束、`collMod`、`renameCollection`、`drop` 这类要排他锁的操作。
 - 4.2 的全局锁不在 `lockInfo` 里，这时从 `currentOp` 的 `waitingForLock` 补上：排队者等的是它 `locks` 里的最后一项，持有者是同一把锁上模式冲突的操作。
+
+### mt.conflicts()：写冲突
+
+几个操作同时改同一条文档时，WiredTiger 只让一个成功，其他的撞上写冲突（WriteConflict），在服务端自动重试。冲突多了，写入变慢、CPU 升高，重试到超时就失败。相当于 MySQL 那边看行锁等待（`Innodb_row_lock%`）。
+
+```js
+mt.conflicts()                               // 整台每秒的冲突数、执行中冲突过的操作、最近 10 分钟有冲突的操作（按集合和写法）
+mt.conflicts({quick: true})                  // 只看整台和执行中的，不读 profiler / 日志；冲突很多时先用它
+mt.conflicts('shop.orders', {minutes: 30})   // 只看一个集合（或一个库），看最近 30 分钟
+mt.conflicts({source: 'log'})                // 只看慢日志（默认有 profiler 记录就用 profiler）
+```
+
+分三段：
+
+| 段 | 数据来源 | 说明 |
+|---|---|---|
+| 表头 | `serverStatus().metrics.operation.writeConflicts`，间隔 `interval` 秒采样两次 | `conflicts`（每秒写冲突次数）、`updated` / `deleted`（每秒更新、删除的文档数）、`conflicts/updated`（两者的比值，不是有冲突的请求占比：一个请求可以冲突多次）；有 `temporarilyUnavailableErrors` 等计数时一并列出 |
+| 执行中、发生过写冲突的操作 | `$currentOp` 的 `writeConflicts`（4.2 起） | 只说明它执行到现在冲突过几次，不代表此刻正在冲突 |
+| 最近有冲突的操作 | profiler 或慢日志，一次只用一个，不重复计数 | 按集合和查询形状分组：`ops`（有冲突的条数）、`conflicts`（合计）、`maxPerOp`、`failed`（有冲突、最后也失败了的）、`errors`（失败原因）、`topIds`（冲突最多的 `_id`）、`app`；下面一行是冲突集中度 |
+
+```
+> mt.conflicts()
+-- db.serverStatus().metrics.operation.writeConflicts，间隔 1 秒采样两次，带 /s 的是每秒的量; db.getSiblingDB('admin').aggregate([{$currentOp: {allUsers: true}}, {$match: {active: true}}]); each db: system.profile.find().sort({$natural: -1}).limit(...)
+                     conflicts/s: 456.2
+                       updated/s: 409
+                       deleted/s: 0
+               conflicts/updated: 1.12
+  temporarilyUnavailableErrors/s: 0
+transactionTooLargeForCacheErrors/s: 0
+
+── 执行中、发生过写冲突的操作 ──
++-------+------+--------+----------------+--------------------------------------+----------+----------------+-----------------+---------------+
+| opid  | secs | op     | ns             | shape                                | _id      | writeConflicts | client          | app           |
++-------+------+--------+----------------+--------------------------------------+----------+----------------+-----------------+---------------+
+| 15105 |    0 | update | shop.inventory | {_id: ?, stock: {$gt: ?}, $where: ?} | SKU-1001 |             11 | 127.0.0.1:42774 | stock-service |
+| 15160 |    0 | update | shop.accounts  | {_id: ?, $where: ?}                  | A-7      |              1 | 127.0.0.1:43046 | billing       |
++-------+------+--------+----------------+--------------------------------------+----------+----------------+-----------------+---------------+
+2 rows in set
+
+── 最近 10 分钟有写冲突的操作（按集合和写法） ──
++----------------+--------------------------------------+-----+-----------+----------+--------+--------------------------------+---------------+
+| ns             | shape                                | ops | conflicts | maxPerOp | failed | topIds                         | app           |
++----------------+--------------------------------------+-----+-----------+----------+--------+--------------------------------+---------------+
+| shop.inventory | {_id: ?, stock: {$gt: ?}, $where: ?} | 434 |      2393 |       33 |      0 | SKU-1001 (2354), SKU-2002 (39) | stock-service |
+| shop.accounts  | {_id: ?, $where: ?}                  |  24 |        37 |        5 |      0 | A-7 (37)                       | billing       |
++----------------+--------------------------------------+-----+-----------+----------+--------+--------------------------------+---------------+
+2 rows in set
+冲突集中在：集合 shop.inventory（98%），写法 {_id: ?, stock: {$gt: ?}, $where: ?}（98%），_id SKU-1001 97%；只算记录下来的操作
+注意：来源：profiler（shop (level 1, slowms 20)），倒着读了 559 条，其中 559 条在这段时间里，最早的是 2026-11-28 14:02:30.615
+注意：conflicts/updated 只是两个速率的比值，不是有冲突的请求占比：一个请求可以冲突多次，冲突也可能来自删除和事务
+注意：profiler level 1 和慢日志都只记录慢操作（还受 sampleRate、filter 影响）：冲突了但不慢的不在下面，只计入上面的整台冲突数
+```
+
+- **只读**：不打开 profiler，不改日志级别。要查的库没开 profiler、这段时间也没有记录时，用慢日志；`{source: 'profile' | 'log'}` 可以指定。
+- **读 profiler 有上限**：各库 `system.profile` 按 `$natural` 倒着读最新的，不带条件、读够就停（它没有索引，带条件要读完整个集合），时间和 `writeConflicts` 在 shell 里过滤；全局最多 10000 条、每个库 2000 条（`maxEntries` / `maxEntriesPerDb`）。读到上限时写明，覆盖的时间可能比 `minutes` 短。慢日志就是 `getLog`，只有最近 1024 行。
+- **只记录慢操作**：profiler level 1 和慢日志只记超过 `slowms` 的操作（还受 `sampleRate`、`filter` 影响），冲突了但不慢的只计入表头的整台冲突数。表下写明各库的 profiler 设置。
+- **查询形状**把值换成 `?`，保留字段名和操作符，例如 `{_id: ?, stock: {$gt: ?}}`；不用 `queryHash`（3.6、4.0 没有，7.0 的 update 也没有）。`_id` 的等值（包括 `$eq`、`$and` 里的）算明确的目标，列在 `topIds`。
+- **失败单独计**：`failed` 只算有冲突、最后也失败了的；超时等失败不一定是冲突造成的，看 `errors`。
+- 上面的例子里 `shop.inventory` 占了 98% 的冲突，几乎都在 `SKU-1001` 一条文档上：多个请求在扣同一个库存，是典型的热点文档。常见的办法是把热点拆开（分桶、分多条计数）或在应用里排队。
+- 只能连 mongod。
 
 ### mt.txns()：未提交的事务
 
